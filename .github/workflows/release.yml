@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
@@ -77,11 +77,11 @@ jobs:
       - name: Extract changelog entry
         run: |
           VERSION="${{ needs.check-release.outputs.version }}"
-          awk '/<!-- release:start -->/{found=1; next} /<!-- release:end -->/{exit} found{print}' CHANGELOG.md > /tmp/release-notes.md
+          cp CHANGELOG.md /tmp/release-notes.md
 
           LINES=$(wc -l < /tmp/release-notes.md | tr -d ' ')
           if [ "$LINES" -lt 2 ]; then
-            echo "Error: No release notes found between <!-- release:start --> and <!-- release:end --> markers in CHANGELOG.md"
+            echo "Error: CHANGELOG.md does not contain release notes"
             exit 1
           fi
           echo "Extracted release notes for $VERSION ($LINES lines)"

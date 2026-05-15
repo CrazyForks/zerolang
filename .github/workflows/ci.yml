@@ -33,10 +33,10 @@ jobs:
         run: npm run check
 
       - name: Conformance suite
-        run: npm run conformance
+        run: npm run conformance:local
 
       - name: Native tests
-        run: npm run native:test
+        run: npm run native:test:local
 
       - name: Native sanitizer smoke
         run: npm run native:sanitize
@@ -47,14 +47,14 @@ jobs:
       - name: Docs tests
         run: npm run docs:test
 
+      - name: Docs production build
+        run: npm run docs:build
+
       - name: Extension tests
         run: npm run test -w zero-lang
 
-      - name: Generated C audit
-        run: node scripts/audit-generated-c.mjs
-
       - name: Command contract snapshots
-        run: node scripts/snapshot-command-contracts.mjs
+        run: npm run command-contracts:local
 
       - name: Benchmark smoke
         env:
@@ -69,7 +69,7 @@ jobs:
       - name: Cross-target smoke
         run: |
           bin/zero check --target linux-musl-x64 examples/memory-package
-          bin/zero build --emit c --target linux-musl-x64 examples/memory-package --out .zero/out/memory-package-linux-musl.c
+          bin/zero build --emit obj --target linux-musl-x64 examples/direct-obj-add.0 --out .zero/out/direct-obj-add-linux-musl.o
           bin/zero build --target linux-musl-x64 examples/hello.0 --out .zero/out/hello-linux-musl
           bin/zero build --target win32-x64.exe examples/hello.0 --out .zero/out/hello-win32
 

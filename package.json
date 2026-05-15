@@ -24,7 +24,7 @@
     "docs:test": "node --test docs-site/src/tests/*.test.mjs",
     "extension:install:cursor": "npm run install:cursor -w zero-lang",
     "native:install": "make -C native/zero-c install-local",
-    "native:smoke": "make -C native/zero-c && bin/zero check examples/hello.0 && bin/zero build --emit exe examples/add.0 --out .zero/out/add-native && ./.zero/out/add-native",
+    "native:smoke": "node scripts/native-smoke.mjs",
     "native:sanitize": "bash scripts/sanitizer-smoke.sh",
     "reliability:smoke": "node scripts/reliability-smoke.mjs",
     "native:test": "npm run native:test:sandbox",
