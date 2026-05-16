@@ -20,6 +20,11 @@ jobs:
         with:
           node-version: 24
 
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@10.11.0 --activate
+
       - uses: mlugg/setup-zig@v2
         with:
           version: 0.14.1
@@ -46,6 +51,9 @@ jobs:
 
       - name: Docs tests
         run: npm run docs:test
+
+      - name: Install docs dependencies
+        run: pnpm --prefix docs-site install --frozen-lockfile
 
       - name: Docs production build
         run: npm run docs:build
