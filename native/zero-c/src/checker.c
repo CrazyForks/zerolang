@@ -19,6 +19,13 @@ typedef struct {
   size_t cap;
 } BorrowOrigins;
 
+typedef struct BorrowScopeSnapshot {
+  Scope *scope;
+  BorrowOrigins *origins;
+  size_t len;
+  struct BorrowScopeSnapshot *next;
+} BorrowScopeSnapshot;
+
 struct Scope {
   char **names;
   char **types;
@@ -100,6 +107,15 @@ static bool borrow_origins_add_all_as(BorrowOrigins *out, const BorrowOrigins *s
   if (!out || !source) return false;
   for (size_t i = 0; i < source->len; i++) {
     if (borrow_origins_add(out, source->roots[i], source->root_scopes[i], mut_borrow, source->local_storage[i])) added = true;
+  }
+  return added;
+}
+
+static bool borrow_origins_add_all(BorrowOrigins *out, const BorrowOrigins *source) {
+  bool added = false;
+  if (!out || !source) return false;
+  for (size_t i = 0; i < source->len; i++) {
+    if (borrow_origins_add(out, source->roots[i], source->root_scopes[i], source->mutable_borrow[i], source->local_storage[i])) added = true;
   }
   return added;
 }
@@ -280,16 +296,23 @@ static void scope_clear_borrow_origins_at(Scope *lookup_scope, BorrowOrigins *or
   borrow_origins_free(origins);
 }
 
+static void scope_replace_borrow_origins_at(Scope *lookup_scope, Scope *binding_scope, size_t index, const BorrowOrigins *origins) {
+  if (!binding_scope || index >= binding_scope->len) return;
+  Scope *count_lookup = lookup_scope ? lookup_scope : binding_scope;
+  scope_clear_borrow_origins_at(count_lookup, &binding_scope->borrow_origins[index]);
+  if (!origins) return;
+  for (size_t origin_index = 0; origin_index < origins->len; origin_index++) {
+    borrow_origins_add(&binding_scope->borrow_origins[index], origins->roots[origin_index], origins->root_scopes[origin_index], origins->mutable_borrow[origin_index], origins->local_storage[origin_index]);
+    scope_adjust_origin_borrow_count(count_lookup, origins->roots[origin_index], origins->root_scopes[origin_index], origins->mutable_borrow[origin_index], 1);
+  }
+}
+
 static void scope_set_borrow_origins(Scope *scope, const char *name, const BorrowOrigins *origins) {
-  if (!scope || !name || !origins || origins->len == 0) return;
+  if (!scope || !name || !origins) return;
   for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
     for (size_t i = 0; i < cursor->len; i++) {
       if (strcmp(cursor->names[i], name) == 0) {
-        scope_clear_borrow_origins_at(scope, &cursor->borrow_origins[i]);
-        for (size_t origin_index = 0; origin_index < origins->len; origin_index++) {
-          borrow_origins_add(&cursor->borrow_origins[i], origins->roots[origin_index], origins->root_scopes[origin_index], origins->mutable_borrow[origin_index], origins->local_storage[origin_index]);
-          scope_adjust_origin_borrow_count(scope, origins->roots[origin_index], origins->root_scopes[origin_index], origins->mutable_borrow[origin_index], 1);
-        }
+        scope_replace_borrow_origins_at(scope, cursor, i, origins);
         return;
       }
     }
@@ -321,6 +344,83 @@ static bool scope_copy_borrow_origins(Scope *scope, const char *name, BorrowOrig
     }
   }
   return false;
+}
+
+static BorrowScopeSnapshot *borrow_scope_snapshot_capture(Scope *scope) {
+  BorrowScopeSnapshot *head = NULL;
+  BorrowScopeSnapshot *tail = NULL;
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    BorrowScopeSnapshot *frame = calloc(1, sizeof(BorrowScopeSnapshot));
+    frame->scope = cursor;
+    frame->len = cursor->len;
+    frame->origins = calloc(frame->len, sizeof(BorrowOrigins));
+    for (size_t i = 0; i < frame->len; i++) {
+      borrow_origins_add_all(&frame->origins[i], &cursor->borrow_origins[i]);
+    }
+    if (!head) {
+      head = frame;
+    } else {
+      tail->next = frame;
+    }
+    tail = frame;
+  }
+  return head;
+}
+
+static const BorrowScopeSnapshot *borrow_scope_snapshot_find(const BorrowScopeSnapshot *snapshot, const Scope *scope) {
+  for (const BorrowScopeSnapshot *frame = snapshot; frame; frame = frame->next) {
+    if (frame->scope == scope) return frame;
+  }
+  return NULL;
+}
+
+static void borrow_scope_snapshot_restore(const BorrowScopeSnapshot *snapshot) {
+  for (const BorrowScopeSnapshot *frame = snapshot; frame; frame = frame->next) {
+    if (!frame->scope) continue;
+    size_t len = frame->len < frame->scope->len ? frame->len : frame->scope->len;
+    for (size_t i = 0; i < len; i++) {
+      scope_replace_borrow_origins_at(frame->scope, frame->scope, i, &frame->origins[i]);
+    }
+  }
+}
+
+static void borrow_scope_snapshot_restore_union(const BorrowScopeSnapshot *base, BorrowScopeSnapshot *const *states, const bool *include, size_t state_len) {
+  bool any_included = false;
+  for (size_t state_index = 0; include && state_index < state_len; state_index++) {
+    if (include[state_index]) any_included = true;
+  }
+  if (!any_included) {
+    borrow_scope_snapshot_restore(base);
+    return;
+  }
+  for (const BorrowScopeSnapshot *base_frame = base; base_frame; base_frame = base_frame->next) {
+    if (!base_frame->scope) continue;
+    size_t len = base_frame->len < base_frame->scope->len ? base_frame->len : base_frame->scope->len;
+    for (size_t binding_index = 0; binding_index < len; binding_index++) {
+      BorrowOrigins merged = {0};
+      for (size_t state_index = 0; state_index < state_len; state_index++) {
+        if (!include[state_index]) continue;
+        const BorrowScopeSnapshot *state_frame = borrow_scope_snapshot_find(states[state_index], base_frame->scope);
+        if (state_frame && binding_index < state_frame->len) {
+          borrow_origins_add_all(&merged, &state_frame->origins[binding_index]);
+        } else {
+          borrow_origins_add_all(&merged, &base_frame->origins[binding_index]);
+        }
+      }
+      scope_replace_borrow_origins_at(base_frame->scope, base_frame->scope, binding_index, &merged);
+      borrow_origins_free(&merged);
+    }
+  }
+}
+
+static void borrow_scope_snapshot_free(BorrowScopeSnapshot *snapshot) {
+  while (snapshot) {
+    BorrowScopeSnapshot *next = snapshot->next;
+    for (size_t i = 0; i < snapshot->len; i++) borrow_origins_free(&snapshot->origins[i]);
+    free(snapshot->origins);
+    free(snapshot);
+    snapshot = next;
+  }
 }
 
 static void scope_free(Scope *scope) {
@@ -1063,6 +1163,7 @@ static const char *resolve_alias_type(const char *type) {
 static bool check_expr(const Program *program, const Expr *expr, Scope *scope, ZDiag *diag);
 static bool check_expr_expected(const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, const char *expected);
 static bool check_stmt_vec_with_loop(const Program *program, const Function *fun, const StmtVec *body, Scope *scope, ZDiag *diag, int loop_depth);
+static bool stmt_vec_guarantees_exit(const StmtVec *body, bool function_raises);
 static bool check_lvalue_target(const Program *program, const Expr *target, Scope *scope, ZDiag *diag, char *out_type, size_t out_type_len);
 static const char *expr_type(const Program *program, const Expr *expr, Scope *scope);
 static bool types_compatible(const char *expected, const char *actual);
@@ -4851,12 +4952,30 @@ static bool check_scalar_match(const Program *program, const Function *fun, cons
       return set_diag_detail(diag, 3106, "non-exhaustive integer match", stmt->line, stmt->column, "fallback `_` arm", "open integer domain", "add a fallback `_` arm for integer matches outside finite u8 coverage");
     }
   }
+  BorrowScopeSnapshot *before = borrow_scope_snapshot_capture(scope);
+  BorrowScopeSnapshot **arm_states = calloc(stmt->match_arms.len, sizeof(BorrowScopeSnapshot *));
+  bool *arm_continues = calloc(stmt->match_arms.len, sizeof(bool));
   for (size_t arm_index = 0; arm_index < stmt->match_arms.len; arm_index++) {
+    borrow_scope_snapshot_restore(before);
     Scope arm_scope = {.parent = scope};
     bool ok = check_stmt_vec_with_loop(program, fun, &stmt->match_arms.items[arm_index].body, &arm_scope, diag, loop_depth);
     scope_free(&arm_scope);
-    if (!ok) return false;
+    if (!ok) {
+      borrow_scope_snapshot_restore(before);
+      for (size_t i = 0; i < stmt->match_arms.len; i++) borrow_scope_snapshot_free(arm_states[i]);
+      free(arm_states);
+      free(arm_continues);
+      borrow_scope_snapshot_free(before);
+      return false;
+    }
+    arm_states[arm_index] = borrow_scope_snapshot_capture(scope);
+    arm_continues[arm_index] = !stmt_vec_guarantees_exit(&stmt->match_arms.items[arm_index].body, fun->raises);
   }
+  borrow_scope_snapshot_restore_union(before, arm_states, arm_continues, stmt->match_arms.len);
+  for (size_t i = 0; i < stmt->match_arms.len; i++) borrow_scope_snapshot_free(arm_states[i]);
+  free(arm_states);
+  free(arm_continues);
+  borrow_scope_snapshot_free(before);
   return true;
 }
 
@@ -4963,22 +5082,65 @@ static bool check_stmt(const Program *program, const Function *fun, const Stmt *
     if (!check_expr_expected(program, stmt->expr, scope, diag, "Bool")) return false;
     const char *condition_type = expr_type(program, stmt->expr, scope);
     if (!is_bool_type(condition_type)) return set_diag_detail(diag, 3016, "condition must be Bool", stmt->expr->line, stmt->expr->column, "Bool", condition_type, "compare explicitly or produce a Bool value");
+    bool then_possible = true;
+    bool else_possible = true;
+    if (stmt->expr && stmt->expr->kind == EXPR_BOOL) {
+      then_possible = stmt->expr->bool_value;
+      else_possible = !stmt->expr->bool_value;
+    }
+    BorrowScopeSnapshot *before = borrow_scope_snapshot_capture(scope);
     Scope then_scope = {.parent = scope};
-    Scope else_scope = {.parent = scope};
-    bool ok = check_stmt_vec_with_loop(program, fun, &stmt->then_body, &then_scope, diag, loop_depth) &&
-              check_stmt_vec_with_loop(program, fun, &stmt->else_body, &else_scope, diag, loop_depth);
+    bool ok = check_stmt_vec_with_loop(program, fun, &stmt->then_body, &then_scope, diag, loop_depth);
     scope_free(&then_scope);
+    if (!ok) {
+      borrow_scope_snapshot_restore(before);
+      borrow_scope_snapshot_free(before);
+      return false;
+    }
+    BorrowScopeSnapshot *then_after = borrow_scope_snapshot_capture(scope);
+    borrow_scope_snapshot_restore(before);
+    Scope else_scope = {.parent = scope};
+    ok = check_stmt_vec_with_loop(program, fun, &stmt->else_body, &else_scope, diag, loop_depth);
     scope_free(&else_scope);
-    return ok;
+    if (!ok) {
+      borrow_scope_snapshot_restore(before);
+      borrow_scope_snapshot_free(then_after);
+      borrow_scope_snapshot_free(before);
+      return false;
+    }
+    BorrowScopeSnapshot *else_after = borrow_scope_snapshot_capture(scope);
+    BorrowScopeSnapshot *states[] = {then_after, else_after};
+    bool continues[] = {
+      then_possible && !stmt_vec_guarantees_exit(&stmt->then_body, fun->raises),
+      else_possible && !stmt_vec_guarantees_exit(&stmt->else_body, fun->raises),
+    };
+    borrow_scope_snapshot_restore_union(before, states, continues, 2);
+    borrow_scope_snapshot_free(then_after);
+    borrow_scope_snapshot_free(else_after);
+    borrow_scope_snapshot_free(before);
+    return true;
   }
   if (stmt->kind == STMT_WHILE) {
     if (!check_expr_expected(program, stmt->expr, scope, diag, "Bool")) return false;
     const char *condition_type = expr_type(program, stmt->expr, scope);
     if (!is_bool_type(condition_type)) return set_diag_detail(diag, 3016, "condition must be Bool", stmt->expr->line, stmt->expr->column, "Bool", condition_type, "compare explicitly or produce a Bool value");
+    BorrowScopeSnapshot *before = borrow_scope_snapshot_capture(scope);
     Scope body_scope = {.parent = scope};
     bool ok = check_stmt_vec_with_loop(program, fun, &stmt->then_body, &body_scope, diag, loop_depth + 1);
     scope_free(&body_scope);
-    return ok;
+    if (!ok) {
+      borrow_scope_snapshot_restore(before);
+      borrow_scope_snapshot_free(before);
+      return false;
+    }
+    BorrowScopeSnapshot *body_after = borrow_scope_snapshot_capture(scope);
+    bool body_possible = !(stmt->expr && stmt->expr->kind == EXPR_BOOL && !stmt->expr->bool_value);
+    BorrowScopeSnapshot *states[] = {before, body_after};
+    bool continues[] = {true, body_possible && !stmt_vec_guarantees_exit(&stmt->then_body, fun->raises)};
+    borrow_scope_snapshot_restore_union(before, states, continues, 2);
+    borrow_scope_snapshot_free(body_after);
+    borrow_scope_snapshot_free(before);
+    return true;
   }
   if (stmt->kind == STMT_FOR) {
     if (!check_expr(program, stmt->expr, scope, diag)) return false;
@@ -4988,11 +5150,23 @@ static bool check_stmt(const Program *program, const Function *fun, const Stmt *
     if (!is_int_type(start_type) || !is_int_type(end_type)) return set_diag_detail(diag, 3020, "range loop bounds must be integers", stmt->line, stmt->column, "integer-compatible range bounds", "non-integer bound", "use integer start and end expressions");
     if (!types_compatible(start_type, end_type)) return set_diag_detail(diag, 3020, "range loop bounds must have matching integer types", stmt->line, stmt->column, start_type, end_type, "use matching integer bounds until explicit casts are supported");
     set_stmt_resolved_type(stmt, start_type);
+    BorrowScopeSnapshot *before = borrow_scope_snapshot_capture(scope);
     Scope body_scope = {.parent = scope};
     scope_add(&body_scope, stmt->name, start_type, false);
     bool ok = check_stmt_vec_with_loop(program, fun, &stmt->then_body, &body_scope, diag, loop_depth + 1);
     scope_free(&body_scope);
-    return ok;
+    if (!ok) {
+      borrow_scope_snapshot_restore(before);
+      borrow_scope_snapshot_free(before);
+      return false;
+    }
+    BorrowScopeSnapshot *body_after = borrow_scope_snapshot_capture(scope);
+    BorrowScopeSnapshot *states[] = {before, body_after};
+    bool continues[] = {true, !stmt_vec_guarantees_exit(&stmt->then_body, fun->raises)};
+    borrow_scope_snapshot_restore_union(before, states, continues, 2);
+    borrow_scope_snapshot_free(body_after);
+    borrow_scope_snapshot_free(before);
+    return true;
   }
   if (stmt->kind == STMT_BREAK) {
     if (loop_depth <= 0) return set_diag_detail(diag, 3018, "break is only valid inside a loop", stmt->line, stmt->column, "enclosing while or for loop", "no enclosing loop", "move this break inside a loop or use return");
@@ -5039,7 +5213,11 @@ static bool check_stmt(const Program *program, const Function *fun, const Stmt *
       }
       if (!seen && !has_fallback) return set_diag_detail(diag, 3106, "non-exhaustive match", stmt->line, stmt->column, "one arm for every variant case", cases->items[case_index].name, "add the missing match arm or a fallback `._` arm");
     }
+    BorrowScopeSnapshot *before = borrow_scope_snapshot_capture(scope);
+    BorrowScopeSnapshot **arm_states = calloc(stmt->match_arms.len, sizeof(BorrowScopeSnapshot *));
+    bool *arm_continues = calloc(stmt->match_arms.len, sizeof(bool));
     for (size_t arm_index = 0; arm_index < stmt->match_arms.len; arm_index++) {
+      borrow_scope_snapshot_restore(before);
       Scope arm_scope = {.parent = scope};
       MatchArm *arm = &stmt->match_arms.items[arm_index];
       if (strcmp(arm->case_name, "_") != 0 && arm->payload_name && item_choice) {
@@ -5048,8 +5226,22 @@ static bool check_stmt(const Program *program, const Function *fun, const Stmt *
       }
       bool ok = check_stmt_vec_with_loop(program, fun, &arm->body, &arm_scope, diag, loop_depth);
       scope_free(&arm_scope);
-      if (!ok) return false;
+      if (!ok) {
+        borrow_scope_snapshot_restore(before);
+        for (size_t i = 0; i < stmt->match_arms.len; i++) borrow_scope_snapshot_free(arm_states[i]);
+        free(arm_states);
+        free(arm_continues);
+        borrow_scope_snapshot_free(before);
+        return false;
+      }
+      arm_states[arm_index] = borrow_scope_snapshot_capture(scope);
+      arm_continues[arm_index] = !stmt_vec_guarantees_exit(&arm->body, fun->raises);
     }
+    borrow_scope_snapshot_restore_union(before, arm_states, arm_continues, stmt->match_arms.len);
+    for (size_t i = 0; i < stmt->match_arms.len; i++) borrow_scope_snapshot_free(arm_states[i]);
+    free(arm_states);
+    free(arm_continues);
+    borrow_scope_snapshot_free(before);
     return true;
   }
   return true;
