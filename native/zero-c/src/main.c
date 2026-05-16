@@ -21,7 +21,7 @@
 #endif
 #include <unistd.h>
 
-#define ZERO_VERSION "0.1.0"
+#define ZERO_VERSION "0.1.1"
 
 typedef enum {
   EMIT_C,
@@ -1811,7 +1811,7 @@ static void append_compile_time_json(ZBuf *buf, const Program *program, const So
   append_hash_json(buf, "targetHash", fnv1a_text(target ? target->name : z_host_target()));
   append_hash_json(buf, "manifestHash", fnv1a_text(manifest ? manifest : ""));
   zbuf_append(buf, ",\"compilerVersion\":");
-  append_json_string(buf, "0.1.0");
+  append_json_string(buf, ZERO_VERSION);
   zbuf_append(buf, ",\"declaredInputs\":[\"source\",\"target\",\"compilerVersion\",\"manifest\",\"targetFacts\"]}");
   zbuf_append(buf, ",\"meta\":{\"supportedFacts\":[\"literal arithmetic\",\"literal comparisons\",\"Bool logic\",\"target.os\",\"target.arch\",\"target.abi\",\"target.libc\",\"target.objectFormat\",\"target.endian\",\"target.pointerWidth\",\"target.hasCapability\",\"fieldCount\",\"hasField\",\"fieldType\",\"enumCaseCount\",\"hasEnumCase\",\"choiceCaseCount\",\"hasChoiceCase\"],\"unsupportedEffects\":[\"filesystem\",\"network\",\"process\",\"ambient environment\"],\"cycleDiagnostic\":\"MET001\",\"safetyLimitDiagnostic\":\"MET001\"}");
   zbuf_append(buf, ",\"reflection\":{\"typed\":true,\"compileTimeOnly\":true,\"releaseMetadataRetained\":false,\"facts\":[\"target\",\"shape fields\",\"enum cases\",\"choice cases\"]}");
