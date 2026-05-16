@@ -1071,6 +1071,7 @@ static const Shape *find_shape_for_type(const Program *program, const char *type
 static const Function *find_shape_method_decl(const Shape *shape, const char *name);
 static void set_expr_resolved_type(const Expr *expr, const char *type);
 static const Function *find_namespace_shape_method(const Program *program, const Expr *callee, const Shape **out_shape);
+static const Function *find_constrained_interface_method(const Program *program, const Expr *callee, const InterfaceDecl **out_interface);
 static void strip_ref_like_type(const char *type, char *out, size_t out_len);
 static bool interface_constraint_parts(const Program *program, const char *constraint, const InterfaceDecl **out_interface, char ***out_args, size_t *out_arg_len);
 static void mark_owned_move_if_needed(const Expr *expr, Scope *scope, const char *destination_type);
@@ -1729,6 +1730,14 @@ static bool function_has_error_flow(const Program *program, const Function *fun)
   return function_has_error_flow_inner(program, fun, 0);
 }
 
+static bool check_fallible_call_is_checked(const Program *program, const Function *callee, const Expr *call, ZDiag *diag, const char *message, const char *expected, const char *actual, const char *help) {
+  if (!function_has_error_flow(program, callee)) return true;
+  if (allow_fallible_call == 0) {
+    return set_diag_detail(diag, 1003, message, call->line, call->column, expected, actual, help);
+  }
+  return true;
+}
+
 static const Function *fallible_callee(const Program *program, const Expr *expr) {
   if (!expr || expr->kind != EXPR_CALL || !expr->left) return NULL;
   const Function *fun = NULL;
@@ -1737,6 +1746,7 @@ static const Function *fallible_callee(const Program *program, const Expr *expr)
   } else if (expr->left->kind == EXPR_MEMBER) {
     const Shape *shape = NULL;
     fun = find_namespace_shape_method(program, expr->left, &shape);
+    if (!fun) fun = find_constrained_interface_method(program, expr->left, NULL);
     if (!fun && expr->left->left) {
       const char *receiver_type = expr->left->left->resolved_type;
       char owner_type[192];
@@ -3508,6 +3518,15 @@ static bool check_expr_expected(const Program *program, const Expr *expr, Scope 
             mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
             free(expected_type);
           }
+          if (function_has_error_flow(program, method)) {
+            char actual[160];
+            snprintf(actual, sizeof(actual), "call to '%s.%s'", shape->name, method->name);
+            if (!check_fallible_call_is_checked(program, method, expr, diag, "fallible static method call must be checked", "check Shape.method(...)", actual, "prefix the call with check in a function marked raises")) {
+              generic_bindings_free(method_bindings, method_binding_len);
+              free(method_bindings);
+              return false;
+            }
+          }
           char *return_type = type_substitute_generic(method->return_type, method_bindings, method_binding_len);
           set_expr_resolved_type(expr, return_type);
           free(return_type);
@@ -3679,6 +3698,16 @@ static bool check_expr_expected(const Program *program, const Expr *expr, Scope 
             mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
             free(expected_type);
           }
+          if (function_has_error_flow(program, required)) {
+            char actual[160];
+            snprintf(actual, sizeof(actual), "call to '%s.%s'", interface->name, required->name);
+            if (!check_fallible_call_is_checked(program, required, expr, diag, "fallible constrained interface method call must be checked", "check Interface.method(...)", actual, "prefix the call with check in a function marked raises")) {
+              generic_bindings_free(interface_bindings, interface->type_params.len);
+              free(interface_bindings);
+              free_type_arg_list(constraint_args, constraint_arg_len);
+              return false;
+            }
+          }
           char *return_type = type_substitute_generic(required->return_type, interface_bindings, interface->type_params.len);
           set_expr_resolved_type(expr, return_type);
           free(return_type);
@@ -3735,6 +3764,15 @@ static bool check_expr_expected(const Program *program, const Expr *expr, Scope 
             }
             mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
             free(expected_type);
+          }
+          if (function_has_error_flow(program, fun)) {
+            char actual[160];
+            snprintf(actual, sizeof(actual), "call to '%s'", fun->name);
+            if (!check_fallible_call_is_checked(program, fun, expr, diag, "fallible generic function call must be checked", "check fallible_call(...)", actual, "prefix the call with check in a function marked raises")) {
+              generic_bindings_free(bindings, fun->type_params.len);
+              free(bindings);
+              return false;
+            }
           }
           char *return_type = type_substitute_generic(fun->return_type, bindings, fun->type_params.len);
           set_expr_resolved_type(expr, return_type);
