@@ -110,6 +110,22 @@ static bool scope_has(Scope *scope, const char *name) {
   return false;
 }
 
+static Scope *scope_binding_scope(Scope *scope, const char *name) {
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    for (size_t i = 0; i < cursor->len; i++) {
+      if (strcmp(cursor->names[i], name) == 0) return cursor;
+    }
+  }
+  return NULL;
+}
+
+static bool scope_is_ancestor_or_self(const Scope *candidate, const Scope *scope) {
+  for (const Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    if (cursor == candidate) return true;
+  }
+  return false;
+}
+
 static const char *scope_type(Scope *scope, const char *name) {
   for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
     for (size_t i = 0; i < cursor->len; i++) {
@@ -3085,8 +3101,7 @@ static bool check_expr_expected(const Program *program, const Expr *expr, Scope 
         if (owned_inner_text(left_type, owned_shape_type, sizeof(owned_shape_type))) left_type = owned_shape_type;
         if (ref_inner_text(left_type, ref_shape_type, sizeof(ref_shape_type))) left_type = ref_shape_type;
         if (strcmp(left_type, "World") == 0 && (strcmp(expr->text, "out") == 0 || strcmp(expr->text, "err") == 0)) {
-          set_expr_resolved_type(expr, "WorldStream");
-          return true;
+          return set_diag_detail(diag, 3005, "World stream member cannot be used as a runtime value", expr->line, expr->column, "world.out.write(...) or world.err.write(...)", expr->text, "call write directly on the stream capability");
         }
         const Shape *shape = find_shape_for_type(program, left_type);
         if (shape) {
@@ -4240,18 +4255,26 @@ static bool register_borrow_binding(const Program *program, const Stmt *stmt, Sc
   return true;
 }
 
-static void update_borrow_assignment(const Program *program, const Expr *target, const Expr *value, Scope *scope) {
-  if (!target || target->kind != EXPR_IDENT || !scope_has(scope, target->text)) return;
+static bool update_borrow_assignment(const Program *program, const Expr *target, const Expr *value, Scope *scope, ZDiag *diag) {
+  if (!target || target->kind != EXPR_IDENT || !scope_has(scope, target->text)) return true;
   const char *target_type = scope_type(scope, target->text);
-  if (!type_is_named_generic(target_type, "ref") && !type_is_named_generic(target_type, "mutref")) return;
+  if (!type_is_named_generic(target_type, "ref") && !type_is_named_generic(target_type, "mutref")) return true;
   char root[128];
   bool mut_borrow = false;
   if (expr_reference_origin(program, value, scope, root, sizeof(root), &mut_borrow)) {
+    Scope *target_scope = scope_binding_scope(scope, target->text);
+    Scope *root_scope = scope_binding_scope(scope, root);
+    if (target_scope && root_scope && !scope_is_ancestor_or_self(root_scope, target_scope)) {
+      char actual[160];
+      snprintf(actual, sizeof(actual), "reference to shorter-lived local '%s'", root);
+      return set_diag_detail(diag, 3030, "cannot assign a reference to a shorter-lived binding", value ? value->line : target->line, value ? value->column : target->column, "borrow source that outlives the reference binding", actual, "keep the reference binding in the same lexical scope as the borrowed value");
+    }
     mut_borrow = type_is_named_generic(target_type, "mutref");
     scope_set_borrow_origin(scope, target->text, root, mut_borrow);
   } else {
     scope_clear_borrow_origin(scope, target->text);
   }
+  return true;
 }
 
 static bool check_assignment_not_borrowed(const Expr *target, Scope *scope, ZDiag *diag) {
@@ -4449,7 +4472,7 @@ static bool check_stmt(const Program *program, const Function *fun, const Stmt *
     }
     mark_owned_move_if_needed(stmt->expr, scope, expected);
     mark_owned_target_live_if_needed(target, scope, expected);
-    update_borrow_assignment(program, target, stmt->expr, scope);
+    if (!update_borrow_assignment(program, target, stmt->expr, scope, diag)) return false;
     return true;
   }
   if (stmt->kind == STMT_CHECK) {
