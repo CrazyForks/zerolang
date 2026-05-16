@@ -6,10 +6,10 @@ Runnable today:
 | --- | --- | --- |
 | `std.path.join(buffer, left, right)` | `Maybe<String>` | Joins two path fragments into caller-provided fixed buffer storage. |
 
-Specified but intentionally small:
+Current scope:
 
 - `readBytes`/`writeBytes` stay alongside resource-oriented `Fs`/`File` APIs because they are useful small-program conveniences.
-- `basename`, `dirname`, and extension helpers are deferred unless they can stay allocation-free and target-obvious.
+- `basename`, `dirname`, and extension helpers are not part of the current API.
 - The module is intentionally small and is not a general path normalization library.
 
 ## Example
@@ -27,4 +27,9 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-`std.path.join` writes into caller storage and returns `null` when the buffer is too small. It does not allocate and does not normalize platform-specific semantics. The current behavior uses `/` as the portable package/example separator; Windows path normalization remains documented as a limitation until target-specific path rules are added.
+`std.path.join` writes into caller storage and returns `null` when the buffer is
+too small. It does not allocate.
+
+The current behavior uses `/` as the portable package/example separator. Windows
+path normalization remains a documented limitation until target-specific path
+rules are added.

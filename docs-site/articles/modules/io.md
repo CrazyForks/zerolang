@@ -35,4 +35,7 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-`std.io` is a caller-owned buffer surface, not an ambient process I/O layer. Process stdin/stdout stays behind explicit capabilities such as `World` and `Io`.
+`std.io` is a caller-owned buffer surface, not an ambient process I/O layer.
+
+Process stdin/stdout stays behind explicit capabilities such as `World` and
+`Io`.

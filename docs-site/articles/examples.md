@@ -1,6 +1,8 @@
 ## Examples
 
-The examples directory is the best hands-on path through Zero. Each example is small, deterministic, and intended to be checked or built from the repository root.
+The examples directory is the best hands-on path through Zero. Each example is
+small, deterministic, and intended to be checked or built from the repository
+root.
 
 Start here:
 
@@ -18,7 +20,8 @@ bin/zero build --release tiny --target linux-musl-x64 examples/hello.0 --out .ze
 bin/zero size --json --release tiny --target linux-musl-x64 --out .zero/out/hello-tiny examples/hello.0
 ```
 
-The current compiler can produce a tiny hosted/musl-style artifact for hello-world. This is not a complete no-libc runtime.
+The current compiler can produce a tiny hosted/musl-style artifact for hello
+world. This is not a complete no-libc runtime.
 
 Build profiles:
 
@@ -29,7 +32,8 @@ bin/zero build --json --profile small --target linux-musl-x64 examples/hello.0 -
 bin/zero size --json --profile tiny --target linux-musl-x64 examples/fixed-vec.0
 ```
 
-Build JSON reports `profileSemantics` and `profileBudget`. Size JSON adds `sizeBreakdown`, `retentionReasons`, and `optimizationHints`.
+Build JSON reports `profileSemantics` and `profileBudget`. Size JSON adds
+`sizeBreakdown`, `retentionReasons`, and `optimizationHints`.
 
 Direct helper audit:
 
@@ -37,7 +41,9 @@ Direct helper audit:
 bin/zero size --json --target linux-musl-x64 examples/fixed-vec.0
 ```
 
-The direct size and graph reports expose concrete helper facts for fixed-capacity shapes while rejecting vtables, method registries, generic registries, hidden allocator machinery, and reflection.
+The direct size and graph reports show which helpers are retained for
+fixed-capacity shapes. They also make the absence of vtables, method registries,
+generic registries, hidden allocator machinery, and reflection visible.
 
 Cross-compile smoke:
 
@@ -47,7 +53,9 @@ bin/zero build --release tiny --target win32-x64.exe examples/hello.0 --out .zer
 bin/zero size --json --release tiny --target linux-musl-x64 --out .zero/out/hello-linux-musl examples/hello.0
 ```
 
-On macOS hosts these commands produce Linux and Windows-style output artifacts through direct emitters. `zero size --json` provides the target report and artifact size without needing to execute the foreign binary.
+On macOS hosts these commands produce Linux and Windows-style output artifacts
+through direct emitters. `zero size --json` provides the target report and
+artifact size without executing the foreign binary.
 
 Core examples:
 
@@ -85,7 +93,15 @@ Native Workflow Coverage:
 
 ## Larger CLI: `zero-hash`
 
-`examples/zero-hash/` is a larger CLI example. It reads a file, uses a fixed-buffer allocator, exercises args, hosted fs, memory, codec/hash-style APIs, fallibility, and owned resources, and stays useful without a large standard library.
+`examples/zero-hash/` is a larger CLI example. It exercises:
+
+- args and hosted filesystem access
+- fixed-buffer allocation
+- memory helpers
+- codec/hash-style APIs
+- fallibility and owned resources
+
+It stays useful without a large standard library.
 
 Build command:
 
@@ -117,7 +133,10 @@ Inspect metadata:
 bin/zero graph --json examples/zero-hash
 ```
 
-The graph and size reports include `zero-hash` helper facts for args, fixed-buffer allocation, CRC-32 bytes, and hosted reads while forbidding hidden runtime machinery such as global allocation, registries, reflection, or heap allocation.
+The graph and size reports show the helper use behind `zero-hash`: args,
+fixed-buffer allocation, CRC-32 bytes, and hosted reads. They also show that the
+program does not retain hidden runtime machinery such as global allocation,
+registries, reflection, or heap allocation.
 
 Benchmark case:
 
@@ -133,7 +152,11 @@ Cross-target status:
 bin/zero check --json --target wasm32-web examples/zero-hash
 ```
 
-`zero-hash` intentionally uses hosted filesystem APIs. WASI provides the required filesystem capability for the direct harness, while browser-style `wasm32-web` checks report `TAR002`. Use `examples/memory-package/` for target-neutral cross-target direct builds.
+`zero-hash` intentionally uses hosted filesystem APIs. WASI provides the required
+filesystem capability for the direct harness. Browser-style `wasm32-web` checks
+report `TAR002`.
+
+Use `examples/memory-package/` for target-neutral cross-target direct builds.
 
 ## Web Routes: `web/hello`
 
@@ -143,6 +166,15 @@ Route map:
 bin/zero routes --json examples/web/hello
 ```
 
-The packet reports the runtime target (`wasm32-web`), route count, route files, artifact metadata, web surfaces, and web bundle audit facts.
+The packet reports the runtime target (`wasm32-web`), route count, route files,
+artifact metadata, web surfaces, and web bundle audit facts.
 
-The route packet also reports `localRuntime` for the portable browser-worker path: explicit imports, denied filesystem/process access, `frameworkTaxBytes: 0`, and `providerSpecificDeployment: false`. Use `npm run wasm:runtime:smoke` to run the local WASI/browser import harness.
+The route packet also reports `localRuntime` for the portable browser-worker
+path:
+
+- explicit imports
+- denied filesystem/process access
+- `frameworkTaxBytes: 0`
+- `providerSpecificDeployment: false`
+
+Use `npm run wasm:runtime:smoke` to run the local WASI/browser import harness.

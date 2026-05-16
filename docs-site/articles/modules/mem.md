@@ -27,7 +27,7 @@ Runnable today:
 | `std.mem.vecPush(&mut vec, value)` | `Bool` | Appends one byte when capacity remains; returns `false` instead of growing implicitly. |
 | `std.mem.vecLen(&vec)` | `usize` | Reports current vector length. |
 | `std.mem.vecCapacity(&vec)` | `usize` | Reports caller-provided vector capacity. |
-| `std.mem.mapEmpty()` / `std.mem.setEmpty()` | `Map` / `Set` | Empty fixed metadata values with no allocation; growth waits for explicit allocator/capacity APIs. |
+| `std.mem.mapEmpty()` / `std.mem.setEmpty()` | `Map` / `Set` | Empty fixed metadata values with no allocation. |
 | `std.mem.mapLen(&map)` / `std.mem.setLen(&set)` | `usize` | Reports `0` for the current empty metadata values. |
 
 ## Example
@@ -70,8 +70,18 @@ pub fun main(world: World) -> Void raises {
 ```
 
 Effects: none beyond writes performed by caller code.
-Allocation behavior: `NullAlloc` always returns `null`; `FixedBufAlloc`/`Arena` return `MutSpan<u8>` views into caller-owned storage and advance explicit allocator state. `ByteBuf` owns a slice of that explicit storage and never reaches for a global heap.
-Ownership: returned spans borrow from the original fixed buffer; no heap ownership is created.
+
+Allocation behavior:
+
+- `NullAlloc` always returns `null`.
+- `FixedBufAlloc` and `Arena` return `MutSpan<u8>` views into caller-owned
+  storage.
+- `ByteBuf` owns a slice of explicit allocator storage and never reaches for a
+  global heap.
+
+Ownership: returned spans borrow from the original fixed buffer; no heap
+ownership is created.
+
 Target support: current compiler targets.
 
 ## Reporting Contract
@@ -79,12 +89,18 @@ Target support: current compiler targets.
 `zero mem --json <input>` reports the allocator contract in machine-readable form:
 
 - `memoryBudgets`: stack, static, heap, arena, fixed-buffer, collection-capacity, allocator-capacity, requested-allocation, and linear-memory floor budgets.
-- `allocatorFacts`: `NullAlloc`, `FixedBufAlloc`, `Arena`, `PageAlloc`, and `GeneralAlloc` usage, capacity, failure behavior, and hidden-global-allocator status.
+- `allocatorFacts`: `NullAlloc`, `FixedBufAlloc`, `Arena`, `PageAlloc`, and
+  `GeneralAlloc` usage, capacity, failure behavior, and
+  hidden-global-allocator status.
 - `allocationInstrumentation`: pay-as-used hooks for attempts, successes, failures, requested bytes, granted bytes, and peak live bytes.
 - `collectionFacts`: fixed-capacity `Vec`, owned `ByteBuf`, and empty `Map`/`Set` metadata, including growth/failure/cleanup behavior.
 
-All heap budgets are explicit. A program that only uses `std.mem` remains at `heapBytes: 0`, `globalHeapBytes: 0`, and `hiddenHeapAllocation: false` unless a future allocator API documents otherwise.
+All heap budgets are explicit. A program that only uses `std.mem` remains at
+`heapBytes: 0`, `globalHeapBytes: 0`, and `hiddenHeapAllocation: false` unless
+an allocator API documents otherwise.
 
 ## Design Notes
 
-No standard collection may silently allocate from a global heap. Heap-owning APIs will require an allocator capability and document ownership, capacity, and cleanup.
+No standard collection may silently allocate from a global heap. Heap-owning APIs
+will require an allocator capability and document ownership, capacity, and
+cleanup.

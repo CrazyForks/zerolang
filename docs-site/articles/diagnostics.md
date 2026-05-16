@@ -37,7 +37,11 @@ pub fun main(world: World) -> Void raises {
 
 ## Plain Text By Default
 
-Default diagnostics should be short and useful in terminal logs. They should not include ANSI colors, bold styling, hyperlinks, OSC escapes, or terminal control sequences by default. Those bytes bloat agent context and make logs harder to compare.
+Default diagnostics should be short and useful in terminal logs.
+
+They should not include ANSI colors, bold styling, hyperlinks, OSC escapes, or
+terminal control sequences by default. Those bytes bloat agent context and make
+logs harder to compare.
 
 Use:
 
@@ -149,7 +153,9 @@ The native compiler keeps stable codes for implemented control-flow and type rul
 - `FLD002`: a shape literal omitted a required field that has no default
 - `TAR001`: the requested target name is not in `zero targets`
 - `TAR002`: the selected non-host target does not provide the hosted filesystem capability required by `std.fs`
-- Bounds check failures: native executables print `zero bounds check failed` and abort when an index, indexed assignment, or slice range is outside the base length
+- Bounds check failures: native executables print `zero bounds check failed` and
+  abort when an index, indexed assignment, or slice range is outside the base
+  length.
 - `MAT004`: a match arm can bind a payload only for a choice case that carries one
 
 ## Standard Library Diagnostics
@@ -157,9 +163,9 @@ The native compiler keeps stable codes for implemented control-flow and type rul
 Standard library modules use the same repair-packet contract as compiler diagnostics.
 
 - `MEM001` reports malformed memory type forms such as `Maybe` without its required type argument.
-- `std.parse`, `std.json`, `std.toml`, and `std.env` diagnostics carry source spans.
-- `std.id` and `std.time` diagnostics can use offset-only spans for single-token inputs.
-- `std.contract` reports value paths such as `user.email` once data has already been parsed.
+- `std.parse`, `std.json`, and `std.env` diagnostics carry source spans where
+  applicable.
+- `std.time` diagnostics can use offset-only spans for single-token inputs.
 - Standard library codes stay stable and package-local, while `zero explain <code>` provides human guidance and `--json` exposes structured fix metadata.
 
 ## Common Repair Packets
@@ -170,7 +176,11 @@ Hosted filesystem helpers are host-only in the current compiler. This fails clea
 bin/zero check --json --target linux-musl-x64 conformance/native/fail/std-fs-target-unsupported.0
 ```
 
-The diagnostic uses `TAR002`, `fixSafety: "requires-human-review"`, and repair id `remove-hosted-fs-or-use-host-target`. The canonical repair is either to build for the host target or move the `std.fs` call out of the target-neutral entry point.
+The diagnostic uses `TAR002`, `fixSafety: "requires-human-review"`, and repair
+id `remove-hosted-fs-or-use-host-target`.
+
+The canonical repair is either to build for the host target or move the
+`std.fs` call out of the target-neutral entry point.
 
 Writable byte helpers require mutable storage:
 
@@ -194,7 +204,11 @@ Named-error `std.fs` calls require explicit error flow:
 let file = std.fs.createOrRaise(fs, ".zero/out.txt")
 ```
 
-This reports `ERR003` with repair id `check-or-rescue-fallible-call`. Use `check` and include `NotFound`, `TooLarge`, and `Io` in the caller's `raises { ... }` set, or use `rescue` locally.
+This reports `ERR003` with repair id `check-or-rescue-fallible-call`.
+
+Use `check` and include `NotFound`, `TooLarge`, and `Io` in the caller's
+`raises { ... }` set. Use `rescue` locally when the call should recover in
+place.
 
 Generic calls use local inference only. This fails because `T` would need to be both `i32` and `u8`:
 
@@ -230,9 +244,23 @@ C interop keeps host and target discovery separate. This fails for a foreign tar
 bin/zero build --json --target linux-musl-x64 conformance/c/host-leak-package --out .zero/out/host-leak-package
 ```
 
-This reports `CIMP003` with repair id `configure-target-c-dependency`. The canonical repair is to use package-relative vendored headers/libraries or configure the target sysroot instead of relying on host include paths, host library paths, or host `pkg-config` discovery.
+This reports `CIMP003` with repair id `configure-target-c-dependency`.
 
-Package dependency diagnostics are graph-level repairs. `PKG001` means a local dependency path is wrong or missing, `PKG002` means two package manifests depend on each other cyclically, `PKG003` means the graph resolved one package name to multiple versions, and `PKG004` means the selected target is outside the dependency's target list. These all use `requires-human-review` because the correct repair may change package topology or target support.
+The canonical repair is to use package-relative vendored headers/libraries or
+configure the target sysroot. Do not rely on host include paths, host library
+paths, or host `pkg-config` discovery for cross-target builds.
+
+Package dependency diagnostics are graph-level repairs:
+
+| Code | Meaning |
+| --- | --- |
+| `PKG001` | A local dependency path is wrong or missing. |
+| `PKG002` | Two package manifests depend on each other cyclically. |
+| `PKG003` | The graph resolved one package name to multiple versions. |
+| `PKG004` | The selected target is outside the dependency's target list. |
+
+These all use `requires-human-review` because the correct repair may change
+package topology or target support.
 
 Type aliases are compile-time spellings and cannot cycle:
 
@@ -241,7 +269,12 @@ type A = B
 type B = A
 ```
 
-This reports `TYP026`; point the alias at a concrete type such as `Span<u8>` or remove the cycle. Unsupported compile-time execution reports `MET001`, for example `const os: String = meta target.os`, until target facts are implemented in the native compiler.
+This reports `TYP026`. Point the alias at a concrete type such as `Span<u8>` or
+remove the cycle.
+
+Unsupported compile-time execution reports `MET001`, for example
+`const os: String = meta target.os`, until target facts are implemented in the
+native compiler.
 
 Generic shape methods must specialize from a concrete `Self` value or explicit shape arguments:
 
@@ -255,7 +288,16 @@ shape FixedVec<T, static N: usize> {
 let cap = FixedVec.cap()
 ```
 
-This reports `SHM001`. Pass explicit shape arguments, for example `FixedVec.cap<u8, 4>()`, or call a method that receives a concrete `Self` value such as `FixedVec.push(&mut vec, value)` or `vec.push(value)`. `SHM002` means the explicit method arguments and the receiver's annotated shape disagree.
+This reports `SHM001`.
+
+Repair it in one of two ways:
+
+- pass explicit shape arguments, such as `FixedVec.cap<u8, 4>()`
+- call a method that receives a concrete `Self` value, such as
+  `FixedVec.push(&mut vec, value)` or `vec.push(value)`
+
+`SHM002` means the explicit method arguments and the receiver's annotated shape
+disagree.
 
 Receiver calls require a declared method whose first parameter is `self: ref<Self>` or `self: mutref<Self>`:
 
@@ -264,7 +306,11 @@ let vec: FixedVec<u8,4> = FixedVec { len: 0, items: [0, 0, 0, 0] }
 check vec.push(1)
 ```
 
-This reports `RCV002` because `push` needs `mutref<Self>` and `vec` is immutable. Unknown receiver methods report `RCV001`; static methods without `self` should be called through the shape namespace.
+This reports `RCV002` because `push` needs `mutref<Self>` and `vec` is
+immutable.
+
+Unknown receiver methods report `RCV001`. Static methods without `self` should
+be called through the shape namespace.
 
 Shape field defaults allow omitted fields, but only when the declaration provides a compatible default:
 
@@ -277,7 +323,9 @@ shape NeedsItem {
 let value: NeedsItem = NeedsItem {}
 ```
 
-This reports `FLD002` with repair id `initialize-missing-field` because `item` has no default. A default with the wrong type reports `TYP002` at the default expression.
+This reports `FLD002` with repair id `initialize-missing-field` because `item`
+has no default. A default with the wrong type reports `TYP002` at the default
+expression.
 
 Static interfaces are checked at generic specialization time. This fails because `Counter` does not provide the required static method:
 
@@ -319,7 +367,13 @@ let vec: FixedVec<u8,4> = FixedVec { len: 4, items: [1, 2, 3, 4] }
 let bad = first<u8, 8>(&vec)
 ```
 
-This reports `STC003` because the explicit `8` conflicts with the annotated `FixedVec<u8,4>`. `STC001` covers unsupported static parameter types, and `STC002` covers runtime values used where a compile-time integer is required.
+This reports `STC003` because the explicit `8` conflicts with the annotated
+`FixedVec<u8,4>`.
+
+Related static-value diagnostics:
+
+- `STC001`: unsupported static parameter type
+- `STC002`: runtime value used where a compile-time integer is required
 
 ## Commands
 

@@ -13,7 +13,7 @@ Runnable today:
 | `std.codec.writeU16(value)` | `u32` | Packs a `u16` value into the current write representation. |
 | `std.codec.writeU32(value)` | `u32` | Packs a `u32` value into the current write representation. |
 
-Specified but not complete:
+Current limits:
 
 - Buffer-backed write APIs.
 - Error-producing reads for short inputs.
@@ -38,4 +38,5 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-The current helpers are intentionally narrow. They let the native path prove integer widths and deterministic byte math before Zero grows allocator-backed buffers.
+The current helpers are intentionally narrow. They prove integer widths and
+deterministic byte math before allocator-backed buffers are added.

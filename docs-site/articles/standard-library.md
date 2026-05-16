@@ -1,6 +1,9 @@
 ## Standard Library Reference
 
-Zero's standard library is pay-as-used and capability-aware. Importing memory helpers does not pull in hosted filesystem helpers, and hosted APIs report their target requirements in `zero graph` and `zero size`.
+Zero's standard library is pay-as-used and capability-aware. Importing memory
+helpers does not pull in hosted filesystem helpers.
+
+Hosted APIs report their target requirements in `zero graph` and `zero size`.
 
 Runnable modules:
 
@@ -16,12 +19,29 @@ Runnable modules:
 - `std.time`: duration math plus target-gated monotonic and wall-clock helpers.
 - `std.rand`: explicit deterministic random sources and target entropy helpers.
 - `std.proc`: host process status helpers behind the process capability.
+- `std.crypto`: small hash, keyed hash, constant-time equality, and entropy helpers.
+- `std.net`: network capability metadata and bootstrap connection/listener handles.
+- `std.http`: HTTP method, body-length, client/server metadata, and TLS-boundary helpers.
 
-Each module page documents target support, allocation behavior, error behavior, ownership notes, and runnable examples. Use `zero graph --json <input>` to inspect required capabilities, `zero size --json <input>` to inspect helper metadata, and `zero mem --json <input>` to inspect `memoryBudgets`, `allocatorFacts`, `allocationInstrumentation`, and `collectionFacts`. The `stdlibHelpers` and `usedStdlibHelpers` JSON entries include `module`, `effects`, `allocationBehavior`, `targetSupport`, `errorBehavior`, `ownershipNotes`, `example`, and `apiStability` for each public helper.
+Each module page documents target support, allocation behavior, error behavior,
+ownership notes, and runnable examples.
+
+Use the CLI to inspect what a program actually retains:
+
+| Command | Shows |
+| --- | --- |
+| `zero graph --json <input>` | Required capabilities and imported helpers. |
+| `zero size --json <input>` | Helper metadata and retained helper cost. |
+| `zero mem --json <input>` | `memoryBudgets`, `allocatorFacts`, `allocationInstrumentation`, and `collectionFacts`. |
+
+The `stdlibHelpers` and `usedStdlibHelpers` JSON entries include `module`,
+`effects`, `allocationBehavior`, `targetSupport`, `errorBehavior`,
+`ownershipNotes`, `example`, and `apiStability` for each public helper.
 
 ## Metadata Contract
 
-Public standard library symbols document the fields agents need to call them safely:
+Public standard library symbols document the fields agents need to call them
+safely:
 
 ```text
 symbol: std.fs.readAllOrRaise
@@ -33,4 +53,7 @@ ownership notes: returns owned<ByteBuf>
 example: examples/readall-cli/
 ```
 
-Module pages may group related symbols when their metadata is identical, but they should keep these labels visible: effects, allocation behavior, target support, error behavior, ownership notes, and example.
+Module pages may group related symbols when their metadata is identical.
+
+Keep these labels visible: effects, allocation behavior, target support, error
+behavior, ownership notes, and example.

@@ -37,7 +37,12 @@ let name: Maybe<String> = null
 let fallback = name else "world"
 ```
 
-Fallible functions are marked with `raises`, and `check` propagates the current error. `raises` is part of a function signature rather than a runtime exception mechanism. The native compiler now accepts explicit error sets for user-defined fallible functions.
+Fallible functions are marked with `raises`, and `check` propagates the current
+error. `raises` is part of a function signature rather than a runtime exception
+mechanism.
+
+The native compiler accepts explicit error sets for user-defined fallible
+functions.
 
 ```zero
 fun validate(ok: Bool) -> i32 raises { InvalidInput } {
@@ -52,7 +57,12 @@ fun run() -> Void raises { InvalidInput } {
 }
 ```
 
-The native compiler also lowers `check` on `Maybe<T>` to a direct branch for the first recoverable helper slice. A failed `Maybe` check returns the function's default failure value without exceptions or unwinding. User-defined error flow lowers to small status/result structs only when a function actually raises named errors.
+The native compiler lowers `check` on `Maybe<T>` to a direct branch for the
+first recoverable helper slice. A failed `Maybe` check returns the function's
+default failure value without exceptions or unwinding.
+
+User-defined error flow lowers to small status/result structs only when a
+function actually raises named errors.
 
 ## Memory And Ownership
 
@@ -78,9 +88,19 @@ pub fun len(view: BufferView) -> usize {
 }
 ```
 
-`Alloc` is a capability type used by allocation APIs. Heap allocation should be visible in function parameters and documentation; there is no hidden global allocator.
+`Alloc` is a capability type used by allocation APIs. Heap allocation should be
+visible in function parameters and documentation; there is no hidden global
+allocator.
 
-`NullAlloc`, `FixedBufAlloc`, arena-style fixed-buffer allocation, `PageAlloc`, and `GeneralAlloc` are the first allocator primitives in the native compiler. `NullAlloc` always reports allocation failure, which lets agents and tests prove a path does not allocate. `FixedBufAlloc` and `std.mem.arena(buffer)` allocate from caller-owned mutable bytes and return borrowed `MutSpan<u8>` views. `PageAlloc` and `GeneralAlloc` are explicit handles, not ambient global heaps. `std.mem.byteBuf(alloc, len)` builds on that with `Maybe<owned<ByteBuf>>`, a tiny owned byte-buffer primitive backed by explicit caller storage.
+Allocator primitives are explicit handles:
+
+| Primitive | Behavior |
+| --- | --- |
+| `NullAlloc` | Always reports allocation failure, useful for proving a path does not allocate. |
+| `FixedBufAlloc` | Allocates from caller-owned mutable bytes and returns borrowed `MutSpan<u8>` views. |
+| `std.mem.arena(buffer)` | Arena-style fixed-buffer allocation over caller storage. |
+| `PageAlloc`, `GeneralAlloc` | Explicit handles, not ambient global heaps. |
+| `std.mem.byteBuf(alloc, len)` | Returns `Maybe<owned<ByteBuf>>` backed by explicit caller storage. |
 
 Borrow expressions create references without allocation or runtime metadata. Use `&value` for `ref<T>` and `&mut value` for `mutref<T>`.
 
@@ -97,7 +117,12 @@ let shared = &point
 write_x(&mut point, 5)
 ```
 
-An `owned<T>` local is automatically cleaned up at lexical scope exit when `T` defines the canonical non-raising method `fun drop(self: mutref<Self>) -> Void`. Cleanup is lowered to a direct call and skipped once the owned binding has moved.
+An `owned<T>` local is automatically cleaned up at lexical scope exit when `T`
+defines the canonical non-raising method
+`fun drop(self: mutref<Self>) -> Void`.
+
+Cleanup is lowered to a direct call and skipped once the owned binding has
+moved.
 
 ```zero
 shape Temp {
@@ -136,7 +161,11 @@ enum Color : u8 {
 
 ## Capability Names Are Not Primitives
 
-Names such as `World`, `Fs`, `Net`, `Env`, `Args`, `Clock`, `Rand`, and `Proc` are capability surfaces. They are foundational to Zero's effect model, but they are not primitive values in the same sense as `Bool`, `u32`, `Maybe<T>`, or `Span<T>`.
+Names such as `World`, `Fs`, `Net`, `Env`, `Args`, `Clock`, `Rand`, and `Proc`
+are capability surfaces.
+
+They are foundational to Zero's effect model, but they are not primitive values
+in the same sense as `Bool`, `u32`, `Maybe<T>`, or `Span<T>`.
 
 ```zero
 pub fun main(world: World) -> Void raises {
@@ -146,6 +175,25 @@ pub fun main(world: World) -> Void raises {
 
 ## Current Native Status
 
-The native compiler currently checks primitive integer widths, emits exact C integer types, supports explicit casts among primitive integers, floats, and byte `char`, validates memory-oriented generic forms, supports `Maybe<T>`, emits native layouts for span views, supports source-level `ref<T>` and `mutref<T>` borrows, enforces lexical moves for `owned<T>`, emits direct `drop` cleanup calls for live owned locals, supports compiler-known `owned<File>` cleanup, and supports allocation through `NullAlloc`, mutable `FixedBufAlloc`, and `ByteBuf`. None of these ownership features add runtime ownership machinery.
+The native compiler currently supports:
 
-Staged primitive work includes `f16`, Unicode scalar character handling, fuller borrow and alias analysis, `Arena` and general allocator behavior, drop glue for generic containers, and more exhaustive layout conformance across target ABIs.
+- checked primitive integer widths and exact C integer types
+- explicit casts among primitive integers, floats, and byte `char`
+- memory-oriented generic forms
+- `Maybe<T>` and native layouts for span views
+- source-level `ref<T>` and `mutref<T>` borrows
+- lexical moves for `owned<T>`
+- direct `drop` cleanup calls for live owned locals
+- compiler-known `owned<File>` cleanup
+- allocation through `NullAlloc`, mutable `FixedBufAlloc`, and `ByteBuf`
+
+None of these ownership features add runtime ownership machinery.
+
+Not part of the current native status:
+
+- `f16`
+- Unicode scalar character handling
+- fuller borrow and alias analysis
+- `Arena` and general allocator behavior
+- drop glue for generic containers
+- more exhaustive layout conformance across target ABIs

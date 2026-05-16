@@ -21,9 +21,23 @@ zero doctor
 zero doctor --json
 ```
 
-For supported native executable builds, Zero uses direct emitters and does not need a C compiler. `zero doctor` still reports PATH health, workspace write access, bundled target support, and target SDK/sysroot status because those facts matter for target readiness and interop workflows. `zero doctor --json` includes `targetToolchains`, a per-target readiness matrix for relevant tools.
+Supported native executable builds use direct emitters, so a C compiler is not
+required for the normal path.
 
-The experimental `--emit wasm --target wasm32-wasi` path writes a minimal WebAssembly module directly and does not require an external C toolchain, but it only supports the direct-wasm MVP subset.
+`zero doctor` still checks the pieces that affect real builds:
+
+- PATH health
+- workspace write access
+- bundled target support
+- target SDK/sysroot readiness
+- interop tool readiness
+
+`zero doctor --json` includes `targetToolchains`, a per-target readiness matrix
+for relevant tools.
+
+The `--emit wasm --target wasm32-wasi` path writes a minimal WebAssembly module
+directly and does not require an external C toolchain. It supports the
+direct-wasm MVP subset.
 
 ```sh
 zero build --emit exe --target linux-musl-x64 examples/hello.0 --out .zero/out/hello

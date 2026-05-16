@@ -8,7 +8,7 @@ Runnable today:
 | `std.json.parse(alloc, text)` | `Maybe<JsonDoc>` | Parses with an explicit allocator and returns `null` on failure. |
 | `std.json.streamTokens(text)` | `usize` | Counts stream tokens without building an owned tree. |
 | `std.json.writeString(buffer, text)` | `Maybe<String>` | Writes an escaped JSON string into caller storage. |
-| `std.json.decodeBoundary()` | `String` | Documents the typed decode boundary for future shape decoding. |
+| `std.json.decodeBoundary()` | `String` | Documents the typed decode boundary exposed by current metadata. |
 
 Metadata labels:
 
@@ -36,4 +36,8 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-JSON should not fake allocation-free semantics. Parsing into an owned document requires an explicit allocator, and streaming paths expose their storage and error behavior.
+JSON should not fake allocation-free semantics. Validation and streaming stay
+allocation-free.
+
+Parsing into an owned document requires an explicit allocator, and streaming
+paths expose their storage and error behavior.

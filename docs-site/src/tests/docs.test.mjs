@@ -11,7 +11,7 @@ describe("docs registry", () => {
   it("declares module pages with source files", async () => {
     const moduleDocs = docs.filter((doc) => doc.section === "Modules");
 
-    assert.equal(moduleDocs.length, 18);
+    assert.equal(moduleDocs.length, 15);
     assert.ok(moduleDocs.every((doc) => doc.path.startsWith("/modules/")));
 
     await Promise.all(
@@ -64,7 +64,7 @@ describe("docs registry", () => {
     assert.match(await readDoc("standard-library"), /zero graph --json/);
     assert.match(await readDoc("standard-library"), /usedStdlibHelpers/);
     assert.match(await readDoc("standard-library"), /ownershipNotes/);
-    for (const moduleSlug of ["module-io", "module-rand", "module-proc"]) {
+    for (const moduleSlug of ["module-io", "module-rand", "module-proc", "module-crypto", "module-net", "module-http"]) {
       const moduleDoc = await readDoc(moduleSlug);
       for (const label of ["effects", "allocation behavior", "target support", "error behavior", "ownership notes", "example"]) {
         assert.match(moduleDoc, new RegExp(label));
@@ -112,7 +112,7 @@ describe("docs registry", () => {
       assert.match(crossCompilation, new RegExp(runtimeTerm));
     }
     const stdlib = await readDoc("standard-library");
-    for (const label of ["effects", "allocation behavior", "target support", "error behavior", "ownership notes", "example"]) {
+    for (const label of ["std.crypto", "std.net", "std.http", "effects", "allocation behavior", "target support", "error behavior", "ownership notes", "example"]) {
       assert.match(stdlib, new RegExp(label));
     }
     const languageReference = await readDoc("language-reference");
@@ -197,6 +197,18 @@ describe("docs registry", () => {
       const source = await readFile(join(docsSiteRoot, doc.sourcePath.slice(1)), "utf8");
       assert.doesNotMatch(source, /zero build[^\n`]*--emit c/, `${doc.sourcePath} should not advertise removed backend builds`);
       assert.doesNotMatch(source, /--legacy-backend/, `${doc.sourcePath} should not advertise the removed backend flag`);
+    }
+  });
+
+  it("keeps public docs prose scannable", async () => {
+    for (const doc of docs) {
+      const source = await readFile(join(docsSiteRoot, doc.sourcePath.slice(1)), "utf8");
+      let inFence = false;
+      source.split("\n").forEach((line, index) => {
+        if (line.startsWith("```")) inFence = !inFence;
+        if (inFence || line.startsWith("|")) return;
+        assert.ok(line.length <= 240, `${doc.sourcePath}:${index + 1} has an overlong prose line`);
+      });
     }
   });
 

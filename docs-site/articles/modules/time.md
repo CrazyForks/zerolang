@@ -15,7 +15,7 @@ Runnable today:
 | `std.time.monotonic()` | `Duration` | Reads a monotonic target clock where available. |
 | `std.time.wallSeconds()` | `i64` | Reads target wall-clock seconds where available. |
 
-Specified but not complete:
+Current limits:
 
 - Monotonic instants.
 - Deadlines and request budgets.
@@ -45,4 +45,6 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-Time is an effect when it observes the outside world. Pure duration math can stay allocation-free and target-independent.
+Time is an effect when it observes the outside world.
+
+Pure duration math can stay allocation-free and target-independent.

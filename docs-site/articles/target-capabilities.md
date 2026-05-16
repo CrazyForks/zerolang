@@ -6,7 +6,14 @@ The current compiler has a small explicit target table. Inspect it with:
 zero targets
 ```
 
-The JSON includes `schemaVersion`, the current `host`, and each target's `hosted` flag, aliases, mapped C target, and capabilities.
+The JSON includes:
+
+- `schemaVersion`
+- current `host`
+- each target's `hosted` flag
+- aliases
+- mapped C target
+- capabilities
 
 ## Host Capabilities
 
@@ -23,7 +30,8 @@ Non-host targets currently expose the target-neutral subset:
 - `memory`
 - `stdio`
 
-This means hosted `std.fs` examples are valid on the host target, while memory-only packages can still build for target-neutral outputs.
+This means hosted `std.fs` examples are valid on the host target. Memory-only
+packages can still build for target-neutral outputs.
 
 ## Hosted File I/O
 
@@ -49,7 +57,7 @@ The diagnostic is `TAR002` with repair id `remove-hosted-fs-or-use-host-target`.
 zero build --target linux-musl-x64 examples/memory-package --out .zero/out/memory-package
 ```
 
-Use graph and size JSON to inspect the same facts agents see:
+Use graph and size JSON to inspect target facts:
 
 ```sh
 zero graph --json --target linux-musl-x64 examples/memory-package

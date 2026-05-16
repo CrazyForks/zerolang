@@ -8,7 +8,11 @@ pub fun main(world: World) -> Void raises {
 }
 ```
 
-`pub` exports the entry point. `fun` declares a function. `main` receives a `World` capability instead of using hidden globals. `-> Void` means the function does not return a useful value. `raises` means it can fail.
+`pub` exports the entry point. `fun` declares a function. `main` receives a
+`World` capability instead of using hidden globals.
+
+`-> Void` means the function does not return a useful value. `raises` means it
+can fail.
 
 Run:
 
@@ -60,14 +64,32 @@ pub fun main(world: World) -> Void raises {
 
 Function signatures list parameter names and types. Return types are explicit. Use `return` when you want to leave a function with a value.
 
-The native compiler understands explicit integer widths today: `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64`, `usize`, and `isize`. Integer literals support decimal, `0x` hex, `0b` binary, `0o` octal, `_` separators, and suffixes such as `_u8` or `_usize`. Literals are checked against their context, so `let byte: u8 = 255` works and `let byte: u8 = 256` fails at `zero check`. Existing integer values keep their exact type; use `as` when you intentionally convert between primitive integer types:
+The native compiler understands explicit integer widths today:
+
+```text
+i8 i16 i32 i64
+u8 u16 u32 u64
+usize isize
+```
+
+Integer literals support decimal, `0x` hex, `0b` binary, `0o` octal, `_`
+separators, and suffixes such as `_u8` or `_usize`.
+
+Literals are checked against their context. `let byte: u8 = 255` works.
+`let byte: u8 = 256` fails at `zero check`.
+
+Existing integer values keep their exact type. Use `as` when you intentionally
+convert between primitive integer types:
 
 ```zero
 let count: u32 = 0x12c_u32
 let byte: u8 = count as u8
 ```
 
-The current cast support is limited to integer-to-integer conversions. `f32` and `f64` are available for decimal float literals, with untyped float literals defaulting to `f64`:
+The current cast support is limited to integer-to-integer conversions.
+
+`f32` and `f64` are available for decimal float literals. Untyped float literals
+default to `f64`:
 
 ```zero
 let ratio: f64 = 1.0e-3
@@ -75,7 +97,10 @@ let small: f32 = 0.5
 let total = ratio + 2.0
 ```
 
-Floats do not implicitly mix with integers or with each other across widths. `char` is also available as a distinct byte-sized primitive for single quoted byte literals, but it does not cast to or from integers:
+Floats do not implicitly mix with integers or with each other across widths.
+
+`char` is also available as a distinct byte-sized primitive for single quoted
+byte literals. It does not cast to or from integers:
 
 ```zero
 let letter: char = 'A'
@@ -83,7 +108,8 @@ let newline: char = '\n'
 let same = letter == '\x41'
 ```
 
-`f16`, Unicode scalar literals, and casts for non-integer values are staged separately.
+`f16`, Unicode scalar literals, and casts for non-integer values are not part of
+the current public surface.
 
 ## Use Control Flow
 
@@ -116,9 +142,15 @@ for index in 0..4 {
 }
 ```
 
-Use `break` to leave the nearest loop and `continue` to skip to the next iteration. Conditions must be `Bool`, so compare values explicitly instead of relying on truthy integers.
+Use `break` to leave the nearest loop and `continue` to skip to the next
+iteration.
 
-Prefer direct conditions and explicit state. The checker rejects assignments to immutable bindings, so introduce `let mut` only when a loop or algorithm really mutates state.
+Conditions must be `Bool`, so compare values explicitly instead of relying on
+truthy integers.
+
+Prefer direct conditions and explicit state. The checker rejects assignments to
+immutable bindings, so introduce `let mut` only when a loop or algorithm really
+mutates state.
 
 ## Model Data With `shape`
 
@@ -227,7 +259,11 @@ pub fun main(world: World) -> Void raises {
 }
 ```
 
-The current native compiler supports early helpers from `std.mem`, `std.codec`, `std.parse`, and duration-focused `std.time`. Codec helpers now return their documented widths, such as `std.codec.readU16(...) -> u16`.
+The current native compiler supports early helpers from `std.mem`, `std.codec`,
+`std.parse`, and duration-focused `std.time`.
+
+Codec helpers now return their documented widths, such as
+`std.codec.readU16(...) -> u16`.
 
 CLI-oriented helpers are also available:
 
@@ -243,7 +279,11 @@ pub fun main(world: World) -> Void raises {
 }
 ```
 
-`std.args.get` returns `Maybe<String>` because the requested argument may not exist. The current `std.fs` helpers are minimal hosted path helpers; richer `Fs` and `File` capabilities are still staged.
+`std.args.get` returns `Maybe<String>` because the requested argument may not
+exist.
+
+The current `std.fs` helpers are hosted APIs. Use the standard library reference
+when you need explicit `Fs`, `File`, and `owned<File>` resource examples.
 
 ## Organize A Package
 
@@ -336,7 +376,11 @@ pub fun main(world: World) -> Void raises {
 }
 ```
 
-Use `defer` for cleanup that should happen when a scope exits, including exits through `return`, `break`, and `continue`. Live `owned<T>` locals are also cleaned up when `T` defines the canonical non-raising `fun drop(self: mutref<Self>) -> Void`; direct user calls such as `value.drop()` remain rejected so cleanup stays deterministic.
+Use `defer` for cleanup that should happen when a scope exits, including exits
+through `return`, `break`, and `continue`.
+
+Live `owned<T>` locals are also cleaned up when `T` defines the canonical non-raising `fun drop(self: mutref<Self>) -> Void`.
+Direct user calls such as `value.drop()` remain rejected so cleanup stays deterministic.
 
 ## Read Memory-Oriented Types
 
@@ -358,10 +402,18 @@ pub fun main(world: World) -> Void raises {
 
 Useful terms:
 
-- `Span<T>` is a read-only view over contiguous values, while `MutSpan<T>` is an explicit writable view over mutable fixed-array storage. The native compiler currently has runnable `Span<T>`/`MutSpan<T>` layouts, single-element `[N]T`, span, and byte-oriented `String` indexing, half-open range slices such as `start..end`, `start..`, `..end`, and `..`, runtime bounds traps for indexes and slices, mutable shape-field, fixed-array indexed, and `MutSpan<T>` indexed lvalues, and allocation-free helpers such as `std.mem.span`, generic `std.mem.len`, and same-element `std.mem.eqlBytes`.
+- `Span<T>` is a read-only view over contiguous values.
+- `MutSpan<T>` is an explicit writable view over mutable fixed-array storage.
+- Current runnable layouts include `Span<T>`, `MutSpan<T>`, and single-element `[N]T`.
+- Indexing supports spans, fixed arrays, and byte-oriented `String` values.
+- Slices are half-open: `start..end`, `start..`, `..end`, and `..`.
+- Bounds traps are emitted for indexes and slices.
+- Indexed lvalues work for mutable shape fields, fixed arrays, and `MutSpan<T>`.
+- Allocation-free helpers include `std.mem.span`, generic `std.mem.len`, and `std.mem.eqlBytes`.
 - `Maybe<T>` represents a value that may be absent.
 - `ref<T>` and `mutref<T>` make reference mutability explicit.
-- `Alloc` is an allocator capability; allocation/free APIs are still staged.
+- `Alloc` is an allocator capability. Current allocation helpers stay explicit
+  and limited to documented allocator-backed APIs.
 
 You do not need all of these for hello world, but you will see them in systems code and C interop.
 

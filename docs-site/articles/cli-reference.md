@@ -1,12 +1,135 @@
 ## CLI Reference
 
-`zero` is the product shell for checking, formatting, running, building, testing, inspecting, and repairing Zero projects.
+`zero` checks, formats, runs, tests, builds, inspects, and repairs Zero programs.
 
-Core commands:
+Most commands accept the same input forms:
+
+| Input | Meaning |
+| --- | --- |
+| `file.0` | A single Zero source file. |
+| `project/` | A package directory containing `zero.json`. |
+| `zero.json` | A package manifest. |
+
+## Daily Commands
+
+| Command | Use it for |
+| --- | --- |
+| `zero check <input>` | Parse, typecheck, and report diagnostics. |
+| `zero run <input>` | Build and run a host executable. |
+| `zero test <input>` | Run inline `test` blocks. |
+| `zero fmt <input>` | Print formatted source. Add `--check` in CI. |
+| `zero build <input>` | Emit an executable, object file, or WebAssembly module. |
+| `zero ship <input>` | Produce a release preview with checksums and metadata. |
+| `zero graph <input>` | Inspect modules, symbols, capabilities, and helper use. |
+| `zero size <input>` | Explain artifact size, retained helpers, and profile budgets. |
+| `zero doc <input>` | Emit public API documentation facts. |
+| `zero fix --plan --json <input>` | Ask for a typed repair plan. |
+| `zero doctor` | Check host and target readiness. |
+
+Copyable examples:
+
+```sh
+zero check examples/hello.0
+zero run examples/add.0
+zero test conformance/native/pass/test-blocks.0
+zero build --emit exe --target linux-musl-x64 examples/add.0 --out .zero/out/add
+zero build --emit wasm --target wasm32-wasi examples/direct-wasm-add.0 --out .zero/out/add.wasm
+zero graph --json examples/systems-package
+zero size --json examples/point.0
+zero ship --json --target linux-musl-x64 examples/hello.0 --out .zero/ship/hello
+zero doctor --json
+```
+
+## Run
+
+`zero run` builds a host executable with the direct backend, runs it, passes
+through program stdout/stderr, and exits with the program status.
+
+Pass program arguments after `--`:
+
+```sh
+zero run examples/cli-file.0 -- input.txt
+```
+
+## JSON Output
+
+Use `--json` when another tool will read the result. Text output is for people.
+
+| Command | Useful JSON fields |
+| --- | --- |
+| `zero check --json` | Diagnostics with code, span, expected/actual details, help, and repair metadata. |
+| `zero graph --json` | Modules, public symbols, capabilities, static facts, and helper use. |
+| `zero dev --json` | A watch plan for changed source, manifest, package-lock, and generated-binding inputs. |
+| `zero dev --json --trace` | Adds phase timing, cache hit/miss facts, diagnostics passthrough, and `interfaceFingerprints`. |
+| `zero time --json` | Compiler phase timing plus `interfaceFingerprints` and incremental invalidation facts. |
+| `zero build --json` | Artifact path, size, selected `toolchain`, target triple, linker flavor, and sysroot status. |
+| `zero size --json` | `profileSemantics`, `profileCatalog`, `profileBudget`, `sizeBreakdown`, `retentionReasons`, and `optimizationHints`. |
+| `zero ship --json` | A release preview with artifact names, hashes, a checksum file, debug-symbol metadata, size report, and SBOM placeholder. |
+| `zero doctor --json` | Host checks plus `targetToolchains`, the per-target readiness matrix. |
+
+`zero check --json` and `zero graph --json` also include `compileTime`.
+That object records bounded `meta` evaluation, sandbox denials, cache key
+inputs, typed reflection facts, and integer/Bool/enum static values.
+
+Build and ship JSON include `releaseTargetContract`. It records artifact kind,
+object format, direct linker flavor, target libc mode, sysroot requirements,
+emitter readiness, target capability facts, and the repeat-build hash policy.
+`zero ship --json` nests the same contract under
+`releasePreview.targetContract`.
+
+## Build Outputs
+
+| Emit mode | Command |
+| --- | --- |
+| Native executable | `zero build --emit exe --target linux-musl-x64 <input>` |
+| Native object | `zero build --emit obj --target linux-musl-x64 <input>` |
+| WebAssembly | `zero build --emit wasm --target wasm32-wasi <input>` |
+
+Removed backend flags report `BLD003`. Use direct emitters; the removed C
+backend is not a compatibility path.
+
+## Tests
+
+`zero test --json` is shaped for CI and editors. It reports:
+
+- discovery: `testDiscovery`, `fixtures`, `snapshotKey`
+- counts: `discoveredTests`, `selectedTests`, `passedTests`, `failedTests`
+- expected failures: `expectedFailures`, `unexpectedPasses`
+- execution: `targetFacts`, `results`, `durationMs`, `stdout`, `stderr`
+
+Expected-fail tests use `xfail:`, `expected fail:`, or `[xfail]` in the test
+name. A test marked this way must fail; an unexpected pass fails the command.
+
+## Skills
+
+`zero skills` serves bundled skill content for agents:
+
+```sh
+zero skills list
+zero skills get zero
+zero skills get zero --full
+zero skills path zero
+```
+
+Add `--json` for automation. Set `ZERO_SKILLS_DIR` to point the command at an
+alternate skill directory.
+
+## Language Server Smoke
+
+Run the editor smoke path with:
+
+```sh
+npm run zls -- --self-test
+```
+
+The smoke covers diagnostics, hover docs, completions, go-to definition,
+document symbols, and quick-fix code actions surfaced from `zero fix` for
+`TAR002`, `TYP009`, `ERR002`, `ERR003`, and `PUB001`.
+
+## Utility Commands
 
 ```sh
 zero --version [--json]
-zero skills [list|get|path] [--json]
 zero new cli|lib|package <path>
 zero doctor [--json]
 zero check [--json] [--target <target>] <input>
@@ -23,14 +146,10 @@ zero explain [--json] <diagnostic-code>
 zero fix --plan --json [--target <target>] <input>
 zero targets
 zero clean [--all]
+zero mem [--json] [--target <target>] <input>
+zero time --json [--target <target>] <input>
+zero routes --json <project>
+zero abi check|dump [--json] [--target <target>] <input>
+zero tokens --json <input>
+zero parse --json <input>
 ```
-
-`<input>` may be a `.0` source file, a package directory, or a `zero.json` manifest. JSON modes are stable enough for agents and tests. `zero check --json` and `zero graph --json` include `compileTime` for deterministic bounded `meta` evaluation, sandbox denials, cache key inputs, typed reflection facts, integer/Bool/enum static values, and limited typed builder metadata. `zero dev --json --trace` emits the current watch plan, source/manifest/package-lock/generated-binding inputs, affected checks/tests/examples, restart behavior for runnable CLI targets, interface fingerprints, cache hit/miss facts, phase timing, and diagnostics passthrough metadata. `zero time --json` reports the same `interfaceFingerprints` and `incrementalInvalidation` cache facts for editor and CI timing audits. `zero run` builds a host executable with the direct backend, runs it, passes through program stdout/stderr, and exits with the program status. Pass program arguments after `--`. `zero build --json` includes a `toolchain` object with the selected compiler, selection source, target triple, linker flavor, and sysroot status. Build and ship JSON also expose `releaseTargetContract`, which records the artifact kind, object format, direct linker flavor, target libc mode, sysroot requirement/status, emitter readiness, target capability facts, and repeat-build hash policy. `zero ship --json` produces a release preview with the binary, stripped binary copy, checksum file, deterministic archive manifest, debug-symbol metadata, size report, SBOM placeholder, artifact names, sizes, hashes, target facts, and the same `releaseTargetContract` nested under `releasePreview.targetContract`. Use `--emit wasm` for WebAssembly artifacts and `--emit obj` for native objects. Removed backend flags report `BLD003`. `zero doctor --json` includes checks for the host target, PATH health, target SDK/sysroot readiness, workspace writes, bundled targets, docs, examples, and a `targetToolchains` array with per-target readiness facts. `zero fix` is plan-only and does not apply edits.
-
-`zero skills` serves bundled skill content for agents. Use `zero skills list` to discover available skills, `zero skills get zero` to print the current Zero workflow, `zero skills get zero --full` to include references and templates, and `zero skills path zero` to print the local skill directory. `--json` returns `{ "success": true, "data": ... }` payloads for automation. Set `ZERO_SKILLS_DIR` to point the command at an alternate skill directory.
-
-`zero test --json` reports package and fixture discovery for CI and editor integrations. The payload includes `testDiscovery`, `fixtures`, `targetFacts`, `results`, `discoveredTests`, `selectedTests`, `passedTests`, `failedTests`, `expectedFailures`, `unexpectedPasses`, `durationMs`, `stdout`, and `stderr`. `fixtures.snapshotKey` identifies the test snapshot contract, and each result includes a source location plus a failure span when available. Expected-fail tests use `xfail:`, `expected fail:`, or `[xfail]` in the test name; an unexpected pass fails the command.
-
-Profile-aware build and size JSON include `profileSemantics`, `profileCatalog`, and `profileBudget` for `debug`, `fast`, `small`, and `tiny`. `zero size --json` also emits `sizeBreakdown`, `retentionReasons`, and `optimizationHints` so optimization agents can explain retained functions, sections, literals, stdlib helpers, imports, runtime shims, and debug metadata.
-
-`npm run zls -- --self-test` exercises the language-server smoke path: diagnostics, hover docs with target/capability/generated-binding facts, completions, go-to definition, document symbols, and quick-fix code actions surfaced from `zero fix` for `TAR002`, `TYP009`, `ERR002`, `ERR003`, and `PUB001`.

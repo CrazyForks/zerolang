@@ -32,4 +32,6 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-Zero keeps random sources explicit. Deterministic tests use `std.rand.seed`, while production entropy stays target-capability-gated.
+Zero keeps random sources explicit. Deterministic tests use `std.rand.seed`.
+
+Production entropy stays target-capability-gated.

@@ -29,4 +29,7 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-`std.proc` is host-only. Cross targets without process support must reject process helpers before code generation rather than compiling an inert shim.
+`std.proc` is host-only. Cross targets without process support must reject
+process helpers before code generation.
+
+They should not compile a placeholder process implementation.

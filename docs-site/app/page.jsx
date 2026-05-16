@@ -31,8 +31,8 @@ const PILLARS = [
 
 const FEATURES = [
   { title: "No mandatory GC or event loop", description: "The language keeps allocation, cleanup, and outside-world access visible in code." },
-  { title: "Cross-target experiments", description: "The compiler can check target-neutral code for multiple targets and emit direct artifacts for the documented subset." },
-  { title: "C boundary support", description: "Zero exposes C ABI exports and target-aware interop metadata as the low-level story matures." },
+  { title: "Cross-target checks", description: "The compiler can check target-neutral code for multiple targets and emit direct artifacts for the documented subset." },
+  { title: "C boundary support", description: "Zero exposes C ABI exports and target-aware interop metadata for low-level boundaries." },
   { title: "Capability-based I/O", description: "Functions declare what they touch. The compiler rejects unavailable capabilities at compile time, not runtime." },
   { title: "Built for agents", description: "Stable diagnostic codes, machine-readable docs, and fix plans make code easier for humans and agents to repair together." },
   { title: "One small toolchain", description: "Check, build, test, format, inspect, and document projects from one CLI." },
@@ -93,8 +93,7 @@ export default function HomePage() {
           <p className="mt-6 max-w-[38rem] text-[clamp(1rem,2vw,1.1875rem)] leading-[1.65] text-muted">
             Zero is a systems language designed so humans and AI agents can read,
             repair, inspect, and ship small native programs together. It keeps
-            effects explicit, memory predictable, and compiler output structured
-            while the language and toolchain mature.
+            effects explicit, memory predictable, and compiler output structured.
           </p>
           <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
             <ButtonLink href="/getting-started" variant="primary" size="lg">
@@ -149,7 +148,10 @@ export default function HomePage() {
 
         <section className="relative z-10 border-t border-border px-6 py-[clamp(5rem,12vh,8rem)] text-center">
           <h2 className="mb-3 text-[clamp(1.75rem,5vw,2.75rem)] font-bold leading-[1.1] tracking-[-0.04em]">Start with zero.</h2>
-          <p className="mx-auto mb-8 max-w-[32rem] text-[1.0625rem] leading-relaxed text-muted">Build the compiler locally, run an example, and try the agent-native workflow.</p>
+          <p className="mx-auto mb-8 max-w-[32rem] text-[1.0625rem] leading-relaxed text-muted">
+            Install the compiler, run an example, and try the agent-native
+            workflow.
+          </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <ButtonLink href="/getting-started" variant="primary" size="lg">
               Get started <ArrowRightIcon />

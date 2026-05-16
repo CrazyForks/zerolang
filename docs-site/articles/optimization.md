@@ -1,6 +1,8 @@
 ## Optimization And Size Profiles
 
-Zero profiles are product contracts, not hidden compiler moods. Build and size JSON expose the selected profile so CI and agents can explain why bytes were retained.
+Zero profiles are product contracts, not hidden compiler moods. Build and size
+JSON expose the selected profile so CI and agents can explain why bytes were
+retained.
 
 Common profile choices:
 
@@ -21,11 +23,21 @@ bin/zero size --json --profile tiny --target linux-musl-x64 examples/fixed-vec.0
 bin/zero mem --json examples/allocator-collections.0
 ```
 
-`zero build --json` includes `profileSemantics`, `profileCatalog`, and `profileBudget`. `profileSemantics` reports the canonical profile, `profileKey`, aliases, optimization goal, codegen and link strategy, overflow and bounds policy, panic policy, unwind policy, symbol policy, runtime metadata policy, and the same profile budget used by the size report.
+`zero build --json` includes:
 
-`zero size --json` includes the same profile fields plus `sizeBreakdown`, `retentionReasons`, and `optimizationHints`.
+- `profileSemantics`: canonical profile, `profileKey`, aliases, and optimization goal.
+- `profileCatalog`: the available profiles and aliases.
+- `profileBudget`: size limits and helper-budget policy for the selected profile.
 
-`zero mem --json` is the memory-budget companion. It includes `memoryBudgets`, `allocatorFacts`, `allocationInstrumentation`, and `collectionFacts` so agents can audit stack, static, heap, arena, fixed-buffer, collection capacity, allocation failure, cleanup, and no-global-allocator behavior without reading emitted artifact bytes.
+`zero size --json` adds `sizeBreakdown`, `retentionReasons`, and
+`optimizationHints`. Start there when an artifact is larger than expected.
+
+`zero mem --json` is the memory-budget companion. It includes:
+
+- `memoryBudgets`: stack, static, heap, arena, and fixed-buffer totals.
+- `allocatorFacts`: which allocator APIs were used.
+- `allocationInstrumentation`: allocation failure and cleanup facts.
+- `collectionFacts`: fixed-capacity collection usage and no-global-allocator checks.
 
 ## Size Breakdown
 
@@ -39,16 +51,31 @@ bin/zero mem --json examples/allocator-collections.0
 - `runtimeShims`: target/runtime shims retained by capabilities or bounds checks.
 - `debugMetadata`: bytes and policy for profile-retained metadata.
 
-`retentionReasons` answers why each function, helper, literal, or debug metadata block stayed in the artifact. `optimizationHints` points at the first useful action, such as switching away from `debug`, removing hosted filesystem helpers from target-neutral code, or inspecting `topLargestEmittedHelpers`.
+Use `retentionReasons` to answer why a function, helper, literal, or debug
+metadata block stayed in the artifact. Use `optimizationHints` for the next
+action, such as switching away from `debug`, removing hosted filesystem helpers
+from target-neutral code, or inspecting `topLargestEmittedHelpers`.
 
 ## Benchmark Trends
 
-The benchmark gate writes both a full one-run report and a compact trend artifact:
+The benchmark gate writes both a full one-run report and a compact trend
+artifact:
 
 ```sh
 ZERO_BENCH_RUNS=1 npm run bench
 ```
 
-The full smoke report is `.zero/bench/latest.json`. The trend summary is `.zero/bench/trends/latest.json`, with a Markdown companion at `.zero/bench/trends/summary.md`. The trend summary tracks artifact size, compressed size, build time, startup time, operation timings, and peak RSS when available.
+The benchmark outputs are:
 
-Use benchmark trends before trusting profile regressions. Profile builds and size reports for `debug`, `fast`, `small`, and `tiny` should stay deterministic across repeated runs.
+| File | Purpose |
+| --- | --- |
+| `.zero/bench/latest.json` | Full one-run smoke report. |
+| `.zero/bench/trends/latest.json` | Compact trend summary. |
+| `.zero/bench/trends/summary.md` | Human-readable companion report. |
+
+The trend summary tracks artifact size, compressed size, build time, startup
+time, operation timings, and peak RSS when available.
+
+Use benchmark trends before trusting profile regressions. Profile builds and
+size reports for `debug`, `fast`, `small`, and `tiny` should stay deterministic
+across repeated runs.

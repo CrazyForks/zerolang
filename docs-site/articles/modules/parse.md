@@ -14,7 +14,7 @@ Runnable today:
 | `std.parse.parseU16(value)` | `Maybe<u16>` | Parses a full decimal unsigned 16-bit value. |
 | `std.parse.parseU32(value)` | `Maybe<u32>` | Parses a full decimal unsigned 32-bit value. |
 
-Specified but not complete:
+Current limits:
 
 - Source position and span types.
 - Rich cursor objects beyond the current allocation-free scanner primitives.
@@ -38,4 +38,8 @@ pub fun main(world: World) -> Void raises {
 
 ## Design Notes
 
-The module stays byte-oriented because it supports compiler, config, and codec work without requiring Unicode scalar handling or heap allocation. Integer parsers return `Maybe<T>` instead of allocating diagnostics; callers can layer richer errors on top.
+The module stays byte-oriented so compiler, config, and codec code can parse
+without Unicode scalar handling or heap allocation.
+
+Integer parsers return `Maybe<T>` instead of allocating diagnostics. Callers can
+layer richer errors on top.

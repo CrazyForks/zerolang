@@ -1,6 +1,7 @@
 ## Package And Manifest Reference
 
-`zero.json` is the package manifest. The current compiler supports local packages and executable targets.
+`zero.json` is the package manifest. The current compiler supports local
+packages and executable targets.
 
 ```json
 {
@@ -17,11 +18,26 @@
 }
 ```
 
-Package-local imports resolve from `src/`. `src/foo.0` defines module `foo`, and `src/foo/mod.0` defines directory module `foo`. Import cycles and duplicate public exports are diagnosed with stable import diagnostics.
+Package-local imports resolve from `src/`:
 
-Local path dependencies are accepted by the resolver, and exact versioned registry references are recorded as metadata without remote fetches. `zero graph --json <package>` reports `package.dependencies`, `package.lockfile`, `package.resolver`, and `packageCache.cacheKeyInputs`.
+- `src/foo.0` defines module `foo`
+- `src/foo/mod.0` defines directory module `foo`
 
-The resolver writes a deterministic dependency fingerprint file under `.zero/package-locks/*.lock.json`. Cache keys include the compiler version, target, package version, manifest hash, dependency graph hash, and lockfile hash.
+Import cycles and duplicate public exports are diagnosed before build output.
+
+Local path dependencies are accepted by the resolver. Exact versioned registry
+references are recorded as metadata without remote fetches.
+
+`zero graph --json <package>` reports:
+
+- `package.dependencies`
+- `package.lockfile`
+- `package.resolver`
+- `packageCache.cacheKeyInputs`
+
+The resolver writes a deterministic dependency fingerprint file under
+`.zero/package-locks/*.lock.json`. Cache keys include the compiler version,
+target, package version, manifest hash, dependency graph hash, and lockfile hash.
 
 Package graph failures use stable diagnostics:
 
@@ -30,4 +46,6 @@ Package graph failures use stable diagnostics:
 - `PKG003`: the graph resolves one package name to conflicting versions
 - `PKG004`: the selected target is not listed in a dependency's target metadata
 
-`zero doc --json <package>` exposes registry-oriented publication metadata. Public package APIs should carry docs/examples metadata before publication; the current compiler reports this as `publicationGate`.
+`zero doc --json <package>` exposes registry-oriented publication metadata.
+Public package APIs should carry docs/examples metadata before publication. The
+current compiler reports this as `publicationGate`.
