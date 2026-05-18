@@ -465,22 +465,33 @@ assert.equal(agentSurfaceMalformedUseBody.diagnostics.length, 0);
 const agentSurfaceOwnedDropCheck = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0"]);
 const agentSurfaceOwnedDropCheckBody = JSON.parse(agentSurfaceOwnedDropCheck.stdout);
 assert.equal(agentSurfaceOwnedDropCheckBody.ok, true);
-const agentSurfaceOwnedDropBuild = await execFileAsync(zero, [
-  "build",
-  "--json",
-  "--emit",
-  "obj",
-  "--target",
-  "win32-x64.exe",
-  "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0",
-  "--out",
-  `${outDir}/agent-surface-owned-drop.obj`,
-]).catch((error) => error);
-assert.notEqual(agentSurfaceOwnedDropBuild.code, 0);
-const agentSurfaceOwnedDropBuildBody = JSON.parse(agentSurfaceOwnedDropBuild.stdout);
-assert.equal(agentSurfaceOwnedDropBuildBody.diagnostics[0].code, "CGEN004");
-assert.match(agentSurfaceOwnedDropBuildBody.diagnostics[0].expected, /COFF/);
-assert.equal(agentSurfaceOwnedDropBuildBody.diagnostics[0].actual, "owned<Tracked>");
+
+async function assertAgentSurfaceOwnedDropUnsupported(target, emit, outName, expectedPattern, nativeTarget = true) {
+  const build = await execFileAsync(zero, [
+    "build",
+    "--json",
+    "--emit",
+    emit,
+    "--target",
+    target,
+    "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0",
+    "--out",
+    `${outDir}/${outName}`,
+  ]).catch((error) => error);
+  assert.notEqual(build.code, 0);
+  const body = JSON.parse(build.stdout);
+  const diagnostic = body.diagnostics[0];
+  assert.equal(diagnostic.code, "CGEN004");
+  assert.match(diagnostic.expected, expectedPattern);
+  assert.equal(diagnostic.actual, "owned<Tracked>");
+  if (nativeTarget) assert(!/wasm/i.test(diagnostic.message));
+  else assert.match(diagnostic.expected, /wasm/i);
+}
+
+await assertAgentSurfaceOwnedDropUnsupported("linux-musl-x64", "obj", "agent-surface-owned-drop-elf.o", /ELF64/);
+await assertAgentSurfaceOwnedDropUnsupported("darwin-arm64", "obj", "agent-surface-owned-drop-macho.o", /Mach-O/);
+await assertAgentSurfaceOwnedDropUnsupported("win32-x64.exe", "obj", "agent-surface-owned-drop-coff.obj", /COFF/);
+await assertAgentSurfaceOwnedDropUnsupported("wasm32-web", "wasm", "agent-surface-owned-drop.wasm", /wasm/, false);
 
 const compileTimeJson = await execFileAsync(zero, ["check", "--json", "conformance/native/pass/compile-time-v1.0"]);
 const compileTimeBody = JSON.parse(compileTimeJson.stdout);

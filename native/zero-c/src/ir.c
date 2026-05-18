@@ -784,7 +784,7 @@ static bool ir_add_readonly_data(IrProgram *ir, const unsigned char *bytes, unsi
 
   size_t offset = IR_READONLY_DATA_BASE + ir->readonly_data_bytes;
   if (offset + len >= IR_WASM_PAGE_BYTES) {
-    ir_mark_unsupported(ir, "direct wasm readonly data exceeds the initial memory page", line, column, "string/data segment");
+    ir_mark_unsupported(ir, "direct backend readonly data exceeds the initial memory page", line, column, "string/data segment");
     return false;
   }
   if (ir->data_segment_len + 1 > ir->data_segment_cap) {
@@ -919,7 +919,7 @@ static bool ir_lower_array_literal_byte_view(IrProgram *ir, const Expr *expr, Ir
 
 static bool ir_lower_byte_view(const Program *program, IrProgram *ir, const IrFunction *fun, const Expr *expr, IrValue **out) {
   if (!expr) {
-    ir_mark_unsupported(ir, "direct wasm byte view is missing", 1, 1, "missing expression");
+    ir_mark_unsupported(ir, "direct backend byte view is missing", 1, 1, "missing expression");
     return false;
   }
   if (expr->kind == EXPR_STRING) {
@@ -990,14 +990,14 @@ static bool ir_lower_byte_view(const Program *program, IrProgram *ir, const IrFu
       return true;
     }
     if (!local || local->type != IR_TYPE_BYTE_VIEW) {
-      ir_mark_unsupported(ir, "direct wasm byte view identifier is not a byte-view local", expr->line, expr->column, expr->text);
+      ir_mark_unsupported(ir, "direct backend byte view identifier is not a byte-view local", expr->line, expr->column, expr->text);
       return false;
     }
   }
   if (expr->kind == EXPR_MEMBER && expr->left && expr->left->kind == EXPR_IDENT && strcmp(expr->text ? expr->text : "", "value") == 0) {
     const IrLocal *local = ir_function_find_local(fun, expr->left->text);
     if (!local || local->type != IR_TYPE_MAYBE_BYTE_VIEW) {
-      ir_mark_unsupported(ir, "direct wasm maybe byte-view value requires a Maybe byte-view local", expr->line, expr->column, expr->left->text);
+      ir_mark_unsupported(ir, "direct backend maybe byte-view value requires a Maybe byte-view local", expr->line, expr->column, expr->left->text);
       return false;
     }
     IrValue *value = ir_new_value(ir, IR_VALUE_MAYBE_VALUE, IR_TYPE_BYTE_VIEW, expr->line, expr->column);
@@ -1007,7 +1007,7 @@ static bool ir_lower_byte_view(const Program *program, IrProgram *ir, const IrFu
   }
   if (expr->kind == EXPR_SLICE) {
     if (!ir_expr_is_byte_view_source(expr->left)) {
-      ir_mark_unsupported(ir, "direct wasm slicing currently supports only string literal byte views", expr->line, expr->column, "non-string slice base");
+      ir_mark_unsupported(ir, "direct backend slicing currently supports only string literal byte views", expr->line, expr->column, "non-string slice base");
       return false;
     }
     IrValue *base = NULL;
@@ -1029,7 +1029,7 @@ static bool ir_lower_byte_view(const Program *program, IrProgram *ir, const IrFu
       ir_free_value(base);
       ir_free_value(start);
       ir_free_value(end);
-      ir_mark_unsupported(ir, "direct wasm slice bounds must be integer values", expr->line, expr->column, "non-integer slice bound");
+      ir_mark_unsupported(ir, "direct backend slice bounds must be integer values", expr->line, expr->column, "non-integer slice bound");
       return false;
     }
     IrValue *value = ir_new_value(ir, IR_VALUE_BYTE_SLICE, IR_TYPE_BYTE_VIEW, expr->line, expr->column);
@@ -1039,7 +1039,7 @@ static bool ir_lower_byte_view(const Program *program, IrProgram *ir, const IrFu
     *out = value;
     return true;
   }
-  ir_mark_unsupported(ir, "direct wasm byte views currently support string literals and slices", expr->line, expr->column, "unsupported byte view source");
+  ir_mark_unsupported(ir, "direct backend byte views currently support string literals and slices", expr->line, expr->column, "unsupported byte view source");
   return false;
 }
 
@@ -1131,7 +1131,7 @@ static char *ir_expr_callee_name(const Expr *expr) {
 
 static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunction *fun, const Expr *expr, IrValue **out) {
   if (!expr) {
-    ir_mark_unsupported(ir, "direct wasm expression is missing", 1, 1, "missing expression");
+    ir_mark_unsupported(ir, "direct backend expression is missing", 1, 1, "missing expression");
     return false;
   }
   switch (expr->kind) {
@@ -1146,7 +1146,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       unsigned long long parsed = 0;
       if (!ir_parse_integer_literal(expr->text ? expr->text : "0", &parsed) || parsed > 255) {
         ir_free_value(value);
-        ir_mark_unsupported(ir, "direct wasm character literal is malformed", expr->line, expr->column, expr->text ? expr->text : "missing char");
+        ir_mark_unsupported(ir, "direct backend character literal is malformed", expr->line, expr->column, expr->text ? expr->text : "missing char");
         return false;
       }
       value->int_value = parsed;
@@ -1169,12 +1169,12 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
     case EXPR_NUMBER: {
       IrTypeKind type = ir_type_kind(expr->resolved_type);
       if (!ir_type_is_value(type)) {
-        ir_mark_unsupported(ir, "direct wasm numeric expression type is unsupported", expr->line, expr->column, expr->resolved_type);
+        ir_mark_unsupported(ir, "direct backend numeric expression type is unsupported", expr->line, expr->column, expr->resolved_type);
         return false;
       }
       unsigned long long parsed = 0;
       if (!ir_parse_integer_literal(expr->text, &parsed)) {
-        ir_mark_unsupported(ir, "direct wasm integer literal is malformed", expr->line, expr->column, expr->text);
+        ir_mark_unsupported(ir, "direct backend integer literal is malformed", expr->line, expr->column, expr->text);
         return false;
       }
       IrValue *value = ir_new_value(ir, IR_VALUE_INT, type, expr->line, expr->column);
@@ -1185,7 +1185,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
     case EXPR_IDENT: {
       const IrLocal *local = ir_function_find_local(fun, expr->text);
       if (!local) {
-        ir_mark_unsupported(ir, "direct wasm identifier is not a local", expr->line, expr->column, expr->text);
+        ir_mark_unsupported(ir, "direct backend identifier is not a local", expr->line, expr->column, expr->text);
         return false;
       }
       if (local->type == IR_TYPE_BYTE_VIEW) return ir_lower_byte_view(program, ir, fun, expr, out);
@@ -1243,7 +1243,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         }
       }
       if (ir_expr_is_byte_view_source(expr)) return ir_lower_byte_view(program, ir, fun, expr, out);
-      ir_mark_unsupported(ir, "direct wasm member access supports Maybe<MutSpan<u8>> .has and .value", expr->line, expr->column, expr->text);
+      ir_mark_unsupported(ir, "direct backend member access supports Maybe<MutSpan<u8>> .has and .value", expr->line, expr->column, expr->text);
       return false;
     }
     case EXPR_STRING:
@@ -1458,7 +1458,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         const IrLocal *alloc = ir_function_find_local(fun, expr->args.items[0]->text);
         if (!alloc || alloc->type != IR_TYPE_ALLOC || !alloc->is_mutable) {
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.allocBytes expects a mutable FixedBufAlloc local", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable allocator");
+          ir_mark_unsupported(ir, "direct backend std.mem.allocBytes expects a mutable FixedBufAlloc local", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable allocator");
           return false;
         }
         IrValue *len = NULL;
@@ -1469,7 +1469,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         if (!ir_type_is_value(len->type)) {
           ir_free_value(len);
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.allocBytes length must be an integer value", expr->args.items[1]->line, expr->args.items[1]->column, "non-integer length");
+          ir_mark_unsupported(ir, "direct backend std.mem.allocBytes length must be an integer value", expr->args.items[1]->line, expr->args.items[1]->column, "non-integer length");
           return false;
         }
         IrValue *value = ir_new_value(ir, IR_VALUE_ALLOC_BYTES, IR_TYPE_MAYBE_BYTE_VIEW, expr->line, expr->column);
@@ -2259,7 +2259,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         const IrLocal *vec = ir_function_find_local(fun, expr->args.items[0]->left->text);
         if (!vec || vec->type != IR_TYPE_VEC || !vec->is_mutable) {
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.vecPush expects a mutable Vec local", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable Vec");
+          ir_mark_unsupported(ir, "direct backend std.mem.vecPush expects a mutable Vec local", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable Vec");
           return false;
         }
         IrValue *item = NULL;
@@ -2270,7 +2270,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         if (!item || item->type != IR_TYPE_U8) {
           ir_free_value(item);
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.vecPush currently supports only u8 values", expr->args.items[1]->line, expr->args.items[1]->column, "non-u8 value");
+          ir_mark_unsupported(ir, "direct backend std.mem.vecPush currently supports only u8 values", expr->args.items[1]->line, expr->args.items[1]->column, "non-u8 value");
           return false;
         }
         IrValue *value = ir_new_value(ir, IR_VALUE_VEC_PUSH, IR_TYPE_BOOL, expr->line, expr->column);
@@ -2304,7 +2304,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
           ir_expr_is_byte_view_source(expr->args.items[1])) {
         if (!ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.copy expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
+          ir_mark_unsupported(ir, "direct backend std.mem.copy expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
           return false;
         }
         IrValue *dst = NULL;
@@ -2328,7 +2328,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
           expr->args.items[0]) {
         if (!ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.fill expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
+          ir_mark_unsupported(ir, "direct backend std.mem.fill expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
           return false;
         }
         IrValue *dst = NULL;
@@ -2344,7 +2344,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
           ir_free_value(dst);
           ir_free_value(fill);
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.fill value must be u8", expr->args.items[1]->line, expr->args.items[1]->column, "non-u8 fill value");
+          ir_mark_unsupported(ir, "direct backend std.mem.fill value must be u8", expr->args.items[1]->line, expr->args.items[1]->column, "non-u8 fill value");
           return false;
         }
         IrValue *value = ir_new_value(ir, IR_VALUE_BYTE_FILL, IR_TYPE_USIZE, expr->line, expr->column);
@@ -2364,7 +2364,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         if (!ir_type_is_value(ptr->type)) {
           ir_free_value(ptr);
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.peekByte pointer must be an integer value", expr->args.items[0]->line, expr->args.items[0]->column, "non-integer pointer");
+          ir_mark_unsupported(ir, "direct backend std.mem.peekByte pointer must be an integer value", expr->args.items[0]->line, expr->args.items[0]->column, "non-integer pointer");
           return false;
         }
         IrValue *value = ir_new_value(ir, IR_VALUE_MEMORY_PEEK_U8, IR_TYPE_U8, expr->line, expr->column);
@@ -2388,14 +2388,14 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
           ir_free_value(ptr);
           ir_free_value(byte);
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.pokeByte pointer must be an integer value", expr->args.items[0]->line, expr->args.items[0]->column, "non-integer pointer");
+          ir_mark_unsupported(ir, "direct backend std.mem.pokeByte pointer must be an integer value", expr->args.items[0]->line, expr->args.items[0]->column, "non-integer pointer");
           return false;
         }
         if (byte->type != IR_TYPE_U8) {
           ir_free_value(ptr);
           ir_free_value(byte);
           free(callee_name);
-          ir_mark_unsupported(ir, "direct wasm std.mem.pokeByte value must be u8", expr->args.items[1]->line, expr->args.items[1]->column, "non-u8 value");
+          ir_mark_unsupported(ir, "direct backend std.mem.pokeByte value must be u8", expr->args.items[1]->line, expr->args.items[1]->column, "non-u8 value");
           return false;
         }
         IrValue *value = ir_new_value(ir, IR_VALUE_MEMORY_POKE_U8, IR_TYPE_BOOL, expr->line, expr->column);
@@ -2620,12 +2620,12 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         return true;
       }
       if (!ir_binary_op(expr->text, &op)) {
-        ir_mark_unsupported(ir, "direct wasm binary operator is unsupported", expr->line, expr->column, expr->text);
+        ir_mark_unsupported(ir, "direct backend binary operator is unsupported", expr->line, expr->column, expr->text);
         return false;
       }
       IrTypeKind type = ir_type_kind(expr->resolved_type);
       if (!(type == IR_TYPE_BOOL || ir_type_is_value(type))) {
-        ir_mark_unsupported(ir, "direct wasm binary expression type is unsupported", expr->line, expr->column, expr->resolved_type);
+        ir_mark_unsupported(ir, "direct backend binary expression type is unsupported", expr->line, expr->column, expr->resolved_type);
         return false;
       }
       IrValue *left = NULL;
@@ -2643,7 +2643,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       return true;
     }
     default:
-      ir_mark_unsupported(ir, "direct wasm expression kind is unsupported", expr->line, expr->column, "unsupported expression");
+      ir_mark_unsupported(ir, "direct backend expression kind is unsupported", expr->line, expr->column, "unsupported expression");
       return false;
   }
 }
@@ -2983,7 +2983,7 @@ static bool ir_lower_stmt_to_vec(const Program *program, IrProgram *ir, IrFuncti
     IrValue *value = NULL;
     if (mir_fun->return_type == IR_TYPE_VOID) {
       if (stmt->expr) {
-        ir_mark_unsupported(ir, "direct wasm void function cannot return a value", stmt->line, stmt->column, mir_fun->name);
+        ir_mark_unsupported(ir, "direct backend void function cannot return a value", stmt->line, stmt->column, mir_fun->name);
         return false;
       }
     } else if (!stmt->expr && mir_fun->return_type == IR_TYPE_I32) {
@@ -3082,7 +3082,7 @@ static bool ir_lower_stmt_to_vec(const Program *program, IrProgram *ir, IrFuncti
   if (stmt->kind == STMT_MATCH) {
     return ir_lower_enum_match(program, ir, mir_fun, stmt, out_items, out_len, out_cap, saw_return);
   }
-  ir_mark_unsupported(ir, "direct wasm statement kind is unsupported", stmt->line, stmt->column, mir_fun->name);
+  ir_mark_unsupported(ir, "direct backend statement kind is unsupported", stmt->line, stmt->column, mir_fun->name);
   return false;
 }
 
@@ -3127,7 +3127,7 @@ static bool ir_collect_function_locals(const Program *program, IrProgram *ir, Ir
     if (hosted_world_main && i == 0 && strcmp(param->type ? param->type : "", "World") == 0) continue;
     IrTypeKind type = ir_type_kind(param->type);
     if (!ir_type_is_direct_abi(type)) {
-      ir_mark_unsupported(ir, "direct wasm parameter type is unsupported", param->line, param->column, param->type);
+      ir_mark_unsupported(ir, "direct backend parameter type is unsupported", param->line, param->column, param->type);
       return false;
     }
     ir_function_push_local(ir, mir_fun, param->name, type, true, false, false, NULL, IR_TYPE_UNSUPPORTED, 0, 0, 0, false, param->line, param->column);
@@ -3176,7 +3176,7 @@ static bool ir_collect_stmt_locals(const Program *program, IrProgram *ir, IrFunc
         continue;
       }
       if (!ir_type_is_direct_local(type)) {
-        ir_mark_unsupported(ir, "direct wasm local type is unsupported", stmt->line, stmt->column, stmt_type ? stmt_type : "inferred unknown");
+        ir_mark_unsupported(ir, "direct backend local type is unsupported", stmt->line, stmt->column, stmt_type ? stmt_type : "inferred unknown");
         return false;
       }
       bool mutable_byte_view = stmt_type && strcmp(stmt_type, "MutSpan<u8>") == 0;
@@ -3192,17 +3192,17 @@ static bool ir_collect_stmt_locals(const Program *program, IrProgram *ir, IrFunc
 
 static bool ir_lower_function_body(const Program *program, IrProgram *ir, IrFunction *mir_fun, const Function *source) {
   if (source->type_params.len > 0 || source->is_test) {
-    ir_mark_unsupported(ir, "direct wasm MVP does not support generics or tests", source->line, source->column, source->name);
+    ir_mark_unsupported(ir, "direct backend MVP does not support generics or tests", source->line, source->column, source->name);
     return false;
   }
   bool hosted_world_main = ir_is_hosted_world_main(source);
   IrTypeKind return_type = hosted_world_main ? IR_TYPE_I32 : ir_type_kind(source->return_type);
   if (!hosted_world_main && source->raises && !ir_type_is_direct_fallible_value(return_type)) {
-    ir_mark_unsupported(ir, "direct wasm fallible return type is unsupported", source->line, source->column, source->return_type);
+    ir_mark_unsupported(ir, "direct backend fallible return type is unsupported", source->line, source->column, source->return_type);
     return false;
   }
   if (!hosted_world_main && !source->raises && return_type != IR_TYPE_VOID && !ir_type_is_direct_abi(return_type)) {
-    ir_mark_unsupported(ir, "direct wasm return type is unsupported", source->line, source->column, source->return_type);
+    ir_mark_unsupported(ir, "direct backend return type is unsupported", source->line, source->column, source->return_type);
     return false;
   }
   if (!ir_collect_function_locals(program, ir, mir_fun, source)) return false;
@@ -3220,7 +3220,7 @@ static bool ir_lower_function_body(const Program *program, IrProgram *ir, IrFunc
     saw_return = true;
   }
   if (return_type != IR_TYPE_VOID && !saw_return) {
-    ir_mark_unsupported(ir, "direct wasm function must return a value", source->line, source->column, source->name);
+    ir_mark_unsupported(ir, "direct backend function must return a value", source->line, source->column, source->name);
     return false;
   }
   return true;
@@ -3349,7 +3349,7 @@ static void ir_lower_direct_backend_subset(IrProgram *ir, const Program *program
   ir->mir_bytes = sizeof(IrProgram);
   if (program->choices.len > 0 || program->interfaces.len > 0 || program->aliases.len > 0 ||
       program->consts.len > 0) {
-    ir_mark_unsupported(ir, "direct wasm MVP does not support declarations other than functions", 1, 1, "unsupported top-level declaration");
+    ir_mark_unsupported(ir, "direct backend MVP does not support declarations other than functions", 1, 1, "unsupported top-level declaration");
     return;
   }
   FunctionVec direct_functions = {0};
