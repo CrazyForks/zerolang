@@ -407,8 +407,8 @@ static void append_source_without_imports(SourceInput *input, ZBuf *buf, const c
       start++;
       len--;
     }
-    bool is_import = (len >= 4 && strncmp(start, "use ", 4) == 0) || (len >= 7 && strncmp(start, "import ", 7) == 0);
-    if (!is_import) {
+    bool is_legacy_import = len >= 7 && strncmp(start, "import ", 7) == 0;
+    if (!is_legacy_import) {
       zbuf_appendf(buf, "%.*s\n", (int)(end ? (size_t)(end - line) : strlen(line)), line);
       source_input_push_source_line(input, path, original_line);
     }

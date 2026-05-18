@@ -8257,6 +8257,83 @@ static size_t source_line_count(const char *source) {
   return lines;
 }
 
+static const char *source_path_for_parser_line(const SourceInput *input, int parser_line) {
+  if (!input || parser_line <= 0) return NULL;
+  size_t index = (size_t)parser_line - 1;
+  if (index >= input->source_line_count) return NULL;
+  return input->source_line_paths[index];
+}
+
+static int source_original_line_for_parser_line(const SourceInput *input, int parser_line) {
+  if (!input || parser_line <= 0) return parser_line > 0 ? parser_line : 1;
+  size_t index = (size_t)parser_line - 1;
+  if (index >= input->source_line_count) return parser_line;
+  return input->source_line_numbers[index] > 0 ? input->source_line_numbers[index] : parser_line;
+}
+
+static const char *module_name_for_source_path(const SourceInput *input, const char *path) {
+  if (!input || !path) return (input && input->module_count == 1) ? input->module_names[0] : "main";
+  for (size_t i = 0; i < input->module_count; i++) {
+    if (strcmp(input->module_paths[i], path) == 0) return input->module_names[i];
+  }
+  return input->module_count == 1 ? input->module_names[0] : "main";
+}
+
+static bool import_module_is_stdlib(const char *module) {
+  return module && strncmp(module, "std.", 4) == 0;
+}
+
+static const char *resolved_path_for_import(const SourceInput *input, const char *from, const char *to) {
+  if (!input || !from || !to) return NULL;
+  for (size_t i = 0; i < input->import_edge_count; i++) {
+    if (strcmp(input->import_from[i], from) == 0 && strcmp(input->import_to[i], to) == 0) {
+      return input->import_paths[i];
+    }
+  }
+  return NULL;
+}
+
+static int use_import_end_column(const UseImport *item) {
+  size_t end = (size_t)(item->column > 0 ? item->column : 1) + strlen("use ") + strlen(item->module ? item->module : "");
+  if (item->alias && item->alias[0]) end += strlen(" as ") + strlen(item->alias);
+  return (int)end;
+}
+
+static void append_use_imports_json(ZBuf *buf, const SourceInput *input, const Program *program) {
+  zbuf_append(buf, "[");
+  for (size_t i = 0; program && i < program->use_imports.len; i++) {
+    if (i > 0) zbuf_append(buf, ", ");
+    UseImport *item = &program->use_imports.items[i];
+    const char *path = source_path_for_parser_line(input, item->line);
+    const char *from = module_name_for_source_path(input, path);
+    int line = source_original_line_for_parser_line(input, item->line);
+    const char *kind = import_module_is_stdlib(item->module) ? "stdlib" : "package-local";
+    const char *resolved_path = import_module_is_stdlib(item->module) ? NULL : resolved_path_for_import(input, from, item->module);
+    zbuf_append(buf, "{\"from\":");
+    append_json_string(buf, from);
+    zbuf_append(buf, ",\"to\":");
+    append_json_string(buf, item->module);
+    zbuf_append(buf, ",\"alias\":");
+    append_json_string_or_null(buf, item->alias);
+    zbuf_append(buf, ",\"kind\":");
+    append_json_string(buf, kind);
+    zbuf_append(buf, ",\"path\":");
+    append_json_string(buf, path ? path : "");
+    zbuf_appendf(buf, ",\"line\":%d,\"column\":%d", line, item->column);
+    zbuf_append(buf, ",\"sourceRange\":{\"path\":");
+    append_json_string(buf, path ? path : "");
+    zbuf_appendf(buf, ",\"start\":{\"line\":%d,\"column\":%d},\"end\":{\"line\":%d,\"column\":%d},\"columnUnit\":\"utf8-byte\"}",
+                 line,
+                 item->column,
+                 line,
+                 use_import_end_column(item));
+    zbuf_append(buf, ",\"resolvedPath\":");
+    append_json_string_or_null(buf, resolved_path);
+    zbuf_append(buf, "}");
+  }
+  zbuf_append(buf, "]");
+}
+
 static void append_graph_json(ZBuf *buf, const SourceInput *input, const Program *program, const ZTargetInfo *target) {
   CapabilitySummary caps = program_capabilities(program);
   size_t public_count = 0;
@@ -8342,7 +8419,9 @@ static void append_graph_json(ZBuf *buf, const SourceInput *input, const Program
     if (i > 0) zbuf_append(buf, ", ");
     append_json_string(buf, input->imports[i]);
   }
-  zbuf_append(buf, "],\n  \"modules\": [");
+  zbuf_append(buf, "],\n  \"useImports\": ");
+  append_use_imports_json(buf, input, program);
+  zbuf_append(buf, ",\n  \"modules\": [");
   for (size_t i = 0; i < input->module_count; i++) {
     if (i > 0) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"name\":");

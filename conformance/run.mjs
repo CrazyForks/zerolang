@@ -499,10 +499,13 @@ const agentSurfaceUnresolvedImportBody = JSON.parse(agentSurfaceUnresolvedImport
 assert.equal(agentSurfaceUnresolvedImportBody.diagnostics[0].code, "IMP001");
 assert.match(agentSurfaceUnresolvedImportBody.diagnostics[0].expected, /src\/missing\.utility\.0/);
 
-const agentSurfaceMalformedUse = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/malformed-use-current.0"]);
+const agentSurfaceMalformedUse = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/malformed-use-current.0"]).catch((error) => error);
+assert.notEqual(agentSurfaceMalformedUse.code, 0);
 const agentSurfaceMalformedUseBody = JSON.parse(agentSurfaceMalformedUse.stdout);
-assert.equal(agentSurfaceMalformedUseBody.ok, true);
-assert.equal(agentSurfaceMalformedUseBody.diagnostics.length, 0);
+assert.equal(agentSurfaceMalformedUseBody.diagnostics[0].code, "PAR100");
+assert.match(agentSurfaceMalformedUseBody.diagnostics[0].message, /expected import module segment/);
+assert.equal(agentSurfaceMalformedUseBody.diagnostics[0].line, 1);
+assert.equal(agentSurfaceMalformedUseBody.diagnostics[0].column, 8);
 
 const agentSurfaceOwnedDropCheck = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0"]);
 const agentSurfaceOwnedDropCheckBody = JSON.parse(agentSurfaceOwnedDropCheck.stdout);
@@ -1737,8 +1740,26 @@ assert(importGraphBody.sourceMaps.every((item) => item.columnUnit === "utf8-byte
 assert.deepEqual(importGraphBody.targets.map((item) => item.name), ["cli"]);
 assert.deepEqual(importGraphBody.modules.map((item) => item.name), ["math", "types", "main"]);
 assert.deepEqual(importGraphBody.importEdges.map((item) => `${item.from}->${item.to}`), ["main->math", "main->types"]);
+assert.deepEqual(importGraphBody.useImports.map((item) => `${item.from}->${item.to}:${item.kind}:${item.line}:${item.column}`), [
+  "main->math:package-local:1:1",
+  "main->types:package-local:2:1",
+]);
+assert.deepEqual(importGraphBody.useImports.map((item) => item.resolvedPath), [
+  "conformance/check/pass/imports/src/math.0",
+  "conformance/check/pass/imports/src/types.0",
+]);
+assert(importGraphBody.useImports.every((item) => item.sourceRange.columnUnit === "utf8-byte"));
 assert(importGraphBody.symbols.some((item) => item.module === "math" && item.name === "add_one"));
 assert(importGraphBody.functions.some((item) => item.name === "main" && item.returnType === "Void" && item.effects.includes("world")));
+
+const packageUseGraph = await execFileAsync(zero, ["graph", "--json", "conformance/check/pass/package"]);
+const packageUseGraphBody = JSON.parse(packageUseGraph.stdout);
+assert.deepEqual(packageUseGraphBody.useImports.map((item) => `${item.from}->${item.to}:${item.kind}:${item.resolvedPath ?? "null"}`), [
+  "main->std.codec:stdlib:null",
+  "main->std.parse:stdlib:null",
+  "main->std.time:stdlib:null",
+  "main->types:package-local:conformance/check/pass/package/src/types.0",
+]);
 
 const resourceGraph = await execFileAsync(zero, ["graph", "--json", "examples/resource-cli"]);
 const resourceGraphBody = JSON.parse(resourceGraph.stdout);

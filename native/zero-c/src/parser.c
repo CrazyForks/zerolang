@@ -86,6 +86,14 @@ static void push_c_import(CImportVec *vec, CImport item) {
   vec->items[vec->len++] = item;
 }
 
+static void push_use_import(UseImportVec *vec, UseImport item) {
+  if (vec->len + 1 > vec->cap) {
+    vec->cap = vec->cap == 0 ? 4 : vec->cap * 2;
+    vec->items = realloc(vec->items, vec->cap * sizeof(UseImport));
+  }
+  vec->items[vec->len++] = item;
+}
+
 static void push_choice(ChoiceVec *vec, Choice item) {
   if (vec->len + 1 > vec->cap) {
     vec->cap = vec->cap == 0 ? 4 : vec->cap * 2;
@@ -154,6 +162,14 @@ static bool fail(Parser *parser, const char *message) {
   parser->diag->code = 100;
   parser->diag->line = current(parser)->line;
   parser->diag->column = current(parser)->column;
+  snprintf(parser->diag->message, sizeof(parser->diag->message), "%s", message);
+  return false;
+}
+
+static bool fail_at(Parser *parser, Token *token, const char *message) {
+  parser->diag->code = 100;
+  parser->diag->line = token ? token->line : current(parser)->line;
+  parser->diag->column = token ? token->column : current(parser)->column;
   snprintf(parser->diag->message, sizeof(parser->diag->message), "%s", message);
   return false;
 }
@@ -942,24 +958,48 @@ static Choice parse_choice(Parser *parser) {
   return item;
 }
 
+static UseImport parse_use_import(Parser *parser) {
+  Token *start = current(parser);
+  UseImport item = {0};
+  expect(parser, "use", "expected use declaration");
+  item.line = start->line;
+  item.column = start->column;
+
+  ZBuf module;
+  zbuf_init(&module);
+  Token *segment = expect_ident(parser, "expected import module name");
+  if (segment) zbuf_append(&module, segment->text);
+  while (parser->diag->code == 0 && match(parser, ".")) {
+    Token *dot = previous(parser);
+    if (current(parser)->kind != TOK_IDENT) {
+      fail_at(parser, dot, "expected import module segment after '.'");
+      break;
+    }
+    segment = expect_ident(parser, "expected import module segment");
+    if (segment) {
+      zbuf_append_char(&module, '.');
+      zbuf_append(&module, segment->text);
+    }
+  }
+  if (parser->diag->code == 0 && match(parser, "as")) {
+    Token *alias = expect_ident(parser, "expected import alias");
+    if (alias) item.alias = z_strdup(alias->text);
+  }
+  item.module = module.data ? module.data : z_strdup("");
+  return item;
+}
+
 Program z_parse(TokenVec *tokens, ZDiag *diag) {
   Parser parser = {tokens, 0, diag};
   Program program = {0};
   while (current(&parser)->kind != TOK_EOF && diag->code == 0) {
-    if (match(&parser, "use")) {
-      while (current(&parser)->kind != TOK_EOF &&
-             !check(&parser, "pub") &&
-             !check(&parser, "const") &&
-             !check(&parser, "type") &&
-             !check(&parser, "interface") &&
-             !check(&parser, "fun") &&
-             !check(&parser, "shape") &&
-             !check(&parser, "enum") &&
-             !check(&parser, "choice") &&
-             !check(&parser, "test") &&
-             !check(&parser, "export") &&
-             !check(&parser, "extern") &&
-             !check(&parser, "packed")) parser.index++;
+    if (check(&parser, "use")) {
+      UseImport item = parse_use_import(&parser);
+      if (diag->code == 0) push_use_import(&program.use_imports, item);
+      else {
+        free(item.module);
+        free(item.alias);
+      }
       continue;
     }
     if (check(&parser, "extern") && parser.tokens->items[parser.index + 1].text && strcmp(parser.tokens->items[parser.index + 1].text, "c") == 0) {
@@ -1058,6 +1098,11 @@ static void free_stmt_vec(StmtVec *vec) {
 }
 
 void z_free_program(Program *program) {
+  for (size_t i = 0; i < program->use_imports.len; i++) {
+    free(program->use_imports.items[i].module);
+    free(program->use_imports.items[i].alias);
+  }
+  free(program->use_imports.items);
   for (size_t i = 0; i < program->consts.len; i++) {
     ConstDecl *item = &program->consts.items[i];
     free(item->name);
