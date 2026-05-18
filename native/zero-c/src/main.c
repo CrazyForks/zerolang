@@ -3505,9 +3505,11 @@ static char *apply_direct_wasm_suffix(const char *path) {
 }
 
 static const char *backend_blocker_backend_name(const ZTargetInfo *target, const Command *command, const char *emit_kind) {
-  if (command && command->backend && command->backend[0]) return command->backend;
   if (emit_kind && (strcmp(emit_kind, "obj") == 0 || strcmp(emit_kind, "wasm") == 0)) return z_direct_object_emitter(target);
-  if (emit_kind && strcmp(emit_kind, "exe") == 0) return z_direct_exe_emitter(target);
+  if (emit_kind && strcmp(emit_kind, "exe") == 0) {
+    if (command && command->backend && command->backend[0]) return command->backend;
+    return z_direct_exe_emitter(target);
+  }
   return "none";
 }
 
