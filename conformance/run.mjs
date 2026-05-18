@@ -499,10 +499,43 @@ const agentSurfaceUnresolvedImportBody = JSON.parse(agentSurfaceUnresolvedImport
 assert.equal(agentSurfaceUnresolvedImportBody.diagnostics[0].code, "IMP001");
 assert.match(agentSurfaceUnresolvedImportBody.diagnostics[0].expected, /src\/missing\.utility\.0/);
 
-const agentSurfaceMalformedUse = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/malformed-use-current.0"]);
+const agentSurfaceMalformedUse = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/malformed-use-current.0"]).catch((error) => error);
+assert.notEqual(agentSurfaceMalformedUse.code, 0);
 const agentSurfaceMalformedUseBody = JSON.parse(agentSurfaceMalformedUse.stdout);
-assert.equal(agentSurfaceMalformedUseBody.ok, true);
-assert.equal(agentSurfaceMalformedUseBody.diagnostics.length, 0);
+assert.equal(agentSurfaceMalformedUseBody.diagnostics[0].code, "PAR100");
+assert.match(agentSurfaceMalformedUseBody.diagnostics[0].message, /expected import module segment/);
+assert.equal(agentSurfaceMalformedUseBody.diagnostics[0].line, 1);
+assert.equal(agentSurfaceMalformedUseBody.diagnostics[0].column, 8);
+
+const agentSurfaceMalformedLocalUseFixture = `${outDir}/malformed-local-use.0`;
+await writeFile(agentSurfaceMalformedLocalUseFixture, 'use local.\n\npub fun main(world: World) -> Void raises {\n    check world.out.write("malformed local use parser fixture\\n")\n}\n');
+const agentSurfaceMalformedLocalUse = await execFileAsync(zero, ["check", "--json", agentSurfaceMalformedLocalUseFixture]).catch((error) => error);
+assert.notEqual(agentSurfaceMalformedLocalUse.code, 0);
+const agentSurfaceMalformedLocalUseBody = JSON.parse(agentSurfaceMalformedLocalUse.stdout);
+assert.equal(agentSurfaceMalformedLocalUseBody.diagnostics[0].code, "PAR100");
+assert.match(agentSurfaceMalformedLocalUseBody.diagnostics[0].message, /expected import module segment/);
+assert.equal(agentSurfaceMalformedLocalUseBody.diagnostics[0].line, 1);
+assert.equal(agentSurfaceMalformedLocalUseBody.diagnostics[0].column, 10);
+
+const agentSurfaceSplitUseFixture = `${outDir}/split-use-path.0`;
+await writeFile(agentSurfaceSplitUseFixture, 'use std.\ncodec\n\npub fun main(world: World) -> Void raises {\n    check world.out.write("split use parser fixture\\n")\n}\n');
+const agentSurfaceSplitUse = await execFileAsync(zero, ["check", "--json", agentSurfaceSplitUseFixture]).catch((error) => error);
+assert.notEqual(agentSurfaceSplitUse.code, 0);
+const agentSurfaceSplitUseBody = JSON.parse(agentSurfaceSplitUse.stdout);
+assert.equal(agentSurfaceSplitUseBody.diagnostics[0].code, "PAR100");
+assert.match(agentSurfaceSplitUseBody.diagnostics[0].message, /expected import module segment/);
+assert.equal(agentSurfaceSplitUseBody.diagnostics[0].line, 1);
+assert.equal(agentSurfaceSplitUseBody.diagnostics[0].column, 8);
+
+const agentSurfaceKeywordUseFixture = `${outDir}/keyword-use.0`;
+await writeFile(agentSurfaceKeywordUseFixture, 'use pub\n\npub fun main(world: World) -> Void raises {\n    check world.out.write("keyword use parser fixture\\n")\n}\n');
+const agentSurfaceKeywordUse = await execFileAsync(zero, ["check", "--json", agentSurfaceKeywordUseFixture]).catch((error) => error);
+assert.notEqual(agentSurfaceKeywordUse.code, 0);
+const agentSurfaceKeywordUseBody = JSON.parse(agentSurfaceKeywordUse.stdout);
+assert.equal(agentSurfaceKeywordUseBody.diagnostics[0].code, "PAR100");
+assert.match(agentSurfaceKeywordUseBody.diagnostics[0].message, /expected import module name/);
+assert.equal(agentSurfaceKeywordUseBody.diagnostics[0].line, 1);
+assert.equal(agentSurfaceKeywordUseBody.diagnostics[0].column, 5);
 
 const agentSurfaceOwnedDropCheck = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0"]);
 const agentSurfaceOwnedDropCheckBody = JSON.parse(agentSurfaceOwnedDropCheck.stdout);
@@ -1737,8 +1770,49 @@ assert(importGraphBody.sourceMaps.every((item) => item.columnUnit === "utf8-byte
 assert.deepEqual(importGraphBody.targets.map((item) => item.name), ["cli"]);
 assert.deepEqual(importGraphBody.modules.map((item) => item.name), ["math", "types", "main"]);
 assert.deepEqual(importGraphBody.importEdges.map((item) => `${item.from}->${item.to}`), ["main->math", "main->types"]);
+assert.deepEqual(importGraphBody.useImports.map((item) => `${item.from}->${item.to}:${item.kind}:${item.line}:${item.column}`), [
+  "main->math:package-local:1:1",
+  "main->types:package-local:2:1",
+]);
+assert.deepEqual(importGraphBody.useImports.map((item) => item.resolvedPath), [
+  "conformance/check/pass/imports/src/math.0",
+  "conformance/check/pass/imports/src/types.0",
+]);
+assert(importGraphBody.useImports.every((item) => item.sourceRange.columnUnit === "utf8-byte"));
 assert(importGraphBody.symbols.some((item) => item.module === "math" && item.name === "add_one"));
 assert(importGraphBody.functions.some((item) => item.name === "main" && item.returnType === "Void" && item.effects.includes("world")));
+
+const whitespaceUsePackage = `${outDir}/use-whitespace-package`;
+await mkdir(`${whitespaceUsePackage}/src`, { recursive: true });
+await writeFile(`${whitespaceUsePackage}/zero.json`, JSON.stringify({
+  package: { name: "use-whitespace-package", version: "0.1.0" },
+  targets: { cli: { kind: "exe", main: "src/main.0" } },
+  deps: {},
+}, null, 2));
+await mkdir(`${whitespaceUsePackage}/src/math`, { recursive: true });
+await writeFile(`${whitespaceUsePackage}/src/math.0`, 'fun add_one(value: i32) -> i32 {\n    return value + 1\n}\n');
+await writeFile(`${whitespaceUsePackage}/src/math/util.0`, 'fun add_two(value: i32) -> i32 {\n    return value + 2\n}\n');
+await writeFile(`${whitespaceUsePackage}/src/types.0`, 'shape Point {\n    value: i32,\n}\n');
+await writeFile(`${whitespaceUsePackage}/src/main.0`, 'use\tmath\nuse math . util\nuse   types   as   model\n\npub fun main(world: World) -> Void raises {\n    let point = Point { value: add_two(40) }\n    if point.value == add_one(41) {\n        check world.out.write("whitespace imports pass\\n")\n    }\n}\n');
+const whitespaceUseCheck = await execFileAsync(zero, ["check", "--json", whitespaceUsePackage]);
+assert.equal(JSON.parse(whitespaceUseCheck.stdout).ok, true);
+const whitespaceUseGraph = await execFileAsync(zero, ["graph", "--json", whitespaceUsePackage]);
+const whitespaceUseGraphBody = JSON.parse(whitespaceUseGraph.stdout);
+assert.deepEqual(whitespaceUseGraphBody.useImports.map((item) => `${item.from}->${item.to}:${item.kind}:${item.alias ?? "null"}:${item.sourceRange.end.column}`), [
+  "main->math:package-local:null:9",
+  "main->math.util:package-local:null:16",
+  "main->types:package-local:model:25",
+]);
+assert.deepEqual(whitespaceUseGraphBody.importEdges.map((item) => `${item.from}->${item.to}`), ["main->math", "main->math.util", "main->types"]);
+
+const packageUseGraph = await execFileAsync(zero, ["graph", "--json", "conformance/check/pass/package"]);
+const packageUseGraphBody = JSON.parse(packageUseGraph.stdout);
+assert.deepEqual(packageUseGraphBody.useImports.map((item) => `${item.from}->${item.to}:${item.kind}:${item.resolvedPath ?? "null"}`), [
+  "main->std.codec:stdlib:null",
+  "main->std.parse:stdlib:null",
+  "main->std.time:stdlib:null",
+  "main->types:package-local:conformance/check/pass/package/src/types.0",
+]);
 
 const resourceGraph = await execFileAsync(zero, ["graph", "--json", "examples/resource-cli"]);
 const resourceGraphBody = JSON.parse(resourceGraph.stdout);

@@ -71,16 +71,16 @@
       "path": "conformance/agent-surface/fixtures/unresolved-package-import",
       "classification": "diagnostic-surface-gap",
       "currentBehavior": "check-fail-IMP001",
-      "followUp": "Parse use declarations into first-class import nodes and tie resolver diagnostics to their source ranges.",
+      "followUp": "Tie resolver diagnostics to parsed import source ranges.",
       "runner": "assert-diagnostic-code"
     },
     {
       "id": "malformed-use-current",
       "path": "conformance/agent-surface/fixtures/malformed-use-current.0",
-      "classification": "parser-surface-gap",
-      "currentBehavior": "check-pass",
-      "followUp": "Parse use declarations as syntax-bearing nodes so malformed import paths produce parser diagnostics instead of being skipped.",
-      "runner": "assert-current-behavior"
+      "classification": "parser-surface-rule",
+      "currentBehavior": "check-fail-PAR100",
+      "followUp": "Keep malformed import paths syntax-bearing so parser diagnostics point at the bad import span.",
+      "runner": "assert-diagnostic-code"
     },
     {
       "id": "owned-drop-direct-backend-unsupported",

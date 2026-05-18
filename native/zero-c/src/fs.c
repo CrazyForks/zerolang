@@ -407,8 +407,8 @@ static void append_source_without_imports(SourceInput *input, ZBuf *buf, const c
       start++;
       len--;
     }
-    bool is_import = (len >= 4 && strncmp(start, "use ", 4) == 0) || (len >= 7 && strncmp(start, "import ", 7) == 0);
-    if (!is_import) {
+    bool is_legacy_import = len >= 7 && strncmp(start, "import ", 7) == 0;
+    if (!is_legacy_import) {
       zbuf_appendf(buf, "%.*s\n", (int)(end ? (size_t)(end - line) : strlen(line)), line);
       source_input_push_source_line(input, path, original_line);
     }
@@ -501,6 +501,102 @@ static void format_cycle_chain(const char *src_root, char **stack, size_t stack_
   free(module);
 }
 
+static bool import_ident_start(char ch) {
+  return isalpha((unsigned char)ch) || ch == '_';
+}
+
+static bool import_ident_continue(char ch) {
+  return isalnum((unsigned char)ch) || ch == '_';
+}
+
+static bool import_ident_is_keyword(const char *text, size_t len) {
+  const char *keywords[] = {
+    "as", "break", "check", "choice", "const", "continue", "defer", "else", "enum", "export", "extern", "false", "for", "fun",
+    "if", "import", "in", "let", "match", "meta", "mut", "null", "packed", "pub",
+    "raise", "raises", "rescue", "return", "shape", "static", "test", "true", "type",
+    "use", "var", "while", NULL
+  };
+  for (int i = 0; keywords[i]; i++) {
+    if (strlen(keywords[i]) == len && strncmp(text, keywords[i], len) == 0) return true;
+  }
+  return false;
+}
+
+static bool parse_use_import_ident_segment(const char *text, size_t len, size_t *pos, const char **segment_out, size_t *segment_len_out) {
+  if (*pos >= len || !import_ident_start(text[*pos])) return false;
+  size_t start = *pos;
+  (*pos)++;
+  while (*pos < len && import_ident_continue(text[*pos])) (*pos)++;
+  if (import_ident_is_keyword(text + start, *pos - start)) return false;
+  if (segment_out) *segment_out = text + start;
+  if (segment_len_out) *segment_len_out = *pos - start;
+  return true;
+}
+
+static bool import_line_comment_at(const char *text, size_t pos, size_t len) {
+  return pos + 1 < len && text[pos] == '/' && text[pos + 1] == '/';
+}
+
+static void import_line_skip_ws(const char *text, size_t len, size_t *pos) {
+  while (*pos < len && isspace((unsigned char)text[*pos])) (*pos)++;
+}
+
+static void import_line_append_span(ZBuf *buf, const char *text, size_t len) {
+  for (size_t i = 0; i < len; i++) zbuf_append_char(buf, text[i]);
+}
+
+static bool parse_use_import_line_module(const char *text, size_t len, char **module_out) {
+  size_t pos = 0;
+  import_line_skip_ws(text, len, &pos);
+  ZBuf module;
+  zbuf_init(&module);
+  bool wrote_segment = false;
+  for (;;) {
+    const char *segment = NULL;
+    size_t segment_len = 0;
+    if (!parse_use_import_ident_segment(text, len, &pos, &segment, &segment_len)) {
+      zbuf_free(&module);
+      return false;
+    }
+    if (wrote_segment) zbuf_append_char(&module, '.');
+    import_line_append_span(&module, segment, segment_len);
+    wrote_segment = true;
+    import_line_skip_ws(text, len, &pos);
+    if (pos < len && text[pos] == '.') {
+      pos++;
+      import_line_skip_ws(text, len, &pos);
+      continue;
+    }
+    break;
+  }
+  import_line_skip_ws(text, len, &pos);
+  if (import_line_comment_at(text, pos, len)) pos = len;
+  if (pos < len) {
+    if (pos + 2 > len || strncmp(text + pos, "as", 2) != 0) {
+      zbuf_free(&module);
+      return false;
+    }
+    pos += 2;
+    if (pos >= len || !isspace((unsigned char)text[pos])) {
+      zbuf_free(&module);
+      return false;
+    }
+    import_line_skip_ws(text, len, &pos);
+    if (!parse_use_import_ident_segment(text, len, &pos, NULL, NULL)) {
+      zbuf_free(&module);
+      return false;
+    }
+    import_line_skip_ws(text, len, &pos);
+    if (import_line_comment_at(text, pos, len)) pos = len;
+    if (pos < len) {
+      zbuf_free(&module);
+      return false;
+    }
+  }
+  *module_out = module.data ? module.data : z_strdup("");
+  return true;
+}
+
 static bool scan_imports_and_append_dependencies(const char *source, const char *src_root, const char *current_module, SourceInput *input, ZBuf *combined, ZDiag *diag, char ***stack, size_t *stack_len) {
   const char *line = source;
   while (*line && diag->code == 0) {
@@ -511,17 +607,12 @@ static bool scan_imports_and_append_dependencies(const char *source, const char 
       start++;
       len--;
     }
-    const char *module = NULL;
-    size_t prefix_len = 0;
-    if (len >= 4 && strncmp(start, "use ", 4) == 0) {
-      module = start + 4;
-      prefix_len = 4;
+    char *module_name = NULL;
+    if (len > 3 && strncmp(start, "use", 3) == 0 && isspace((unsigned char)start[3])) {
+      parse_use_import_line_module(start + 3, len - 3, &module_name);
     } else if (len >= 7 && strncmp(start, "import ", 7) == 0) {
-      module = start + 7;
-      prefix_len = 7;
-    }
-    if (module) {
-      size_t module_len = len - prefix_len;
+      const char *module = start + 7;
+      size_t module_len = len - 7;
       while (module_len > 0 && isspace((unsigned char)module[module_len - 1])) module_len--;
       const char *as_kw = NULL;
       for (size_t i = 0; i + 4 <= module_len; i++) {
@@ -531,12 +622,15 @@ static bool scan_imports_and_append_dependencies(const char *source, const char 
         }
       }
       if (as_kw) module_len = (size_t)(as_kw - module);
-      if (module_len >= 4 && strncmp(module, "std.", 4) == 0) {
+      module_name = z_strndup(module, module_len);
+    }
+    if (module_name) {
+      if (strncmp(module_name, "std.", 4) == 0) {
+        free(module_name);
         if (!end) break;
         line = end + 1;
         continue;
       }
-      char *module_name = z_strndup(module, module_len);
       source_input_push_import(input, module_name);
       char *module_path = module_path_to_source(src_root, module_name);
       if (!module_path) {

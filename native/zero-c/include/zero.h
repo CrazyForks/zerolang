@@ -333,6 +333,21 @@ typedef struct {
 } CImportVec;
 
 typedef struct {
+  char *module;
+  char *alias;
+  int line;
+  int column;
+  int end_column;
+} UseImport;
+
+typedef struct {
+  UseImport *items;
+  size_t len;
+  size_t cap;
+} UseImportVec;
+
+typedef struct {
+  UseImportVec use_imports;
   CImportVec c_imports;
   ConstVec consts;
   TypeAliasVec aliases;
