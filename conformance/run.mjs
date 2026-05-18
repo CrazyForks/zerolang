@@ -475,8 +475,17 @@ assert.equal(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.activeBor
 assert.equal(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.activeBorrows[0].path, "");
 assert.equal(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.activeBorrows[0].kind, "shared");
 assert.equal(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.activeBorrows[0].binding, "shared");
-assert.equal(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.activeBorrows[0].bindingDecl.line, 12);
+assert.equal(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.activeBorrows[0].bindingDecl.line, 11);
 assert.match(agentSurfaceBorrowLifetimeBody.diagnostics[0].borrowTrace.repair, /inner block|lexical scope/);
+
+const agentSurfaceBorrowMultiple = await execFileAsync(zero, ["check", "--json", "conformance/agent-surface/fixtures/borrow-multiple-active-borrows.0"]).catch((error) => error);
+assert.notEqual(agentSurfaceBorrowMultiple.code, 0);
+const agentSurfaceBorrowMultipleBody = JSON.parse(agentSurfaceBorrowMultiple.stdout);
+assert.equal(agentSurfaceBorrowMultipleBody.diagnostics[0].code, "BOR001");
+assert.equal(agentSurfaceBorrowMultipleBody.diagnostics[0].borrowTrace.activeBorrows.length, 2);
+assert.deepEqual(agentSurfaceBorrowMultipleBody.diagnostics[0].borrowTrace.activeBorrows.map((borrow) => borrow.binding), ["first", "second"]);
+assert.deepEqual(agentSurfaceBorrowMultipleBody.diagnostics[0].borrowTrace.activeBorrows.map((borrow) => borrow.bindingDecl.line), [3, 4]);
+assert.equal(agentSurfaceBorrowMultipleBody.diagnostics[0].borrowTrace.truncated, false);
 
 const agentSurfaceBorrowExplain = await execFileAsync(zero, ["explain", "--json", "BOR001"]);
 const agentSurfaceBorrowExplainBody = JSON.parse(agentSurfaceBorrowExplain.stdout);

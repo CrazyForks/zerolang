@@ -2491,27 +2491,35 @@ static const char *diag_repair_summary(int code) {
 }
 
 static bool diag_has_borrow_trace(const ZDiag *diag) {
-  return diag && diag->code == 3029 && diag->borrow_root[0];
+  return diag && diag->code == 3029 && diag->borrow_trace_count > 0;
 }
 
 static void append_diag_borrow_trace_json(ZBuf *buf, const char *path, const ZDiag *diag) {
-  zbuf_append(buf, "{\"rule\":\"lexical\",\"activeBorrows\":[{\"root\":");
-  append_json_string(buf, diag->borrow_root);
-  zbuf_append(buf, ",\"path\":");
-  append_json_string(buf, diag->borrow_path);
-  zbuf_append(buf, ",\"kind\":");
-  append_json_string(buf, diag->borrow_kind);
-  zbuf_append(buf, ",\"binding\":");
-  append_json_string_or_null(buf, diag->borrow_binding);
-  zbuf_append(buf, ",\"bindingDecl\":");
-  if (diag->borrow_binding_line > 0) {
-    zbuf_append(buf, "{\"path\":");
-    append_json_string(buf, diag->path ? diag->path : path);
-    zbuf_appendf(buf, ",\"line\":%d,\"column\":%d}", diag->borrow_binding_line, diag->borrow_binding_column > 0 ? diag->borrow_binding_column : 1);
-  } else {
-    zbuf_append(buf, "null");
+  zbuf_append(buf, "{\"rule\":\"lexical\",\"activeBorrows\":[");
+  for (size_t i = 0; i < diag->borrow_trace_count; i++) {
+    const ZBorrowTrace *trace = &diag->borrow_traces[i];
+    if (i > 0) zbuf_append(buf, ",");
+    zbuf_append(buf, "{\"root\":");
+    append_json_string(buf, trace->root);
+    zbuf_append(buf, ",\"path\":");
+    append_json_string(buf, trace->path);
+    zbuf_append(buf, ",\"kind\":");
+    append_json_string(buf, trace->kind);
+    zbuf_append(buf, ",\"binding\":");
+    append_json_string_or_null(buf, trace->binding);
+    zbuf_append(buf, ",\"bindingDecl\":");
+    if (trace->binding_line > 0) {
+      zbuf_append(buf, "{\"path\":");
+      append_json_string(buf, trace->binding_decl_path ? trace->binding_decl_path : (diag->path ? diag->path : path));
+      zbuf_appendf(buf, ",\"line\":%d,\"column\":%d}", trace->binding_line, trace->binding_column > 0 ? trace->binding_column : 1);
+    } else {
+      zbuf_append(buf, "null");
+    }
+    zbuf_append(buf, ",\"scopeExit\":null}");
   }
-  zbuf_append(buf, ",\"scopeExit\":null}],\"repair\":");
+  zbuf_append(buf, "],\"truncated\":");
+  zbuf_append(buf, diag->borrow_trace_truncated ? "true" : "false");
+  zbuf_append(buf, ",\"repair\":");
   append_json_string(buf, diag->borrow_repair[0] ? diag->borrow_repair : diag_repair_summary(diag->code));
   zbuf_append(buf, "}");
 }

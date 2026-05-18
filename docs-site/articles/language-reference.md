@@ -696,9 +696,9 @@ inside values, returned from calls, or merged through control flow. It rejects
 assignment while a reachable reference is live, rejects returning references to
 local bindings, and rejects storing callee-local references into caller-owned
 `mutref` storage. `BOR001` JSON includes a `borrowTrace.activeBorrows` array
-for lexical conflicts so agents can identify the live binding and move the
-conflicting operation or narrow the borrow with an inner block. Borrows lower to
-direct address expressions; there is no borrow registry or runtime alias
+for lexical conflicts so agents can identify live bindings and move the
+conflicting operation or narrow the borrows with an inner block. Borrows lower
+to direct address expressions; there is no borrow registry or runtime alias
 metadata.
 
 ## Imports And Standard Library

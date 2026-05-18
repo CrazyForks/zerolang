@@ -603,18 +603,34 @@ static bool scope_borrow_counts_for_place(Scope *scope, const char *root, const 
   return found;
 }
 
-typedef struct {
-  char root[128];
-  char path[256];
-  char kind[16];
-  char binding[128];
-  int binding_line;
-  int binding_column;
-} ActiveBorrowTrace;
+static bool borrow_trace_equal(const ZBorrowTrace *left, const ZBorrowTrace *right) {
+  return left && right &&
+         strcmp(left->root, right->root) == 0 &&
+         strcmp(left->path, right->path) == 0 &&
+         strcmp(left->kind, right->kind) == 0 &&
+         strcmp(left->binding, right->binding) == 0 &&
+         left->binding_line == right->binding_line &&
+         left->binding_column == right->binding_column;
+}
 
-static bool scope_active_borrow_for_place(Scope *scope, const char *root, const char *path, bool prefer_mutable, ActiveBorrowTrace *out) {
-  if (!scope || !root || !out) return false;
-  *out = (ActiveBorrowTrace){0};
+static bool borrow_trace_push(ZBorrowTrace *out, size_t *out_len, bool *truncated, const ZBorrowTrace *trace) {
+  if (!out || !out_len || !trace || !trace->root[0]) return false;
+  for (size_t i = 0; i < *out_len; i++) {
+    if (borrow_trace_equal(&out[i], trace)) return true;
+  }
+  if (*out_len >= Z_BORROW_TRACE_MAX) {
+    if (truncated) *truncated = true;
+    return false;
+  }
+  out[*out_len] = *trace;
+  (*out_len)++;
+  return true;
+}
+
+static bool scope_active_borrows_for_place(Scope *scope, const char *root, const char *path, bool mutable_only, ZBorrowTrace *out, size_t *out_len, bool *truncated) {
+  if (!scope || !root || !out || !out_len) return false;
+  *out_len = 0;
+  if (truncated) *truncated = false;
   bool found = false;
   Scope *root_scope = scope_binding_scope(scope, root);
   for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
@@ -625,31 +641,29 @@ static bool scope_active_borrow_for_place(Scope *scope, const char *root, const 
         if (strcmp(entry->origin.root, root) != 0) continue;
         if (root_scope && entry->origin.root_scope && entry->origin.root_scope != root_scope) continue;
         if (!origin_path_overlaps(entry->origin.path, path)) continue;
-        if (found && (!prefer_mutable || strcmp(out->kind, "mutable") == 0 || !entry->mutable_borrow)) continue;
-        snprintf(out->root, sizeof(out->root), "%s", entry->origin.root);
-        snprintf(out->path, sizeof(out->path), "%s", origin_path_text(entry->origin.path));
-        snprintf(out->kind, sizeof(out->kind), "%s", entry->mutable_borrow ? "mutable" : "shared");
-        snprintf(out->binding, sizeof(out->binding), "%s", cursor->names[binding_index]);
-        out->binding_line = cursor->decl_line ? cursor->decl_line[binding_index] : 0;
-        out->binding_column = cursor->decl_column ? cursor->decl_column[binding_index] : 0;
+        if (mutable_only && !entry->mutable_borrow) continue;
+        ZBorrowTrace trace = {0};
+        snprintf(trace.root, sizeof(trace.root), "%s", entry->origin.root);
+        snprintf(trace.path, sizeof(trace.path), "%s", origin_path_text(entry->origin.path));
+        snprintf(trace.kind, sizeof(trace.kind), "%s", entry->mutable_borrow ? "mutable" : "shared");
+        snprintf(trace.binding, sizeof(trace.binding), "%s", cursor->names[binding_index]);
+        trace.binding_line = cursor->decl_line ? cursor->decl_line[binding_index] : 0;
+        trace.binding_column = cursor->decl_column ? cursor->decl_column[binding_index] : 0;
+        borrow_trace_push(out, out_len, truncated, &trace);
         found = true;
-        if (!prefer_mutable || entry->mutable_borrow) return true;
       }
     }
   }
   return found;
 }
 
-static void set_diag_borrow_trace(ZDiag *diag, const char *root, const char *path, const ActiveBorrowTrace *active, const char *repair) {
-  if (!diag || !root || !active || !active->root[0]) return;
-  snprintf(diag->borrow_root, sizeof(diag->borrow_root), "%s", active->root);
-  snprintf(diag->borrow_path, sizeof(diag->borrow_path), "%s", active->path);
-  snprintf(diag->borrow_kind, sizeof(diag->borrow_kind), "%s", active->kind);
-  snprintf(diag->borrow_binding, sizeof(diag->borrow_binding), "%s", active->binding);
+static void set_diag_borrow_trace(ZDiag *diag, const ZBorrowTrace *active, size_t active_len, bool truncated, const char *repair) {
+  if (!diag || !active || active_len == 0) return;
+  size_t copy_len = active_len > Z_BORROW_TRACE_MAX ? Z_BORROW_TRACE_MAX : active_len;
+  for (size_t i = 0; i < copy_len; i++) diag->borrow_traces[i] = active[i];
+  diag->borrow_trace_count = copy_len;
+  diag->borrow_trace_truncated = truncated || active_len > Z_BORROW_TRACE_MAX;
   snprintf(diag->borrow_repair, sizeof(diag->borrow_repair), "%s", repair ? repair : "end the active lexical borrow before the conflicting operation");
-  diag->borrow_binding_line = active->binding_line;
-  diag->borrow_binding_column = active->binding_column;
-  (void)path;
 }
 
 static void scope_clear_value_provenance_at(ValueProvenance *origins) {
@@ -852,6 +866,9 @@ static bool set_diag(ZDiag *diag, int code, const char *message, int line, int c
   diag->line = line;
   diag->column = column;
   diag->length = 1;
+  diag->borrow_trace_count = 0;
+  diag->borrow_trace_truncated = false;
+  diag->borrow_repair[0] = 0;
   snprintf(diag->message, sizeof(diag->message), "%s", message);
   return false;
 }
@@ -1611,9 +1628,11 @@ static bool check_borrow_conflict_at(Scope *scope, const char *root, const char 
     char actual[160];
     snprintf(actual, sizeof(actual), "%.120s already has %s borrow", place, mut > 0 ? "a mutable" : "shared");
     set_diag_detail(diag, 3029, "borrow conflicts with an active lexical borrow", expr->line, expr->column, mut_borrow ? "unborrowed mutable lvalue" : "no active mutable borrow", actual, "end the earlier borrow's scope before borrowing again");
-    ActiveBorrowTrace active = {0};
-    if (scope_active_borrow_for_place(scope, root, path, mut > 0, &active)) {
-      set_diag_borrow_trace(diag, root, path, &active, "move the conflicting borrow after the active borrow's lexical scope or put the earlier borrow in an inner block");
+    ZBorrowTrace active[Z_BORROW_TRACE_MAX] = {0};
+    size_t active_len = 0;
+    bool truncated = false;
+    if (scope_active_borrows_for_place(scope, root, path, !mut_borrow, active, &active_len, &truncated)) {
+      set_diag_borrow_trace(diag, active, active_len, truncated, "move the conflicting borrow after the active borrow's lexical scope or put the earlier borrow in an inner block");
     }
     return false;
   }
@@ -1650,9 +1669,11 @@ static bool check_read_not_mutably_borrowed(const Expr *expr, Scope *scope, ZDia
   char actual_detail[200];
   snprintf(actual_detail, sizeof(actual_detail), "%.160s has an active mutable borrow", place);
   set_diag_detail(diag, 3029, "cannot read a value while it is mutably borrowed", expr->line, expr->column, "unborrowed value or shared borrow only", actual_detail, "end the mutable borrow's lexical scope before reading the value");
-  ActiveBorrowTrace active = {0};
-  if (scope_active_borrow_for_place(scope, root, path, true, &active)) {
-    set_diag_borrow_trace(diag, root, path, &active, "move the read after the mutable borrow's lexical scope or put the mutable borrow in an inner block");
+  ZBorrowTrace active[Z_BORROW_TRACE_MAX] = {0};
+  size_t active_len = 0;
+  bool truncated = false;
+  if (scope_active_borrows_for_place(scope, root, path, true, active, &active_len, &truncated)) {
+    set_diag_borrow_trace(diag, active, active_len, truncated, "move the read after the mutable borrow's lexical scope or put the mutable borrow in an inner block");
   }
   return false;
 }
@@ -6795,9 +6816,11 @@ static bool check_assignment_not_borrowed(const Expr *target, Scope *scope, ZDia
   char actual[256];
   snprintf(actual, sizeof(actual), "%.160s has %zu shared and %zu mutable borrow(s)", place, shared, mut);
   set_diag_detail(diag, 3029, "cannot assign to a value while it is borrowed", target->line, target->column, "unborrowed assignment target", actual, "end the borrow's lexical scope before assigning to this value");
-  ActiveBorrowTrace active = {0};
-  if (scope_active_borrow_for_place(scope, root, path, mut > 0, &active)) {
-    set_diag_borrow_trace(diag, root, path, &active, "move the assignment after the active borrow's lexical scope or put the borrow in an inner block");
+  ZBorrowTrace active[Z_BORROW_TRACE_MAX] = {0};
+  size_t active_len = 0;
+  bool truncated = false;
+  if (scope_active_borrows_for_place(scope, root, path, false, active, &active_len, &truncated)) {
+    set_diag_borrow_trace(diag, active, active_len, truncated, "move the assignment after the active borrow's lexical scope or put the borrow in an inner block");
   }
   return false;
 }

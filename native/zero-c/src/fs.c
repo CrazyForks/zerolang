@@ -1248,6 +1248,14 @@ bool z_map_source_diag(const SourceInput *input, ZDiag *diag) {
   if (index >= input->source_line_count) return false;
   diag->path = input->source_line_paths[index];
   diag->line = input->source_line_numbers[index] > 0 ? input->source_line_numbers[index] : 1;
+  for (size_t i = 0; i < diag->borrow_trace_count; i++) {
+    ZBorrowTrace *trace = &diag->borrow_traces[i];
+    if (trace->binding_line <= 0) continue;
+    size_t binding_index = (size_t)trace->binding_line - 1;
+    if (binding_index >= input->source_line_count) continue;
+    trace->binding_decl_path = input->source_line_paths[binding_index];
+    trace->binding_line = input->source_line_numbers[binding_index] > 0 ? input->source_line_numbers[binding_index] : 1;
+  }
   return true;
 }
 

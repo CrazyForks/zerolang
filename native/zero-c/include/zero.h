@@ -10,6 +10,18 @@ typedef struct {
   size_t cap;
 } ZBuf;
 
+#define Z_BORROW_TRACE_MAX 16
+
+typedef struct {
+  char root[128];
+  char path[256];
+  char kind[16];
+  char binding[128];
+  const char *binding_decl_path;
+  int binding_line;
+  int binding_column;
+} ZBorrowTrace;
+
 typedef struct {
   int code;
   char code_text[16];
@@ -17,13 +29,10 @@ typedef struct {
   char expected[128];
   char actual[128];
   char help[256];
-  char borrow_root[128];
-  char borrow_path[256];
-  char borrow_kind[16];
-  char borrow_binding[128];
+  ZBorrowTrace borrow_traces[Z_BORROW_TRACE_MAX];
+  size_t borrow_trace_count;
+  bool borrow_trace_truncated;
   char borrow_repair[256];
-  int borrow_binding_line;
-  int borrow_binding_column;
   const char *path;
   int line;
   int column;

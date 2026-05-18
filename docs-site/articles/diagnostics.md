@@ -115,7 +115,10 @@ The native compiler keeps stable codes for implemented control-flow and type rul
 - `ERR003`: a fallible call was used without `check` or `rescue`
 - `ABI001`: unsupported C ABI export or extern layout surface
 - `CIMP003`: a foreign-target C dependency would use host include paths, host library paths, or implicit host `pkg-config` discovery
-- `BOR001`: lexical borrow conflicts, with JSON `borrowTrace.activeBorrows` entries naming the borrowed root, path, kind, live binding, declaration range when known, and repair shape
+- `BOR001`: lexical borrow conflicts, with JSON `borrowTrace.activeBorrows`
+  entries naming each reported borrowed root, path, kind, live binding,
+  declaration range when known, and repair shape. `borrowTrace.truncated` is
+  true if the packet hit the reporting cap.
 - `BOR002`: reference-origin escapes, including references returned from calls or stored through mutable parameter storage
 - `OWN001`: owned value use after move, or generic containers that would own unconstrained generic payloads
 - `TYP010`: conditions must be `Bool`
