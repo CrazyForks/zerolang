@@ -296,6 +296,18 @@ const removedSkillsPath = zero(["skills", "path", "zero", "--json"], { allowFail
 assert.notEqual(removedSkillsPath.code, 0);
 assert.match(JSON.parse(removedSkillsPath.stdout).error, /Unknown skills subcommand: path/);
 
+const badSkillsFlag = zero(["skills", "-x"], { allowFailure: true });
+assert.notEqual(badSkillsFlag.code, 0);
+assert.match(badSkillsFlag.stderr, /Unknown skills flag: -x/);
+
+const badSkillsListFlag = zero(["skills", "list", "--unknown", "--json"], { allowFailure: true });
+assert.notEqual(badSkillsListFlag.code, 0);
+assert.match(JSON.parse(badSkillsListFlag.stdout).error, /Unknown skills flag: --unknown/);
+
+const badSkillsGetFlag = zero(["skills", "get", "zero-language", "--unknown", "--json"], { allowFailure: true });
+assert.notEqual(badSkillsGetFlag.code, 0);
+assert.match(JSON.parse(badSkillsGetFlag.stdout).error, /Unknown skills flag: --unknown/);
+
 const lexerTokens = json(["tokens", "--json", "conformance/lexer/compiler-smoke.0"]).body;
 assert.equal(lexerTokens.schemaVersion, 1);
 assert.match(lexerTokens.sourceFile, /compiler-smoke\.0$/);

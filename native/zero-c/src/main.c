@@ -287,7 +287,11 @@ static int embedded_skills_get_command(int argc, char **argv, int subcommand_ind
       continue;
     }
     if (strcmp(arg, "--full") == 0 || strcmp(arg, "--json") == 0) continue;
-    if (arg[0] == '-') continue;
+    if (arg[0] == '-') {
+      char message[160];
+      snprintf(message, sizeof(message), "Unknown skills flag: %s", arg);
+      return embedded_skills_error(json, message);
+    }
     const ZeroEmbeddedSkill *skill = find_embedded_skill(arg);
     if (!skill) {
       char message[160];
@@ -343,10 +347,15 @@ static int embedded_skills_command(int argc, char **argv, bool json) {
   for (int i = 2; i < argc; i++) {
     const char *arg = argv[i];
     if (strcmp(arg, "--json") == 0 || strcmp(arg, "--all") == 0 || strcmp(arg, "--full") == 0) continue;
-    if (arg[0] == '-') continue;
-    subcommand = arg;
-    subcommand_index = i;
-    break;
+    if (arg[0] == '-') {
+      char message[160];
+      snprintf(message, sizeof(message), "Unknown skills flag: %s", arg);
+      return embedded_skills_error(json, message);
+    }
+    if (subcommand_index < 0) {
+      subcommand = arg;
+      subcommand_index = i;
+    }
   }
 
   if (strcmp(subcommand, "help") == 0) {
@@ -3548,8 +3557,6 @@ static bool parse_command(int argc, char **argv, Command *command) {
       else if (strcmp(argv[i], "--all") == 0) command->all = true;
       else if (strcmp(argv[i], "--full") == 0) {
         continue;
-      } else if (strncmp(argv[i], "--", 2) == 0) {
-        command->unknown_flag = argv[i];
       } else if (!command->kind) {
         command->kind = argv[i];
       } else if (!command->input) {

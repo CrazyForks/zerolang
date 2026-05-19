@@ -32,6 +32,11 @@ jobs:
       - name: Build native compiler
         run: make -C native/zero-c
 
+      - name: Verify embedded skill data
+        run: |
+          node scripts/embed-skill-data.mjs
+          git diff --exit-code native/zero-c/src/embedded_skills.inc
+
       - run: pnpm install --frozen-lockfile
 
       - name: Smoke test

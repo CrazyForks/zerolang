@@ -216,6 +216,18 @@ describe("native zero CLI", () => {
     assert.notEqual(removedPath.code, 0);
     assert.match(JSON.parse(removedPath.stdout).error, /Unknown skills subcommand: path/);
 
+    const badSkillsFlag = await runZero(["skills", "-x"]).catch((error) => error);
+    assert.notEqual(badSkillsFlag.code, 0);
+    assert.match(badSkillsFlag.stderr, /Unknown skills flag: -x/);
+
+    const badListFlag = await runZero(["skills", "list", "--unknown", "--json"]).catch((error) => error);
+    assert.notEqual(badListFlag.code, 0);
+    assert.match(JSON.parse(badListFlag.stdout).error, /Unknown skills flag: --unknown/);
+
+    const badGetFlag = await runZero(["skills", "get", "zero-language", "--unknown", "--json"]).catch((error) => error);
+    assert.notEqual(badGetFlag.code, 0);
+    assert.match(JSON.parse(badGetFlag.stdout).error, /Unknown skills flag: --unknown/);
+
     const nativeList = JSON.parse((await runNativeZero(["skills", "list", "--json"])).stdout);
     assert.equal(nativeList.success, true);
     assert.equal(nativeList.data.some((skill: { name: string }) => skill.name === "zero-language"), true);
