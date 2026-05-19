@@ -28,9 +28,11 @@ pnpm evals -- --case hello-world --models anthropic/claude-opus-4.7,anthropic/cl
 ```
 
 Live evals create a Vercel Sandbox, upload the current checkout, build the
-native compiler, install Claude Code, and run the agent inside the sandbox. The
-sandbox network policy injects the AI Gateway bearer credential for
-`https://ai-gateway.vercel.sh`, matching the Ovation sandbox setup.
+native compiler, install Claude Code, and run the agent inside the sandbox. Each
+model/case run gets a fresh copy of the prepared checkout so mutations from one
+run do not affect the next run. The sandbox network policy injects the AI
+Gateway bearer credential for `https://ai-gateway.vercel.sh`, matching the
+Ovation sandbox setup.
 
 Credential options:
 

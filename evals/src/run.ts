@@ -23,6 +23,7 @@ interface RunOptions {
   outDir: string;
   sandboxRuntime: string;
   sandboxTimeoutMs: number;
+  sandboxTimeoutMsExplicit: boolean;
   sandboxVcpus: number;
   commandTimeoutMs: number;
 }
@@ -68,6 +69,7 @@ interface AgentRun {
   responseText: string;
   steps: AgentStep[];
   metrics: AgentMetrics | null;
+  error: string | null;
   rawOutputPath?: string;
   stderrPath?: string;
 }
@@ -90,6 +92,12 @@ const AI_GATEWAY_HOST = "ai-gateway.vercel.sh";
 const AI_GATEWAY_URL = `https://${AI_GATEWAY_HOST}`;
 const DEFAULT_PROJECT_DIR = "/vercel/sandbox/zero-lang";
 const PROMPT_PATH = "/tmp/zero-eval-prompt.txt";
+const REMOTE_EVAL_ROOT = "/tmp/zero-evals";
+const REMOTE_RESULTS_ROOT = `${REMOTE_EVAL_ROOT}/results`;
+const REMOTE_WORKSPACE_ROOT = `${REMOTE_EVAL_ROOT}/workspaces`;
+const DEFAULT_SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 20 * 60 * 1000;
+const DEFAULT_SANDBOX_SETUP_TIMEOUT_MS = 5 * 60 * 1000;
 const DEFAULT_MODELS = [
   "anthropic/claude-opus-4.7",
   "anthropic/claude-sonnet-4.6",
@@ -110,12 +118,15 @@ async function main() {
   loadDotEnvFiles([".env", ".env.local"]);
   const options = parseArgs(process.argv.slice(2));
   const selectedCases = selectCases(options.caseId);
+  applyDefaultSandboxTimeout(options, selectedCases.length);
 
   if (options.dryRun) {
     printJsonOrText(options.json, {
       models: options.models,
       gatewayURL: AI_GATEWAY_URL,
       maxTurns: options.maxTurns,
+      commandTimeoutMs: options.commandTimeoutMs,
+      sandboxTimeoutMs: options.sandboxTimeoutMs,
       mode: options.fixture ? "fixture" : "sandbox",
       cases: selectedCases.map(
         ({ id, title, prompt, expectedStdout, requiredSourcePatterns }) => ({
@@ -227,19 +238,24 @@ async function runCase(
   const caseDir = join(options.outDir, modelPathSegment(model), evalCase.id);
   await rm(caseDir, { force: true, recursive: true });
   await mkdir(caseDir, { recursive: true });
+  const sandboxProjectDir = sandboxContext
+    ? await createSandboxRunWorkspace(sandboxContext, evalCase, model)
+    : null;
 
   const agentRun: AgentRun =
-    options.fixture || !sandboxContext
+    options.fixture || !sandboxContext || !sandboxProjectDir
       ? {
           responseText: evalCase.fixtureSource,
           steps: [],
           metrics: null,
+          error: null,
         }
       : await runSandboxAgentCase(
           evalCase,
           model,
           options,
           sandboxContext,
+          sandboxProjectDir,
           caseDir,
         );
 
@@ -255,11 +271,18 @@ async function runCase(
   await writeFile(sourcePath, source);
 
   const validation = sandboxContext
-    ? await validateSourceInSandbox(sandboxContext, evalCase, model, source)
+    ? await validateSourceInSandbox(
+        sandboxContext,
+        evalCase,
+        model,
+        source,
+        sandboxProjectDir ?? sandboxContext.projectDir,
+      )
     : await validateSourceLocally(sourcePath);
   const { check, run, remoteSourcePath } = validation;
 
-  let error: string | null = check.code === 0 ? null : "zero check failed";
+  let error: string | null =
+    agentRun.error ?? (check.code === 0 ? null : "zero check failed");
   const patternFailures = sourcePatternFailures(
     source,
     evalCase.requiredSourcePatterns,
@@ -273,6 +296,7 @@ async function runCase(
     : getAgentRequirementFailures(agentRun.metrics, options.maxTurns);
   const actualStdout = run?.stdout ?? "";
   const passed =
+    agentRun.error === null &&
     check.code === 0 &&
     run?.code === 0 &&
     actualStdout === evalCase.expectedStdout &&
@@ -300,10 +324,12 @@ async function runCase(
     durationMs: Math.round(performance.now() - started),
     sourcePath,
     remoteSourcePath,
+    remoteProjectDir: sandboxProjectDir,
     responsePath,
     stepsPath,
     rawOutputPath: agentRun.rawOutputPath ?? null,
     stderrPath: agentRun.stderrPath ?? null,
+    agentError: agentRun.error,
     agent: agentRun.metrics,
     check,
     run,
@@ -327,9 +353,10 @@ async function runSandboxAgentCase(
   model: string,
   options: RunOptions,
   context: SandboxContext,
+  projectDir: string,
   caseDir: string,
 ): Promise<AgentRun> {
-  const prompt = buildClaudePrompt(evalCase, options, context.projectDir);
+  const prompt = buildClaudePrompt(evalCase, options, projectDir);
   await context.sandbox.writeFiles([
     {
       path: PROMPT_PATH,
@@ -352,7 +379,7 @@ async function runSandboxAgentCase(
   );
   const script = [
     "set -euo pipefail",
-    `cd ${shellQuote(context.projectDir)}`,
+    `cd ${shellQuote(projectDir)}`,
     `export ANTHROPIC_BASE_URL=${shellQuote(AI_GATEWAY_URL)}`,
     "export ANTHROPIC_AUTH_TOKEN=placeholder",
     "export ANTHROPIC_API_KEY=",
@@ -367,7 +394,7 @@ async function runSandboxAgentCase(
     {
       cmd: "bash",
       args: ["-lc", script],
-      cwd: context.projectDir,
+      cwd: projectDir,
     },
     "claude eval",
   );
@@ -376,17 +403,40 @@ async function runSandboxAgentCase(
   await writeFile(rawOutputPath, output.stdout);
   await writeFile(stderrPath, output.stderr);
 
-  if (output.code !== 0) {
-    throw new Error(
-      `Claude Code failed with exit code ${output.code}\n${truncate(output.stderr || output.stdout, 4_000)}`,
-    );
-  }
-
   const parsed = parseClaudeStream(output.stdout);
-  if (!parsed.responseText.trim()) {
-    throw new Error("Claude Code stream did not include a final result");
-  }
-  return { ...parsed, rawOutputPath, stderrPath };
+  const commandError =
+    output.code === 0
+      ? null
+      : `Claude Code failed with exit code ${output.code}\n${truncate(output.stderr || output.stdout, 4_000)}`;
+  const resultError =
+    commandError ??
+    (parsed.responseText.trim()
+      ? null
+      : "Claude Code stream did not include a final result");
+  return { ...parsed, error: resultError, rawOutputPath, stderrPath };
+}
+
+async function createSandboxRunWorkspace(
+  context: SandboxContext,
+  evalCase: EvalCase,
+  model: string,
+) {
+  const workspaceDir = `${REMOTE_WORKSPACE_ROOT}/${modelPathSegment(model)}/${modelPathSegment(evalCase.id)}`;
+  const script = [
+    "set -euo pipefail",
+    `rm -rf ${shellQuote(workspaceDir)}`,
+    `mkdir -p ${shellQuote(workspaceDir)}`,
+    `cp -a ${shellQuote(`${context.projectDir}/.`)} ${shellQuote(workspaceDir)}`,
+  ].join("\n");
+  await runSandboxCommandChecked(
+    context.sandbox,
+    {
+      cmd: "bash",
+      args: ["-lc", script],
+    },
+    "prepare eval workspace",
+  );
+  return workspaceDir;
 }
 
 function buildClaudePrompt(
@@ -427,8 +477,9 @@ async function validateSourceInSandbox(
   evalCase: EvalCase,
   model: string,
   source: string,
+  projectDir: string,
 ) {
-  const remoteCaseDir = `/tmp/zero-evals/${modelPathSegment(model)}/${
+  const remoteCaseDir = `${REMOTE_RESULTS_ROOT}/${modelPathSegment(model)}/${
     evalCase.id
   }`;
   const remoteSourcePath = `${remoteCaseDir}/candidate.0`;
@@ -449,7 +500,7 @@ async function validateSourceInSandbox(
     {
       cmd: "bash",
       args: ["-lc", `./bin/zero check --json ${shellQuote(remoteSourcePath)}`],
-      cwd: context.projectDir,
+      cwd: projectDir,
     },
     "zero check",
   );
@@ -463,7 +514,7 @@ async function validateSourceInSandbox(
           "-lc",
           `./bin/zero run --out ${shellQuote(`${remoteCaseDir}/program`)} ${shellQuote(remoteSourcePath)}`,
         ],
-        cwd: context.projectDir,
+        cwd: projectDir,
       },
       "zero run",
     );
@@ -604,6 +655,7 @@ function parseClaudeStream(output: string): AgentRun {
     responseText,
     steps,
     metrics: measureAgent(steps),
+    error: null,
   };
 }
 
@@ -811,9 +863,12 @@ function parseArgs(args: string[]): RunOptions {
   const requestedModels: string[] = [];
   let outDir = join(repoRoot, ".zero", "evals", "runs", timestamp());
   let sandboxRuntime = process.env.ZERO_EVAL_SANDBOX_RUNTIME ?? "node24";
+  let sandboxTimeoutMsExplicit =
+    process.env.ZERO_EVAL_SANDBOX_TIMEOUT_MS !== undefined &&
+    process.env.ZERO_EVAL_SANDBOX_TIMEOUT_MS !== "";
   let sandboxTimeoutMs = parsePositiveIntOrDefault(
     process.env.ZERO_EVAL_SANDBOX_TIMEOUT_MS,
-    30 * 60 * 1000,
+    DEFAULT_SANDBOX_TIMEOUT_MS,
     "ZERO_EVAL_SANDBOX_TIMEOUT_MS",
   );
   let sandboxVcpus = parsePositiveIntOrDefault(
@@ -823,7 +878,7 @@ function parseArgs(args: string[]): RunOptions {
   );
   let commandTimeoutMs = parsePositiveIntOrDefault(
     process.env.ZERO_EVAL_COMMAND_TIMEOUT_MS,
-    20 * 60 * 1000,
+    DEFAULT_COMMAND_TIMEOUT_MS,
     "ZERO_EVAL_COMMAND_TIMEOUT_MS",
   );
 
@@ -851,6 +906,7 @@ function parseArgs(args: string[]): RunOptions {
     } else if (arg === "--sandbox-runtime") {
       sandboxRuntime = requiredValue(args, ++i, "--sandbox-runtime");
     } else if (arg === "--sandbox-timeout-ms") {
+      sandboxTimeoutMsExplicit = true;
       sandboxTimeoutMs = parsePositiveInt(
         requiredValue(args, ++i, "--sandbox-timeout-ms"),
         "--sandbox-timeout-ms",
@@ -896,9 +952,21 @@ function parseArgs(args: string[]): RunOptions {
     outDir,
     sandboxRuntime,
     sandboxTimeoutMs,
+    sandboxTimeoutMsExplicit,
     sandboxVcpus,
     commandTimeoutMs,
   };
+}
+
+function applyDefaultSandboxTimeout(options: RunOptions, caseCount: number) {
+  if (options.fixture || options.sandboxTimeoutMsExplicit) return;
+  const runCount = Math.max(1, options.models.length * caseCount);
+  const requiredTimeoutMs =
+    DEFAULT_SANDBOX_SETUP_TIMEOUT_MS + runCount * options.commandTimeoutMs;
+  options.sandboxTimeoutMs = Math.max(
+    options.sandboxTimeoutMs,
+    requiredTimeoutMs,
+  );
 }
 
 function defaultModels() {
@@ -1152,7 +1220,7 @@ Options:
   --max-turns <n>          Maximum Claude turns before failing scoring (default: 10)
   --out <dir>              Output directory (default: .zero/evals/runs/<timestamp>)
   --sandbox-runtime <id>   Vercel Sandbox runtime (default: ZERO_EVAL_SANDBOX_RUNTIME or node24)
-  --sandbox-timeout-ms <n> Sandbox timeout (default: ZERO_EVAL_SANDBOX_TIMEOUT_MS or 1800000)
+  --sandbox-timeout-ms <n> Sandbox timeout (default: ZERO_EVAL_SANDBOX_TIMEOUT_MS or enough for selected runs)
   --sandbox-vcpus <n>      Sandbox vCPU count (default: ZERO_EVAL_SANDBOX_VCPUS or 4)
   --command-timeout-ms <n> Claude command timeout (default: ZERO_EVAL_COMMAND_TIMEOUT_MS or 1200000)
   --keep-alive             Leave the Vercel Sandbox running after the eval
