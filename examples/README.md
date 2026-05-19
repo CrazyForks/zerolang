@@ -108,12 +108,6 @@ These examples are the small native workflow set used by docs and tests:
 | `direct-package-call-order/` | direct backend package merge order and cross-module helper calls | `bin/zero check examples/direct-package-call-order` |
 | `error-tour/` | copyable failing commands and repaired fixtures for common diagnostics | `bin/zero explain TAR002` |
 
-## Web
-
-| Example | What it teaches | Try it |
-| --- | --- | --- |
-| `web-response.0` | single-file web-style `GET` handler | `bin/zero check examples/web-response.0` |
-
 ## Build A Runnable Program
 
 Most examples are designed for `check`. To build and run an executable, use a CLI entry point:
