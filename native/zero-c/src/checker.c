@@ -1870,6 +1870,7 @@ static bool validate_type_names(const Program *program, const char *type, const 
 static bool type_param_name_known(const ParamVec *primary, const ParamVec *secondary, const char *name);
 static bool static_type_param_name_known_for_type(const Program *program, const ParamVec *primary, const ParamVec *secondary, const char *name, const char *expected_type);
 static bool static_value_name_shadowed_by_type_param(const ParamVec *primary, const ParamVec *secondary, const char *name);
+static const ParamVec *generic_type_params_for_name(const Program *program, const char *name);
 static const Shape *find_shape_for_type(const Program *program, const char *type);
 static const Choice *find_choice(const Program *program, const char *name);
 static const Param *find_case(const ParamVec *cases, const char *name);
@@ -2031,6 +2032,7 @@ static bool generic_binding_set(const Program *program, GenericBinding *bindings
 }
 
 static char *type_substitute_generic(const char *type, GenericBinding *bindings, size_t binding_len);
+static char *type_substitute_generic_signature(const Program *program, const char *type, GenericBinding *bindings, size_t binding_len);
 static char *type_substitute_interface_method_signature(const char *type, GenericBinding *interface_bindings, size_t interface_binding_len, const Function *required, const Function *method);
 static bool infer_generic_type_from_pattern(const Program *program, const Function *fun, Scope *actual_scope, const char *pattern, const char *actual, GenericBinding *bindings, size_t binding_len);
 
@@ -2619,6 +2621,91 @@ static char *type_substitute_generic(const char *type, GenericBinding *bindings,
       for (size_t arg_index = 0; arg_index < arg_len; arg_index++) {
         if (arg_index > 0) zbuf_append(&buf, ",");
         char *substituted = type_substitute_generic(args[arg_index], bindings, binding_len);
+        zbuf_append(&buf, substituted);
+        free(substituted);
+      }
+      zbuf_append_char(&buf, '>');
+      free_type_arg_list(args, arg_len);
+      free(name);
+      return buf.data;
+    }
+    free(name);
+  }
+  return z_strdup(type);
+}
+
+static char *type_substitute_static_arg_signature(const Program *program, const char *text, const char *static_type, GenericBinding *bindings, size_t binding_len) {
+  const char *bound = generic_binding_lookup(bindings, binding_len, text);
+  if (bound) return z_strdup(bound);
+  char *canonical = canonical_static_arg_for_type(program, text, static_type ? static_type : "usize");
+  if (canonical) return canonical;
+  return z_strdup(text ? text : "Unknown");
+}
+
+static char *type_substitute_generic_signature(const Program *program, const char *type, GenericBinding *bindings, size_t binding_len) {
+  if (!type) return z_strdup("Unknown");
+  const char *bound = generic_binding_lookup(bindings, binding_len, type);
+  if (bound) return z_strdup(bound);
+  if (strncmp(type, "const ", strlen("const ")) == 0) {
+    char *inner = type_substitute_generic_signature(program, type + strlen("const "), bindings, binding_len);
+    ZBuf buf;
+    zbuf_init(&buf);
+    zbuf_append(&buf, "const ");
+    zbuf_append(&buf, inner);
+    free(inner);
+    return buf.data;
+  }
+  if (type[0] == '[') {
+    const char *close = strchr(type, ']');
+    if (close && close[1]) {
+      char *length = z_strndup(type + 1, (size_t)(close - type - 1));
+      char *substituted_length = type_substitute_static_arg_signature(program, length, "usize", bindings, binding_len);
+      char *inner = type_substitute_generic_signature(program, close + 1, bindings, binding_len);
+      ZBuf buf;
+      zbuf_init(&buf);
+      zbuf_append_char(&buf, '[');
+      zbuf_append(&buf, substituted_length);
+      zbuf_append_char(&buf, ']');
+      zbuf_append(&buf, inner);
+      free(length);
+      free(substituted_length);
+      free(inner);
+      return buf.data;
+    }
+  }
+  const char *generic_names[] = {"Maybe", "Span", "MutSpan", "ref", "mutref", "owned", NULL};
+  for (size_t i = 0; generic_names[i]; i++) {
+    const char *inner = NULL;
+    size_t inner_len = 0;
+    if (type_has_generic_arg(type, generic_names[i], &inner, &inner_len)) {
+      char *inner_text = z_strndup(inner, inner_len);
+      char *substituted = type_substitute_generic_signature(program, inner_text, bindings, binding_len);
+      ZBuf buf;
+      zbuf_init(&buf);
+      zbuf_appendf(&buf, "%s<%s>", generic_names[i], substituted);
+      free(inner_text);
+      free(substituted);
+      return buf.data;
+    }
+  }
+  const char *open = strchr(type, '<');
+  const char *close = strrchr(type, '>');
+  if (open && close && close[1] == 0 && open > type) {
+    char *name = z_strndup(type, (size_t)(open - type));
+    char **args = NULL;
+    size_t arg_len = 0;
+    if (type_generic_arg_list(type, name, &args, &arg_len)) {
+      const ParamVec *type_params = generic_type_params_for_name(program, name);
+      ZBuf buf;
+      zbuf_init(&buf);
+      zbuf_append(&buf, name);
+      zbuf_append_char(&buf, '<');
+      for (size_t arg_index = 0; arg_index < arg_len; arg_index++) {
+        if (arg_index > 0) zbuf_append(&buf, ",");
+        const Param *param = type_params && arg_index < type_params->len ? &type_params->items[arg_index] : NULL;
+        char *substituted = param && param->is_static
+          ? type_substitute_static_arg_signature(program, args[arg_index], param->type, bindings, binding_len)
+          : type_substitute_generic_signature(program, args[arg_index], bindings, binding_len);
         zbuf_append(&buf, substituted);
         free(substituted);
       }
@@ -4835,7 +4922,7 @@ static const char *expr_type(CheckContext *ctx, const Program *program, const Ex
           ZDiag ignored = {0};
           if (build_generic_bindings(ctx, program, fun, expr, scope, &ignored, bindings, fun->type_params.len, NULL)) {
             static char generic_return_type[160];
-            char *substituted = type_substitute_generic(fun->return_type, bindings, fun->type_params.len);
+            char *substituted = type_substitute_generic_signature(program, fun->return_type, bindings, fun->type_params.len);
             snprintf(generic_return_type, sizeof(generic_return_type), "%s", substituted);
             free(substituted);
             generic_bindings_free(bindings, fun->type_params.len);
@@ -4857,7 +4944,7 @@ static const char *expr_type(CheckContext *ctx, const Program *program, const Ex
           ZDiag ignored = {0};
           if (build_shape_method_bindings(ctx, program, shape, method, expr, scope, NULL, &ignored, &bindings, &binding_len)) {
             static char method_return_type[160];
-            char *substituted = type_substitute_generic(method->return_type, bindings, binding_len);
+            char *substituted = type_substitute_generic_signature(program, method->return_type, bindings, binding_len);
             snprintf(method_return_type, sizeof(method_return_type), "%s", substituted);
             free(substituted);
             generic_bindings_free(bindings, binding_len);
@@ -4878,7 +4965,7 @@ static const char *expr_type(CheckContext *ctx, const Program *program, const Ex
             return required->return_type ? required->return_type : "Void";
           }
           static char constrained_return_type[160];
-          char *substituted = type_substitute_generic(required->return_type, interface_bindings, interface_binding_len);
+          char *substituted = type_substitute_generic_signature(program, required->return_type, interface_bindings, interface_binding_len);
           snprintf(constrained_return_type, sizeof(constrained_return_type), "%s", substituted);
           free(substituted);
           generic_bindings_free(interface_bindings, interface_binding_len);
@@ -5572,7 +5659,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           size_t method_binding_len = 0;
           if (!build_shape_method_bindings(ctx, program, shape, method, expr, scope, expected, diag, &method_bindings, &method_binding_len)) return false;
           for (size_t i = 0; i < expr->args.len; i++) {
-            char *expected_type = type_substitute_generic(method->params.items[i].type, method_bindings, method_binding_len);
+            char *expected_type = type_substitute_generic_signature(program, method->params.items[i].type, method_bindings, method_binding_len);
             if (!check_expr_expected(ctx, program, expr->args.items[i], scope, diag, expected_type)) {
               free(expected_type);
               generic_bindings_free(method_bindings, method_binding_len);
@@ -5603,7 +5690,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
               return false;
             }
           }
-          char *return_type = type_substitute_generic(method->return_type, method_bindings, method_binding_len);
+          char *return_type = type_substitute_generic_signature(program, method->return_type, method_bindings, method_binding_len);
           set_expr_resolved_type(expr, return_type);
           if (!apply_checked_call_storage_effects(ctx, program, expr, scope, diag)) {
             free(return_type);
@@ -5688,7 +5775,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
               free(self_arg_type);
               return false;
             }
-            char *expected_self = type_substitute_generic(receiver_method->params.items[0].type, receiver_bindings, receiver_binding_len);
+            char *expected_self = type_substitute_generic_signature(program, receiver_method->params.items[0].type, receiver_bindings, receiver_binding_len);
             if (!types_compatible_in_scope(program, scope, expected_self, self_arg_type)) {
               bool ok = set_diag_detail(diag, 3047, "receiver Self type does not match method receiver", receiver->line, receiver->column, expected_self, self_arg_type, "call the method on a receiver with the expected shape instantiation");
               free(expected_self);
@@ -5700,7 +5787,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
             free(expected_self);
             free(self_arg_type);
             for (size_t i = 0; i < expr->args.len; i++) {
-              char *expected_type = type_substitute_generic(receiver_method->params.items[i + 1].type, receiver_bindings, receiver_binding_len);
+              char *expected_type = type_substitute_generic_signature(program, receiver_method->params.items[i + 1].type, receiver_bindings, receiver_binding_len);
               if (!check_expr_expected(ctx, program, expr->args.items[i], scope, diag, expected_type)) {
                 free(expected_type);
                 generic_bindings_free(receiver_bindings, receiver_binding_len);
@@ -5734,7 +5821,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
                 return false;
               }
             }
-            char *return_type = type_substitute_generic(receiver_method->return_type, receiver_bindings, receiver_binding_len);
+            char *return_type = type_substitute_generic_signature(program, receiver_method->return_type, receiver_bindings, receiver_binding_len);
             set_expr_resolved_type(expr, return_type);
             if (!apply_checked_call_storage_effects(ctx, program, expr, scope, diag)) {
               free(return_type);
@@ -5760,7 +5847,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           size_t interface_binding_len = 0;
           if (!build_constrained_interface_method_bindings(ctx, program, ctx ? ctx->function : NULL, expr, scope, interface, required, expected, NULL, 0, diag, &interface_bindings, &interface_binding_len)) return false;
           for (size_t i = 0; i < expr->args.len; i++) {
-            char *expected_type = type_substitute_generic(required->params.items[i].type, interface_bindings, interface_binding_len);
+            char *expected_type = type_substitute_generic_signature(program, required->params.items[i].type, interface_bindings, interface_binding_len);
             if (!check_expr_expected(ctx, program, expr->args.items[i], scope, diag, expected_type)) {
               free(expected_type);
               generic_bindings_free(interface_bindings, interface_binding_len);
@@ -5789,7 +5876,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
               return false;
             }
           }
-          char *return_type = type_substitute_generic(required->return_type, interface_bindings, interface_binding_len);
+          char *return_type = type_substitute_generic_signature(program, required->return_type, interface_bindings, interface_binding_len);
           set_expr_resolved_type(expr, return_type);
           if (!apply_checked_call_storage_effects(ctx, program, expr, scope, diag)) {
             free(return_type);
@@ -5834,7 +5921,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
             return false;
           }
           for (size_t i = 0; i < expr->args.len; i++) {
-            char *expected_type = i < fun->params.len ? type_substitute_generic(fun->params.items[i].type, bindings, fun->type_params.len) : z_strdup("Unknown");
+            char *expected_type = i < fun->params.len ? type_substitute_generic_signature(program, fun->params.items[i].type, bindings, fun->type_params.len) : z_strdup("Unknown");
             if (!check_expr_expected(ctx, program, expr->args.items[i], scope, diag, expected_type)) {
               free(expected_type);
               generic_bindings_free(bindings, fun->type_params.len);
@@ -5865,7 +5952,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
               return false;
             }
           }
-          char *return_type = type_substitute_generic(fun->return_type, bindings, fun->type_params.len);
+          char *return_type = type_substitute_generic_signature(program, fun->return_type, bindings, fun->type_params.len);
           set_expr_resolved_type(expr, return_type);
           if (!apply_checked_call_storage_effects(ctx, program, expr, scope, diag)) {
             free(return_type);
@@ -5882,13 +5969,23 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
       for (size_t i = 0; i < expr->args.len; i++) {
         if (expr->left && expr->left->kind == EXPR_IDENT) {
           const Function *fun = find_function(program, expr->left->text);
-          if (fun && i < fun->params.len && !check_expr_expected(ctx, program, expr->args.items[i], scope, diag, fun->params.items[i].type)) return false;
-          if (fun && i < fun->params.len && !types_compatible_in_scope(program, scope, fun->params.items[i].type, expr_type(ctx, program, expr->args.items[i], scope))) {
-            char message[256];
-            snprintf(message, sizeof(message), "argument %zu to '%s' has incompatible type", i + 1, fun->name);
-            return set_diag_detail(diag, 3005, message, expr->args.items[i]->line, expr->args.items[i]->column, fun->params.items[i].type, expr_type(ctx, program, expr->args.items[i], scope), "pass a compatible value");
+          if (fun && i < fun->params.len) {
+            char *expected_type = type_substitute_generic_signature(program, fun->params.items[i].type, NULL, 0);
+            if (!check_expr_expected(ctx, program, expr->args.items[i], scope, diag, expected_type)) {
+              free(expected_type);
+              return false;
+            }
+            const char *actual_type = expr_type(ctx, program, expr->args.items[i], scope);
+            if (!types_compatible_in_scope(program, scope, expected_type, actual_type)) {
+              char message[256];
+              snprintf(message, sizeof(message), "argument %zu to '%s' has incompatible type", i + 1, fun->name);
+              bool ok = set_diag_detail(diag, 3005, message, expr->args.items[i]->line, expr->args.items[i]->column, expected_type, actual_type, "pass a compatible value");
+              free(expected_type);
+              return ok;
+            }
+            mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
+            free(expected_type);
           }
-          if (fun && i < fun->params.len) mark_owned_move_if_needed(expr->args.items[i], scope, fun->params.items[i].type);
         } else {
           if (!check_expr(ctx, program, expr->args.items[i], scope, diag)) return false;
         }

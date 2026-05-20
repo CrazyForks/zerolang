@@ -1052,6 +1052,20 @@ assert.equal(genericStaticMethodShadowBody.diagnostics[0].code, "TYP001");
 assert.match(genericStaticMethodShadowBody.diagnostics[0].expected, /ref<\[N\]i32>/);
 assert.match(genericStaticMethodShadowBody.diagnostics[0].actual, /ref<\[4\]i32>/);
 
+const genericStaticShadowSignatureConstJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/generic-static-shadow-signature-const.0"]).catch((error) => error);
+assert.notEqual(genericStaticShadowSignatureConstJson.code, 0);
+const genericStaticShadowSignatureConstBody = JSON.parse(genericStaticShadowSignatureConstJson.stdout);
+assert.equal(genericStaticShadowSignatureConstBody.diagnostics[0].code, "TYP001");
+assert.match(genericStaticShadowSignatureConstBody.diagnostics[0].expected, /ref<\[4\]i32>/);
+assert.match(genericStaticShadowSignatureConstBody.diagnostics[0].actual, /ref<\[N\]i32>/);
+
+const genericStaticShadowSignatureConstGenericJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/generic-static-shadow-signature-const-generic.0"]).catch((error) => error);
+assert.notEqual(genericStaticShadowSignatureConstGenericJson.code, 0);
+const genericStaticShadowSignatureConstGenericBody = JSON.parse(genericStaticShadowSignatureConstGenericJson.stdout);
+assert.equal(genericStaticShadowSignatureConstGenericBody.diagnostics[0].code, "TYP001");
+assert.match(genericStaticShadowSignatureConstGenericBody.diagnostics[0].expected, /ref<\[4\]i32>/);
+assert.match(genericStaticShadowSignatureConstGenericBody.diagnostics[0].actual, /ref<\[N\]i32>/);
+
 const genericTypeParamShadowStaticJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/generic-type-param-shadow-static-arg.0"]).catch((error) => error);
 assert.notEqual(genericTypeParamShadowStaticJson.code, 0);
 const genericTypeParamShadowStaticBody = JSON.parse(genericTypeParamShadowStaticJson.stdout);
