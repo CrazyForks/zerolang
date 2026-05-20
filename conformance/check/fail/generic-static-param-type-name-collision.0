@@ -1,0 +1,9 @@
+shape Foo {
+    value: i32,
+}
+
+fun caller<static Foo: usize>() -> Void {
+}
+
+pub fun main() -> Void {
+}

@@ -8675,12 +8675,11 @@ static bool validate_type_param_names_do_not_shadow(const Program *program, cons
     if (strcmp(param->name, "Self") == 0) {
       return set_diag_detail(diag, 3008, "generic type parameter shadows Self type", param->line, param->column, "generic type parameter name other than Self", "'Self' is reserved for method Self types", "rename the generic parameter");
     }
-    if (param->is_static) continue;
     const char *kind = visible_concrete_type_name_kind(program, param->name);
     if (kind) {
       char actual[160];
       snprintf(actual, sizeof(actual), "'%s' already names a %s", param->name, kind);
-      return set_diag_detail(diag, 3008, "generic type parameter shadows concrete type name", param->line, param->column, "generic type parameter name that does not reuse a visible type", actual, "rename the generic parameter or the concrete type");
+      return set_diag_detail(diag, 3008, param->is_static ? "generic static parameter shadows concrete type name" : "generic type parameter shadows concrete type name", param->line, param->column, "generic parameter name that does not reuse a visible type", actual, "rename the generic parameter or the concrete type");
     }
   }
   return true;
