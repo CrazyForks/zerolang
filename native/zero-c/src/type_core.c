@@ -12,6 +12,10 @@ struct ZTypeNode {
   union {
     char *name;
     struct {
+      char *name;
+      ZTypeBinderId binder;
+    } binder;
+    struct {
       ZTypeId inner;
     } constant;
     struct {
@@ -35,6 +39,7 @@ typedef struct {
 typedef struct {
   const char *text;
   size_t cursor;
+  const ZTypeBinderScope *scope;
   ZTypeParseError *error;
 } TypeParser;
 
@@ -83,6 +88,28 @@ static void type_buf_append_char(TypeBuf *buf, char ch) {
   type_buf_append_len(buf, &ch, 1);
 }
 
+static const ZTypeBinderDecl *type_binder_lookup(const ZTypeBinderScope *scope, const char *name, ZTypeBinderKind kind) {
+  if (!scope || !name) return NULL;
+  for (size_t i = 0; i < scope->len; i++) {
+    const ZTypeBinderDecl *decl = &scope->items[i];
+    if (decl->kind == kind && decl->id != Z_TYPE_BINDER_ID_INVALID && decl->name && strcmp(decl->name, name) == 0) return decl;
+  }
+  return NULL;
+}
+
+static bool static_value_from_binder(const ZTypeBinderDecl *decl, ZStaticValue *out) {
+  if (!decl || decl->kind != Z_TYPE_BINDER_STATIC || decl->id == Z_TYPE_BINDER_ID_INVALID || !out) return false;
+  *out = (ZStaticValue){.kind = Z_STATIC_VALUE_BINDER, .text = type_strdup(decl->name ? decl->name : ""), .binder = decl->id};
+  return true;
+}
+
+bool z_static_value_clone(const ZStaticValue *source, ZStaticValue *out) {
+  if (!source || !out) return false;
+  *out = *source;
+  out->text = type_strdup(source->text ? source->text : "");
+  return true;
+}
+
 void z_static_value_free(ZStaticValue *value) {
   if (!value) return;
   free(value->text);
@@ -99,6 +126,8 @@ static void type_node_free(ZTypeNode *node) {
   if (!node) return;
   if (node->kind == Z_TYPE_NODE_NAME) {
     free(node->as.name);
+  } else if (node->kind == Z_TYPE_NODE_BINDER) {
+    free(node->as.binder.name);
   } else if (node->kind == Z_TYPE_NODE_ARRAY) {
     z_static_value_free(&node->as.array.length);
   } else if (node->kind == Z_TYPE_NODE_APPLY) {
@@ -135,6 +164,44 @@ static ZTypeId type_arena_add(ZTypeArena *arena, ZTypeNode node) {
   arena->nodes[arena->len] = node;
   arena->len++;
   return (ZTypeId)arena->len;
+}
+
+ZTypeId z_type_make_name(ZTypeArena *arena, const char *name) {
+  return type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_NAME, .as.name = type_strdup(name ? name : "Unknown")});
+}
+
+ZTypeId z_type_make_binder(ZTypeArena *arena, const char *name, ZTypeBinderId binder) {
+  if (binder == Z_TYPE_BINDER_ID_INVALID) return Z_TYPE_ID_INVALID;
+  return type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_BINDER, .as.binder = {.name = type_strdup(name ? name : ""), .binder = binder}});
+}
+
+ZTypeId z_type_make_const(ZTypeArena *arena, ZTypeId inner) {
+  if (inner == Z_TYPE_ID_INVALID) return Z_TYPE_ID_INVALID;
+  return type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_CONST, .as.constant = {.inner = inner}});
+}
+
+ZTypeId z_type_make_array(ZTypeArena *arena, const ZStaticValue *length, ZTypeId element) {
+  if (element == Z_TYPE_ID_INVALID) return Z_TYPE_ID_INVALID;
+  ZStaticValue length_copy = {0};
+  if (!z_static_value_clone(length, &length_copy)) return Z_TYPE_ID_INVALID;
+  return type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_ARRAY, .as.array = {.length = length_copy, .element = element}});
+}
+
+ZTypeId z_type_make_apply(ZTypeArena *arena, const char *name, const ZTypeArg *args, size_t arg_len) {
+  if (!name || !name[0] || (arg_len > 0 && !args)) return Z_TYPE_ID_INVALID;
+  ZTypeArg *arg_copy = NULL;
+  if (arg_len > 0) {
+    arg_copy = type_reallocarray(NULL, arg_len, sizeof(ZTypeArg));
+    for (size_t i = 0; i < arg_len; i++) {
+      arg_copy[i] = args[i];
+      if (args[i].kind == Z_TYPE_ARG_STATIC && !z_static_value_clone(&args[i].as.static_value, &arg_copy[i].as.static_value)) {
+        for (size_t j = 0; j < i; j++) type_arg_free(&arg_copy[j]);
+        free(arg_copy);
+        return Z_TYPE_ID_INVALID;
+      }
+    }
+  }
+  return type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_APPLY, .as.apply = {.name = type_strdup(name), .args = arg_copy, .arg_len = arg_len}});
 }
 
 static void type_arena_rewind(ZTypeArena *arena, size_t len) {
@@ -287,7 +354,7 @@ static bool parse_number_text(const char *text, unsigned long long *out) {
   return true;
 }
 
-bool z_static_value_parse(const char *text, ZStaticValue *out, ZTypeParseError *error) {
+static bool static_value_parse_inner(const char *text, const ZTypeBinderScope *scope, ZStaticValue *out, ZTypeParseError *error) {
   if (out) *out = (ZStaticValue){0};
   if (error) *error = (ZTypeParseError){0};
   char *trimmed = trimmed_copy(text ? text : "", strlen(text ? text : ""));
@@ -312,13 +379,24 @@ bool z_static_value_parse(const char *text, ZStaticValue *out, ZTypeParseError *
     return true;
   }
   if (static_symbol_text(trimmed)) {
-    if (out) *out = (ZStaticValue){.kind = Z_STATIC_VALUE_SYMBOL, .text = type_strdup(trimmed)};
+    const ZTypeBinderDecl *binder = type_binder_lookup(scope, trimmed, Z_TYPE_BINDER_STATIC);
+    if (binder) {
+      if (out) static_value_from_binder(binder, out);
+    } else if (out) *out = (ZStaticValue){.kind = Z_STATIC_VALUE_SYMBOL, .text = type_strdup(trimmed)};
     free(trimmed);
     return true;
   }
   if (error) snprintf(error->message, sizeof(error->message), "%s", "invalid static value");
   free(trimmed);
   return false;
+}
+
+bool z_static_value_parse(const char *text, ZStaticValue *out, ZTypeParseError *error) {
+  return static_value_parse_inner(text, NULL, out, error);
+}
+
+bool z_static_value_parse_with_binders(const char *text, const ZTypeBinderScope *scope, ZStaticValue *out, ZTypeParseError *error) {
+  return static_value_parse_inner(text, scope, out, error);
 }
 
 char *z_static_value_format(const ZStaticValue *value) {
@@ -353,7 +431,7 @@ static bool parse_type(TypeParser *parser, ZTypeArena *arena, ZTypeId *out);
 
 static bool parser_parse_static_value(TypeParser *parser, const char *text, size_t start, ZStaticValue *out) {
   ZTypeParseError static_error = {0};
-  bool ok = z_static_value_parse(text, out, &static_error);
+  bool ok = z_static_value_parse_with_binders(text, parser ? parser->scope : NULL, out, &static_error);
   if (!ok && parser && parser->error) {
     *parser->error = static_error;
     parser->error->offset = start + static_error.offset;
@@ -364,6 +442,24 @@ static bool parser_parse_static_value(TypeParser *parser, const char *text, size
 static bool parse_type_arg(TypeParser *parser, ZTypeArena *arena, ZTypeArg *out) {
   parser_skip_ws(parser);
   size_t start = parser->cursor;
+  if (ident_start(parser->text[parser->cursor])) {
+    size_t ident_end = parser->cursor + 1;
+    while (ident_continue(parser->text[ident_end])) ident_end++;
+    char *name = type_strndup(parser->text + parser->cursor, ident_end - parser->cursor);
+    const ZTypeBinderDecl *static_binder = type_binder_lookup(parser->scope, name, Z_TYPE_BINDER_STATIC);
+    size_t after_name = ident_end;
+    while (isspace((unsigned char)parser->text[after_name])) after_name++;
+    if (static_binder && (parser->text[after_name] == ',' || parser->text[after_name] == '>')) {
+      parser->cursor = after_name;
+      ZStaticValue value = {0};
+      bool ok = static_value_from_binder(static_binder, &value);
+      free(name);
+      if (!ok) return false;
+      *out = (ZTypeArg){.kind = Z_TYPE_ARG_STATIC, .as.static_value = value};
+      return true;
+    }
+    free(name);
+  }
   if (isdigit((unsigned char)parser->text[parser->cursor]) ||
       parser_keyword(parser, "true") ||
       parser_keyword(parser, "false")) {
@@ -402,7 +498,7 @@ static bool parse_type(TypeParser *parser, ZTypeArena *arena, ZTypeId *out) {
     parser->cursor += 5;
     ZTypeId inner = Z_TYPE_ID_INVALID;
     if (!parse_type(parser, arena, &inner)) return false;
-    *out = type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_CONST, .as.constant = {.inner = inner}});
+    *out = z_type_make_const(arena, inner);
     return *out != Z_TYPE_ID_INVALID;
   }
   if (parser->text[parser->cursor] == '[') {
@@ -422,7 +518,12 @@ static bool parse_type(TypeParser *parser, ZTypeArena *arena, ZTypeId *out) {
   if (!name) return false;
   parser_skip_ws(parser);
   if (parser->text[parser->cursor] != '<') {
-    *out = type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_NAME, .as.name = name});
+    const ZTypeBinderDecl *binder = type_binder_lookup(parser->scope, name, Z_TYPE_BINDER_TYPE);
+    if (binder) {
+      *out = type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_BINDER, .as.binder = {.name = name, .binder = binder->id}});
+    } else {
+      *out = type_arena_add(arena, (ZTypeNode){.kind = Z_TYPE_NODE_NAME, .as.name = name});
+    }
     return *out != Z_TYPE_ID_INVALID;
   }
   parser->cursor++;
@@ -471,14 +572,14 @@ static bool parse_type(TypeParser *parser, ZTypeArena *arena, ZTypeId *out) {
   return false;
 }
 
-bool z_type_parse(ZTypeArena *arena, const char *text, ZTypeId *out, ZTypeParseError *error) {
+static bool type_parse_inner(ZTypeArena *arena, const char *text, const ZTypeBinderScope *scope, ZTypeId *out, ZTypeParseError *error) {
   if (out) *out = Z_TYPE_ID_INVALID;
   if (error) *error = (ZTypeParseError){0};
   if (!arena) {
     if (error) snprintf(error->message, sizeof(error->message), "%s", "type arena is required");
     return false;
   }
-  TypeParser parser = {.text = text ? text : "", .error = error};
+  TypeParser parser = {.text = text ? text : "", .scope = scope, .error = error};
   ZTypeId type = Z_TYPE_ID_INVALID;
   size_t start_len = arena->len;
   if (!parse_type(&parser, arena, &type)) {
@@ -493,6 +594,14 @@ bool z_type_parse(ZTypeArena *arena, const char *text, ZTypeId *out, ZTypeParseE
   }
   if (out) *out = type;
   return true;
+}
+
+bool z_type_parse(ZTypeArena *arena, const char *text, ZTypeId *out, ZTypeParseError *error) {
+  return type_parse_inner(arena, text, NULL, out, error);
+}
+
+bool z_type_parse_with_binders(ZTypeArena *arena, const char *text, const ZTypeBinderScope *scope, ZTypeId *out, ZTypeParseError *error) {
+  return type_parse_inner(arena, text, scope, out, error);
 }
 
 static void type_format_into(const ZTypeArena *arena, ZTypeId type, TypeBuf *buf);
@@ -515,6 +624,8 @@ static void type_format_into(const ZTypeArena *arena, ZTypeId type, TypeBuf *buf
   }
   if (node->kind == Z_TYPE_NODE_NAME) {
     type_buf_append(buf, node->as.name);
+  } else if (node->kind == Z_TYPE_NODE_BINDER) {
+    type_buf_append(buf, node->as.binder.name);
   } else if (node->kind == Z_TYPE_NODE_CONST) {
     type_buf_append(buf, "const ");
     type_format_into(arena, node->as.constant.inner, buf);
@@ -540,17 +651,18 @@ char *z_type_format(const ZTypeArena *arena, ZTypeId type) {
   return buf.data ? buf.data : type_strdup("");
 }
 
-static bool static_value_equal(const ZStaticValue *left, const ZStaticValue *right) {
+bool z_static_value_equal(const ZStaticValue *left, const ZStaticValue *right) {
   if (!left || !right || left->kind != right->kind) return false;
   if (left->kind == Z_STATIC_VALUE_NUMBER) return left->number == right->number;
   if (left->kind == Z_STATIC_VALUE_BOOL) return left->boolean == right->boolean;
+  if (left->kind == Z_STATIC_VALUE_BINDER) return left->binder == right->binder;
   return strcmp(left->text ? left->text : "", right->text ? right->text : "") == 0;
 }
 
 static bool type_arg_equal(const ZTypeArena *arena, const ZTypeArg *left, const ZTypeArg *right) {
   if (!left || !right || left->kind != right->kind) return false;
   if (left->kind == Z_TYPE_ARG_TYPE) return z_type_equal(arena, left->as.type, right->as.type);
-  return static_value_equal(&left->as.static_value, &right->as.static_value);
+  return z_static_value_equal(&left->as.static_value, &right->as.static_value);
 }
 
 bool z_type_equal(const ZTypeArena *arena, ZTypeId left, ZTypeId right) {
@@ -559,9 +671,10 @@ bool z_type_equal(const ZTypeArena *arena, ZTypeId left, ZTypeId right) {
   const ZTypeNode *right_node = type_node(arena, right);
   if (!left_node || !right_node || left_node->kind != right_node->kind) return false;
   if (left_node->kind == Z_TYPE_NODE_NAME) return strcmp(left_node->as.name, right_node->as.name) == 0;
+  if (left_node->kind == Z_TYPE_NODE_BINDER) return left_node->as.binder.binder == right_node->as.binder.binder;
   if (left_node->kind == Z_TYPE_NODE_CONST) return z_type_equal(arena, left_node->as.constant.inner, right_node->as.constant.inner);
   if (left_node->kind == Z_TYPE_NODE_ARRAY) {
-    return static_value_equal(&left_node->as.array.length, &right_node->as.array.length) &&
+    return z_static_value_equal(&left_node->as.array.length, &right_node->as.array.length) &&
            z_type_equal(arena, left_node->as.array.element, right_node->as.array.element);
   }
   if (left_node->kind == Z_TYPE_NODE_APPLY) {
@@ -598,6 +711,7 @@ static uint64_t static_value_hash(const ZStaticValue *value) {
   hash = hash_u64(hash, (uint64_t)value->kind);
   if (value->kind == Z_STATIC_VALUE_NUMBER) return hash_u64(hash, value->number);
   if (value->kind == Z_STATIC_VALUE_BOOL) return hash_u64(hash, value->boolean ? 1 : 0);
+  if (value->kind == Z_STATIC_VALUE_BINDER) return hash_u64(hash, value->binder);
   return hash_bytes(hash, value->text);
 }
 
@@ -615,6 +729,7 @@ uint64_t z_type_hash(const ZTypeArena *arena, ZTypeId type) {
   if (!node) return hash;
   hash = hash_u64(hash, (uint64_t)node->kind);
   if (node->kind == Z_TYPE_NODE_NAME) return hash_bytes(hash, node->as.name);
+  if (node->kind == Z_TYPE_NODE_BINDER) return hash_u64(hash, node->as.binder.binder);
   if (node->kind == Z_TYPE_NODE_CONST) return hash_u64(hash, z_type_hash(arena, node->as.constant.inner));
   if (node->kind == Z_TYPE_NODE_ARRAY) {
     hash = hash_u64(hash, static_value_hash(&node->as.array.length));
@@ -627,4 +742,49 @@ uint64_t z_type_hash(const ZTypeArena *arena, ZTypeId type) {
     return hash;
   }
   return hash;
+}
+
+ZTypeNodeKind z_type_kind(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  return node ? node->kind : Z_TYPE_NODE_INVALID;
+}
+
+const char *z_type_name(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  if (!node) return NULL;
+  if (node->kind == Z_TYPE_NODE_NAME) return node->as.name;
+  if (node->kind == Z_TYPE_NODE_BINDER) return node->as.binder.name;
+  if (node->kind == Z_TYPE_NODE_APPLY) return node->as.apply.name;
+  return NULL;
+}
+
+ZTypeBinderId z_type_binder(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  return node && node->kind == Z_TYPE_NODE_BINDER ? node->as.binder.binder : Z_TYPE_BINDER_ID_INVALID;
+}
+
+ZTypeId z_type_const_inner(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  return node && node->kind == Z_TYPE_NODE_CONST ? node->as.constant.inner : Z_TYPE_ID_INVALID;
+}
+
+const ZStaticValue *z_type_array_length(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  return node && node->kind == Z_TYPE_NODE_ARRAY ? &node->as.array.length : NULL;
+}
+
+ZTypeId z_type_array_element(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  return node && node->kind == Z_TYPE_NODE_ARRAY ? node->as.array.element : Z_TYPE_ID_INVALID;
+}
+
+size_t z_type_apply_arg_len(const ZTypeArena *arena, ZTypeId type) {
+  const ZTypeNode *node = type_node(arena, type);
+  return node && node->kind == Z_TYPE_NODE_APPLY ? node->as.apply.arg_len : 0;
+}
+
+const ZTypeArg *z_type_apply_arg(const ZTypeArena *arena, ZTypeId type, size_t index) {
+  const ZTypeNode *node = type_node(arena, type);
+  if (!node || node->kind != Z_TYPE_NODE_APPLY || index >= node->as.apply.arg_len) return NULL;
+  return &node->as.apply.args[index];
 }

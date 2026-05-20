@@ -12,6 +12,7 @@ const exePath = process.platform === "win32" ? `${tmpBase}.exe` : tmpBase;
 
 const source = String.raw`
 #include "type_core.h"
+#include "unify.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -28,6 +29,16 @@ static ZTypeId parse_or_die(ZTypeArena *arena, const char *text) {
   ZTypeParseError error = {0};
   if (!z_type_parse(arena, text, &type, &error)) {
     fprintf(stderr, "failed to parse '%s': %s at %zu\n", text, error.message, error.offset);
+    exit(1);
+  }
+  return type;
+}
+
+static ZTypeId parse_with_binders_or_die(ZTypeArena *arena, const char *text, const ZTypeBinderScope *scope) {
+  ZTypeId type = Z_TYPE_ID_INVALID;
+  ZTypeParseError error = {0};
+  if (!z_type_parse_with_binders(arena, text, scope, &type, &error)) {
+    fprintf(stderr, "failed to parse '%s' with binders: %s at %zu\n", text, error.message, error.offset);
     exit(1);
   }
   return type;
@@ -133,6 +144,77 @@ static void expect_speculative_arg_rewinds(void) {
   z_type_arena_free(&arena);
 }
 
+static void expect_binder_identity(void) {
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeBinderDecl left_decl[] = {
+    {.name = "T", .kind = Z_TYPE_BINDER_TYPE, .id = 1},
+    {.name = "N", .kind = Z_TYPE_BINDER_STATIC, .id = 2, .static_type = "usize"},
+  };
+  ZTypeBinderDecl right_decl[] = {
+    {.name = "T", .kind = Z_TYPE_BINDER_TYPE, .id = 3},
+    {.name = "N", .kind = Z_TYPE_BINDER_STATIC, .id = 4, .static_type = "usize"},
+  };
+  ZTypeBinderScope left_scope = {.items = left_decl, .len = 2};
+  ZTypeBinderScope right_scope = {.items = right_decl, .len = 2};
+  ZTypeId left = parse_with_binders_or_die(&arena, "FixedVec<T,N>", &left_scope);
+  ZTypeId right = parse_with_binders_or_die(&arena, "FixedVec<T,N>", &right_scope);
+  expect(!z_type_equal(&arena, left, right), "binder identity collapsed to names");
+  char *formatted = z_type_format(&arena, left);
+  expect(formatted && strcmp(formatted, "FixedVec<T,N>") == 0, "binder formatting changed public type text");
+  free(formatted);
+  z_type_arena_free(&arena);
+}
+
+static void expect_unify_and_substitute(void) {
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeBinderDecl decls[] = {
+    {.name = "T", .kind = Z_TYPE_BINDER_TYPE, .id = 10},
+    {.name = "N", .kind = Z_TYPE_BINDER_STATIC, .id = 11, .static_type = "usize"},
+  };
+  ZTypeBinderScope scope = {.items = decls, .len = 2};
+  ZTypeId pattern = parse_with_binders_or_die(&arena, "FixedVec<T,N>", &scope);
+  ZTypeId actual = parse_or_die(&arena, "FixedVec<u8,0x4>");
+
+  ZUnifyTrace trace;
+  z_unify_trace_init(&trace);
+  expect(z_type_unify(&arena, pattern, actual, &trace), "binder pattern did not unify with concrete type");
+  const ZUnifyBinding *type_binding = z_unify_trace_lookup(&trace, 10, Z_UNIFY_BINDING_TYPE);
+  const ZUnifyBinding *static_binding = z_unify_trace_lookup(&trace, 11, Z_UNIFY_BINDING_STATIC);
+  expect(type_binding && static_binding && trace.len == 2, "unification trace missed binder facts");
+  char *bound_type = z_type_format(&arena, type_binding->type);
+  expect(bound_type && strcmp(bound_type, "u8") == 0, "type binder bound to wrong type");
+  free(bound_type);
+  expect(static_binding->static_value.kind == Z_STATIC_VALUE_NUMBER && static_binding->static_value.number == 4, "static binder bound to wrong value");
+
+  ZTypeId substituted = Z_TYPE_ID_INVALID;
+  expect(z_type_substitute(&arena, pattern, &trace, &substituted), "substitution failed");
+  expect(z_type_equal(&arena, substituted, actual), "substitution result differs from concrete type");
+  expect(z_type_occurs(&arena, pattern, 10), "occurs check did not find type binder");
+  expect(z_type_occurs(&arena, pattern, 11), "occurs check did not find static binder");
+  expect(!z_type_occurs(&arena, actual, 10), "occurs check found binder in concrete type");
+  z_unify_trace_free(&trace);
+  z_type_arena_free(&arena);
+}
+
+static void expect_occurs_check_rejects_recursive_binding(void) {
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeBinderDecl decls[] = {
+    {.name = "T", .kind = Z_TYPE_BINDER_TYPE, .id = 20},
+  };
+  ZTypeBinderScope scope = {.items = decls, .len = 1};
+  ZTypeId pattern = parse_with_binders_or_die(&arena, "T", &scope);
+  ZTypeId recursive = parse_with_binders_or_die(&arena, "Maybe<T>", &scope);
+  ZUnifyTrace trace;
+  z_unify_trace_init(&trace);
+  expect(!z_type_unify(&arena, pattern, recursive, &trace), "recursive type binding passed occurs check");
+  expect(strstr(trace.message, "occurs") != NULL, "occurs check failure did not leave a trace message");
+  z_unify_trace_free(&trace);
+  z_type_arena_free(&arena);
+}
+
 int main(void) {
   expect_roundtrip("i32", "i32");
   expect_roundtrip("const i32", "const i32");
@@ -163,6 +245,9 @@ int main(void) {
 
   expect_failed_parse_rewinds();
   expect_speculative_arg_rewinds();
+  expect_binder_identity();
+  expect_unify_and_substitute();
+  expect_occurs_check_rejects_recursive_binding();
 
   expect_invalid_type("");
   expect_invalid_type("Span<");
@@ -205,6 +290,7 @@ try {
       path.join(repoRoot, "native/zero-c/src"),
       sourcePath,
       path.join(repoRoot, "native/zero-c/src/type_core.c"),
+      path.join(repoRoot, "native/zero-c/src/unify.c"),
       "-o",
       exePath,
     ],
