@@ -472,6 +472,41 @@ static void parses_core_data_declarations(void) {
   z_free_row_tokens(&tokens);
 }
 
+static void parses_zero_arg_and_uppercase_member_calls(void) {
+  const char *source =
+    "fn answer i32\n"
+    "  ret 42\n"
+    "choice Result\n"
+    "  ok i32\n"
+    "  err String\n"
+    "pub fn main Void\n"
+    "  let value i32 answer()\n"
+    "  let result Result.ok value\n";
+  ZRowTokenVec tokens = {0};
+  ZRowTree tree = {0};
+  Program program = parse_row_program(source, &tokens, &tree);
+
+  expect(program.functions.len == 2, "expected answer and main functions");
+  Function *main_fun = &program.functions.items[1];
+  expect(main_fun->body.len == 2, "expected two main statements");
+  Expr *zero_arg = main_fun->body.items[0]->expr;
+  expect(zero_arg->kind == EXPR_CALL, "expected connected parens to parse as a call");
+  expect(zero_arg->args.len == 0, "expected zero call arguments");
+  expect(zero_arg->left && zero_arg->left->kind == EXPR_IDENT, "expected zero-arg callee identifier");
+  expect(strcmp(zero_arg->left->text, "answer") == 0, "expected answer callee");
+
+  Stmt *constructor_stmt = main_fun->body.items[1];
+  expect(constructor_stmt->type == NULL, "expected uppercase member call not to parse as a type annotation");
+  expect(constructor_stmt->expr->kind == EXPR_CALL, "expected choice constructor call expression");
+  expect(constructor_stmt->expr->left->kind == EXPR_MEMBER, "expected choice constructor member callee");
+  expect(strcmp(constructor_stmt->expr->left->text, "ok") == 0, "expected ok choice constructor");
+  expect(constructor_stmt->expr->args.len == 1, "expected one choice constructor argument");
+
+  z_free_program(&program);
+  z_free_row_tree(&tree);
+  z_free_row_tokens(&tokens);
+}
+
 static void rejects_unbracketed_named_errors(void) {
   const char *source = "fn validate i32 ok Bool ! InvalidInput\n";
   ZDiag diag = {0};
@@ -624,6 +659,7 @@ int main(void) {
   parses_control_flow_statements();
   parses_match_statement();
   parses_core_data_declarations();
+  parses_zero_arg_and_uppercase_member_calls();
   rejects_unbracketed_named_errors();
   rejects_else_after_explicit_else_block();
   rejects_unconsumed_row_expression_tokens();

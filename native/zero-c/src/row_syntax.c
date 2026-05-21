@@ -814,6 +814,21 @@ static Expr *row_parse_primary(RowExprParser *parser) {
       parser->pos = close + 1;
       continue;
     }
+    if (row_token_text(parser->tokens, parser->pos, "(") && row_token_connected_to_previous(parser->tokens, parser->pos)) {
+      const ZRowToken *paren = &parser->tokens->items[parser->pos++];
+      Expr *call = row_new_expr(EXPR_CALL, paren);
+      call->left = expr;
+      while (parser->pos < parser->end && !row_token_text(parser->tokens, parser->pos, ")")) {
+        if (row_token_text(parser->tokens, parser->pos, ",")) {
+          parser->pos++;
+          continue;
+        }
+        row_push_expr(&call->args, row_parse_expr_atom(parser));
+      }
+      row_expect_text(parser->tokens, &parser->pos, parser->end, parser->diag, ")", "expected ')' after call arguments");
+      expr = call;
+      continue;
+    }
     break;
   }
   return expr;
@@ -948,6 +963,8 @@ static bool row_explicit_type_annotation(const ZRowTokenVec *tokens, size_t pos,
   char *type = row_parse_type_text(tokens, &copy, end, &scratch);
   free(type);
   if (scratch.code == 0 && copy < end && row_token_text(tokens, copy, ".") && !row_token_connected_to_previous(tokens, copy)) return false;
+  if (scratch.code == 0 && copy < end && row_token_connected_to_previous(tokens, copy) &&
+      (row_token_text(tokens, copy, ".") || row_token_text(tokens, copy, "(") || row_token_text(tokens, copy, "["))) return false;
   return scratch.code == 0 && copy < end;
 }
 

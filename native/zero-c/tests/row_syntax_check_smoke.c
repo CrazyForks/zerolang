@@ -50,6 +50,22 @@ static void function_calls_check(void) {
   );
 }
 
+static void zero_arg_and_uppercase_member_calls_check(void) {
+  check_row_source(
+    "zero arg and uppercase member calls",
+    "fn answer i32\n"
+    "  ret 42\n"
+    "\n"
+    "choice Result\n"
+    "  ok i32\n"
+    "  err String\n"
+    "\n"
+    "pub fn main Void\n"
+    "  let value i32 answer()\n"
+    "  let result Result.ok value\n"
+  );
+}
+
 static void shapes_and_members_check(void) {
   check_row_source(
     "shapes and members",
@@ -144,6 +160,7 @@ static void named_error_rejects_without_brackets(void) {
 
 int main(void) {
   function_calls_check();
+  zero_arg_and_uppercase_member_calls_check();
   shapes_and_members_check();
   control_flow_check();
   slices_and_casts_check();
