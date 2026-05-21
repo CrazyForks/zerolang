@@ -62,6 +62,20 @@ async function assertDirectRuntimeOrUnsupported(fixture, name, expected) {
   if (expected.file) assert.equal(await readFile(`${outDir}/${expected.file.name}`, "utf8"), expected.file.text);
 }
 
+async function assertDirectRuntimeRequired(fixture, name, expected) {
+  const target = runnableDirectTarget ?? "linux-musl-x64";
+  const out = `${outDir}/${name}`;
+  const build = await execFileAsync(zero, ["build", "--json", "--emit", "exe", "--target", target, fixture, "--out", out]);
+  const body = JSON.parse(build.stdout);
+  assert.equal(body.generatedCBytes, 0);
+  assert.equal(body.legacy, false);
+  if (!runnableDirectTarget) return;
+  const run = await execFileAsync(out, expected.args ?? [], expected.env ? { env: { ...process.env, ...expected.env } } : {});
+  if (expected.stdout instanceof RegExp) assert.match(run.stdout, expected.stdout);
+  else assert.equal(run.stdout, expected.stdout);
+  if (expected.stderr !== undefined) assert.equal(run.stderr, expected.stderr);
+}
+
 async function assertCommonRuntimeOrUnsupported(fixture, name, expected) {
   const target = runnableDirectTarget ?? "linux-musl-x64";
   const out = `${outDir}/${name}`;
@@ -337,6 +351,10 @@ for (const fixture of [
   "conformance/native/pass/generic-nested-calls.0",
   "conformance/native/pass/generic-specialization-reuse.0",
   "conformance/native/pass/generic-multi-specialization.0",
+  "conformance/native/pass/generic-inferred-specialized-call.0",
+  "conformance/native/pass/generic-nested-local-specialization.0",
+  "conformance/native/pass/generic-static-array-specialization.0",
+  "conformance/native/pass/generic-static-forwarded-array-specialization.0",
   "conformance/native/pass/generic-shape-basic.0",
   "conformance/native/pass/generic-shape-multi.0",
   "conformance/native/pass/generic-shape-methods.0",
@@ -409,6 +427,10 @@ for (const fixture of [
   "conformance/native/pass/generic-nested-calls.0",
   "conformance/native/pass/generic-specialization-reuse.0",
   "conformance/native/pass/generic-multi-specialization.0",
+  "conformance/native/pass/generic-inferred-specialized-call.0",
+  "conformance/native/pass/generic-nested-local-specialization.0",
+  "conformance/native/pass/generic-static-array-specialization.0",
+  "conformance/native/pass/generic-static-forwarded-array-specialization.0",
   "conformance/check/pass/generic-shape-basic.0",
   "conformance/check/pass/generic-shape-multi.0",
   "conformance/check/pass/generic-shape-methods.0",
@@ -2140,6 +2162,18 @@ const genericPairSizeBody = JSON.parse(genericPairSize.stdout);
 assert(genericPairSizeBody.genericSpecializations.some((item) => item.name === "z_Pair_i32_u8_"));
 assert(genericPairSizeBody.genericSpecializations.some((item) => item.name === "z_makePair__i32__u8"));
 
+const genericInferredSize = await execFileAsync(zero, ["size", "--json", "conformance/native/pass/generic-inferred-specialized-call.0"]);
+const genericInferredSizeBody = JSON.parse(genericInferredSize.stdout);
+assert(genericInferredSizeBody.genericSpecializations.some((item) => item.name === "z_forward__i32"));
+assert(genericInferredSizeBody.genericSpecializations.some((item) => item.name === "z_identity__i32"));
+assert(!genericInferredSizeBody.genericSpecializations.some((item) => item.name === "z_identity__T"));
+
+const genericStaticForwardedSize = await execFileAsync(zero, ["size", "--json", "conformance/native/pass/generic-static-forwarded-array-specialization.0"]);
+const genericStaticForwardedSizeBody = JSON.parse(genericStaticForwardedSize.stdout);
+assert(genericStaticForwardedSizeBody.genericSpecializations.some((item) => item.name === "z_outer__4"));
+assert(genericStaticForwardedSizeBody.genericSpecializations.some((item) => item.name === "z_inner__4"));
+assert(!genericStaticForwardedSizeBody.genericSpecializations.some((item) => item.name === "z_inner__N"));
+
 const targetsJson = await execFileAsync(zero, ["targets"]);
 const targetsBody = JSON.parse(targetsJson.stdout);
 const linuxMuslTarget = targetsBody.targets.find((item) => item.name === "linux-musl-x64");
@@ -2581,6 +2615,13 @@ for (const runtimeFixture of [
   await assertDirectRuntimeOrUnsupported(...runtimeFixture);
 }
 
+await assertDirectRuntimeRequired("conformance/native/pass/generic-function-basic.0", "generic-function-basic-required", { stdout: "generic function ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/generic-nested-calls.0", "generic-nested-calls-required", { stdout: "generic nested calls ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/generic-inferred-specialized-call.0", "generic-inferred-specialized-call-required", { stdout: "generic inferred specialized call ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/generic-nested-local-specialization.0", "generic-nested-local-specialization-required", { stdout: "generic nested local specialization ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/generic-static-array-specialization.0", "generic-static-array-specialization-required", { stdout: "generic static array specialization ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/generic-static-forwarded-array-specialization.0", "generic-static-forwarded-array-specialization-required", { stdout: "generic static forwarded array specialization ok\n" });
+
 const abiDump = await execFileAsync(zero, ["abi", "dump", "--json", "conformance/native/pass/const-layout.0"]);
 const abiDumpBody = JSON.parse(abiDump.stdout);
 assert.equal(abiDumpBody.schemaVersion, 1);
@@ -2608,6 +2649,10 @@ for (const runtimeFixture of [
   ["conformance/native/pass/generic-mem.0", "generic-mem", { stdout: "generic mem ok\n" }],
   ["conformance/native/pass/generic-nested-calls.0", "generic-nested-calls", { stdout: "generic nested calls ok\n" }],
   ["conformance/native/pass/generic-multi-specialization.0", "generic-multi-specialization", { stdout: "generic multi specialization ok\n" }],
+  ["conformance/native/pass/generic-inferred-specialized-call.0", "generic-inferred-specialized-call", { stdout: "generic inferred specialized call ok\n" }],
+  ["conformance/native/pass/generic-nested-local-specialization.0", "generic-nested-local-specialization", { stdout: "generic nested local specialization ok\n" }],
+  ["conformance/native/pass/generic-static-array-specialization.0", "generic-static-array-specialization", { stdout: "generic static array specialization ok\n" }],
+  ["conformance/native/pass/generic-static-forwarded-array-specialization.0", "generic-static-forwarded-array-specialization", { stdout: "generic static forwarded array specialization ok\n" }],
   ["conformance/native/pass/static-interface-mutref.0", "static-interface-mutref", { stdout: "static interface mutref ok\n" }],
   ["conformance/native/pass/owned-transfer.0", "owned-transfer", { stdout: "owned transfer ok\n" }],
   ["conformance/native/pass/owned-drop-cleanup.0", "owned-drop-cleanup", { stdout: "owned drop cleanup ok\n" }],

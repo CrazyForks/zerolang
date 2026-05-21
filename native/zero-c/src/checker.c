@@ -1880,6 +1880,7 @@ static const Choice *find_choice(const Program *program, const char *name);
 static const Param *find_case(const ParamVec *cases, const char *name);
 static const Function *find_shape_method_decl(const Shape *shape, const char *name);
 static void set_expr_resolved_type(const Expr *expr, const char *type);
+static void set_expr_checked_type_args(const Expr *expr, GenericBinding *bindings, size_t binding_len);
 static const Function *find_namespace_shape_method(const Program *program, const Expr *callee, const Shape **out_shape);
 static const Function *find_constrained_interface_method_in_function(const Program *program, const Function *fun, const Expr *callee, const InterfaceDecl **out_interface);
 static void strip_ref_like_type(const char *type, char *out, size_t out_len);
@@ -4843,6 +4844,32 @@ static void set_expr_resolved_type(const Expr *expr, const char *type) {
   mutable_expr->resolved_type = z_strdup(type ? type : "Unknown");
 }
 
+static void type_arg_vec_free_shallow(TypeArgVec *args) {
+  if (!args) return;
+  for (size_t i = 0; i < args->len; i++) free(args->items[i].type);
+  free(args->items);
+  *args = (TypeArgVec){0};
+}
+
+static void type_arg_vec_push_copy(TypeArgVec *args, const char *type, int line, int column) {
+  if (!args) return;
+  args->items = z_checked_reallocarray(args->items, args->len + 1, sizeof(TypeArg));
+  args->items[args->len++] = (TypeArg){
+    .type = z_strdup(type ? type : "Unknown"),
+    .line = line,
+    .column = column
+  };
+}
+
+static void set_expr_checked_type_args(const Expr *expr, GenericBinding *bindings, size_t binding_len) {
+  if (!expr) return;
+  Expr *mutable_expr = (Expr *)expr;
+  type_arg_vec_free_shallow(&mutable_expr->checked_type_args);
+  for (size_t i = 0; bindings && i < binding_len; i++) {
+    type_arg_vec_push_copy(&mutable_expr->checked_type_args, bindings[i].type, expr->line, expr->column);
+  }
+}
+
 static void set_stmt_resolved_type(const Stmt *stmt, const char *type) {
   if (!stmt) return;
   Stmt *mutable_stmt = (Stmt *)stmt;
@@ -5704,6 +5731,7 @@ static bool check_named_function_call_expected(CheckContext *ctx, const Program 
     mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
     free(expected_type);
   }
+  if (generic) set_expr_checked_type_args(expr, bindings, binding_len);
 
   if (generic && function_has_error_flow(ctx, program, fun)) {
     char actual[160];
@@ -6891,9 +6919,9 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
         if (!count || (count->kind != EXPR_NUMBER && count->kind != EXPR_IDENT)) {
           return set_diag_detail(diag, 3006, "array repeat count must be a compile-time integer", count ? count->line : expr->line, count ? count->column : expr->column, "integer literal or static const", count ? "non-integer expression" : "missing count", "use a literal count such as [0_u8; 16]");
         }
-        char *actual_static = canonical_static_arg(program, count->text);
+        char *actual_static = canonical_static_arg_for_type_in_scope(program, scope, count->text, "usize");
         if (!actual_static) {
-          return set_diag_detail(diag, 3006, "array repeat count must be a compile-time integer", count->line, count->column, "integer literal or static const", count->text ? count->text : "<unknown>", "use a literal count or a top-level integer const");
+          return set_diag_detail(diag, 3006, "array repeat count must be a compile-time integer", count->line, count->column, "integer literal, static const, or static parameter", count->text ? count->text : "<unknown>", "use a literal count, top-level integer const, or integer static parameter");
         }
         snprintf(actual_len_text, sizeof(actual_len_text), "%s", actual_static);
         free(actual_static);

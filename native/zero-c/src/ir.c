@@ -1,5 +1,6 @@
 #include "zero.h"
 #include "specialize.h"
+#include "type_core.h"
 
 #include <limits.h>
 #include <stdint.h>
@@ -90,6 +91,7 @@ static Expr *clone_expr(const Expr *expr) {
   copy->right = clone_expr(expr->right);
   for (size_t i = 0; i < expr->args.len; i++) push_expr_clone(&copy->args, expr->args.items[i]);
   for (size_t i = 0; i < expr->type_args.len; i++) push_type_arg_clone(&copy->type_args, &expr->type_args.items[i]);
+  for (size_t i = 0; i < expr->checked_type_args.len; i++) push_type_arg_clone(&copy->checked_type_args, &expr->checked_type_args.items[i]);
   for (size_t i = 0; i < expr->fields.len; i++) push_field_clone(&copy->fields, &expr->fields.items[i]);
   copy->line = expr->line;
   copy->column = expr->column;
@@ -213,6 +215,17 @@ static bool ir_type_is_direct_fallible_value(IrTypeKind type) {
   return type == IR_TYPE_VOID || type == IR_TYPE_BOOL || type == IR_TYPE_U8 ||
          type == IR_TYPE_U16 || type == IR_TYPE_USIZE || type == IR_TYPE_I32 ||
          type == IR_TYPE_U32;
+}
+
+static IrTypeKind ir_maybe_scalar_element_type(const char *type) {
+  const char *prefix = "Maybe<";
+  size_t prefix_len = strlen(prefix);
+  size_t len = type ? strlen(type) : 0;
+  if (len <= prefix_len + 1 || strncmp(type, prefix, prefix_len) != 0 || type[len - 1] != '>') return IR_TYPE_UNSUPPORTED;
+  char *inner = z_strndup(type + prefix_len, len - prefix_len - 1);
+  IrTypeKind element = ir_type_kind(inner);
+  free(inner);
+  return ir_type_is_value(element) ? element : IR_TYPE_UNSUPPORTED;
 }
 
 static unsigned ir_error_code_for_name(const char *name) {
@@ -547,6 +560,44 @@ static void ir_mark_unsupported(IrProgram *ir, const char *message, int line, in
   snprintf(ir->mir_actual, sizeof(ir->mir_actual), "%s", actual ? actual : "unsupported construct");
   snprintf(ir->mir_help, sizeof(ir->mir_help), "restrict this program to exported primitive arithmetic functions or choose another supported direct target");
   z_backend_blocker_set(&ir->backend_blocker, NULL, NULL, NULL, "lower", ir->mir_actual);
+}
+
+static bool ir_verify_direct_call_value(IrProgram *ir, const IrValue *value) {
+  if (!ir || !ir->mir_valid) return false;
+  if (!value) return true;
+  if (value->kind == IR_VALUE_CALL && value->callee_index >= ir->function_len) {
+    char actual[128];
+    snprintf(actual, sizeof(actual), "callee index %u with %zu MIR function(s)", value->callee_index, ir->function_len);
+    ir_mark_unsupported(ir, "MIR verifier found direct call target outside the function table", value->line, value->column, actual);
+    return false;
+  }
+  for (size_t i = 0; i < value->arg_len; i++) {
+    if (!ir_verify_direct_call_value(ir, value->args[i])) return false;
+  }
+  if (!ir_verify_direct_call_value(ir, value->index)) return false;
+  if (!ir_verify_direct_call_value(ir, value->left)) return false;
+  if (!ir_verify_direct_call_value(ir, value->right)) return false;
+  return true;
+}
+
+static bool ir_verify_direct_call_instrs(IrProgram *ir, const IrInstr *instrs, size_t len) {
+  if (!ir || !ir->mir_valid) return false;
+  for (size_t i = 0; i < len; i++) {
+    const IrInstr *instr = &instrs[i];
+    if (!ir_verify_direct_call_value(ir, instr->value)) return false;
+    if (!ir_verify_direct_call_value(ir, instr->index)) return false;
+    if (!ir_verify_direct_call_instrs(ir, instr->then_instrs, instr->then_len)) return false;
+    if (!ir_verify_direct_call_instrs(ir, instr->else_instrs, instr->else_len)) return false;
+  }
+  return true;
+}
+
+static bool ir_verify_direct_call_targets(IrProgram *ir) {
+  if (!ir || !ir->mir_valid) return false;
+  for (size_t i = 0; i < ir->function_len; i++) {
+    if (!ir_verify_direct_call_instrs(ir, ir->functions[i].instrs, ir->functions[i].instr_len)) return false;
+  }
+  return true;
 }
 
 static bool ir_parse_integer_literal(const char *text, unsigned long long *out) {
@@ -1078,7 +1129,9 @@ static bool ir_compare_op(const char *text, IrCompareOp *out) {
 
 static const TypeArgVec *ir_call_type_args(const Expr *call) {
   if (!call) return NULL;
+  if (call->checked_type_args.len > 0) return &call->checked_type_args;
   if (call->type_args.len > 0) return &call->type_args;
+  if (call->kind == EXPR_CALL && call->left && call->left->checked_type_args.len > 0) return &call->left->checked_type_args;
   if (call->kind == EXPR_CALL && call->left && call->left->type_args.len > 0) return &call->left->type_args;
   return &call->type_args;
 }
@@ -1086,6 +1139,8 @@ static const TypeArgVec *ir_call_type_args(const Expr *call) {
 static char *ir_specialized_function_name(const Function *fun, const TypeArgVec *type_args) {
   return z_specialized_function_name(fun, type_args);
 }
+
+static char *ir_specialize_type_text(const char *type, const Function *fun, const TypeArgVec *type_args);
 
 static const char *ir_substitute_type_param(const Function *fun, const TypeArgVec *type_args, const char *type) {
   if (!fun || !type_args || !type) return type;
@@ -1164,6 +1219,16 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       value->int_value = parsed;
       *out = value;
       return true;
+    }
+    case EXPR_NULL: {
+      if (ir_type_kind(expr->resolved_type) == IR_TYPE_MAYBE_SCALAR) {
+        IrTypeKind element = ir_maybe_scalar_element_type(expr->resolved_type);
+        if (element == IR_TYPE_UNSUPPORTED) element = IR_TYPE_I32;
+        *out = ir_new_maybe_scalar_literal(ir, false, element, 0, expr->line, expr->column);
+        return true;
+      }
+      ir_mark_unsupported(ir, "direct backend null expression type is unsupported", expr->line, expr->column, expr->resolved_type ? expr->resolved_type : "unknown null type");
+      return false;
     }
     case EXPR_IDENT: {
       const IrLocal *local = ir_function_find_local(fun, expr->text);
@@ -2440,14 +2505,17 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         ir_mark_unsupported(ir, "direct backend call argument count does not match callee", expr->line, expr->column, callee->name);
         return false;
       }
-      const char *return_type_text = generic_call ? ir_substitute_type_param(callee, type_args, callee->return_type) : callee->return_type;
+      char *specialized_return_type = generic_call ? ir_specialize_type_text(callee->return_type, callee, type_args) : NULL;
+      const char *return_type_text = generic_call ? specialized_return_type : callee->return_type;
       IrTypeKind type = ir_type_kind(return_type_text);
       if (callee->raises && !ir_type_is_direct_fallible_value(type)) {
+        free(specialized_return_type);
         free(specialized_name);
         ir_mark_unsupported(ir, "direct backend fallible call return type is unsupported", expr->line, expr->column, callee->return_type);
         return false;
       }
       if (!callee->raises && type != IR_TYPE_VOID && !ir_type_is_direct_abi(type)) {
+        free(specialized_return_type);
         free(specialized_name);
         ir_mark_unsupported(ir, "direct backend call return type is unsupported", expr->line, expr->column, callee->return_type);
         return false;
@@ -2456,9 +2524,12 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       value->callee_index = callee_index;
       value->element_type = type;
       for (size_t i = 0; i < expr->args.len; i++) {
-        const char *param_type_text = generic_call ? ir_substitute_type_param(callee, type_args, callee->params.items[i].type) : callee->params.items[i].type;
+        char *specialized_param_type = generic_call ? ir_specialize_type_text(callee->params.items[i].type, callee, type_args) : NULL;
+        const char *param_type_text = generic_call ? specialized_param_type : callee->params.items[i].type;
         IrTypeKind expected = ir_type_kind(param_type_text);
         if (!ir_type_is_direct_abi(expected)) {
+          free(specialized_param_type);
+          free(specialized_return_type);
           free(specialized_name);
           ir_free_value(value);
           ir_mark_unsupported(ir, "direct backend call parameter type is unsupported", callee->params.items[i].line, callee->params.items[i].column, callee->params.items[i].type);
@@ -2466,6 +2537,8 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         }
         IrValue *arg = NULL;
         if (!ir_lower_expr(program, ir, fun, expr->args.items[i], &arg)) {
+          free(specialized_param_type);
+          free(specialized_return_type);
           free(specialized_name);
           ir_free_value(value);
           return false;
@@ -2473,12 +2546,16 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         if (arg->type != expected) {
           ir_free_value(arg);
           ir_free_value(value);
+          free(specialized_param_type);
+          free(specialized_return_type);
           free(specialized_name);
           ir_mark_unsupported(ir, "direct backend call argument type does not match parameter", expr->args.items[i]->line, expr->args.items[i]->column, callee->params.items[i].type);
           return false;
         }
         ir_value_push_arg(ir, value, arg);
+        free(specialized_param_type);
       }
+      free(specialized_return_type);
       free(specialized_name);
       *out = value;
       return true;
@@ -3158,8 +3235,120 @@ static void ir_free_param_vec_shallow(ParamVec *params) {
   if (params) *params = (ParamVec){0};
 }
 
+static const char *ir_specialization_arg_for_binder(const Function *fun, const TypeArgVec *type_args, ZTypeBinderId binder) {
+  if (!fun || !type_args || binder == Z_TYPE_BINDER_ID_INVALID) return NULL;
+  size_t index = (size_t)binder - 1;
+  if (index >= fun->type_params.len || index >= type_args->len) return NULL;
+  return type_args->items[index].type;
+}
+
+static ZTypeBinderDecl *ir_specialization_binder_decls(const Function *fun) {
+  if (!fun || fun->type_params.len == 0) return NULL;
+  ZTypeBinderDecl *decls = z_checked_calloc(fun->type_params.len, sizeof(ZTypeBinderDecl));
+  for (size_t i = 0; i < fun->type_params.len; i++) {
+    decls[i] = (ZTypeBinderDecl){
+      .name = fun->type_params.items[i].name,
+      .kind = fun->type_params.items[i].is_static ? Z_TYPE_BINDER_STATIC : Z_TYPE_BINDER_TYPE,
+      .id = (ZTypeBinderId)(i + 1),
+      .static_type = fun->type_params.items[i].type ? fun->type_params.items[i].type : "usize"
+    };
+  }
+  return decls;
+}
+
+static void ir_specialize_type_core_into(ZBuf *buf, const ZTypeArena *arena, ZTypeId type, const Function *fun, const TypeArgVec *type_args);
+
+static void ir_specialize_static_value_into(ZBuf *buf, const ZStaticValue *value, const Function *fun, const TypeArgVec *type_args) {
+  if (value && value->kind == Z_STATIC_VALUE_BINDER) {
+    const char *arg = ir_specialization_arg_for_binder(fun, type_args, value->binder);
+    if (arg) {
+      zbuf_append(buf, arg);
+      return;
+    }
+  }
+  char *formatted = z_static_value_format(value);
+  zbuf_append(buf, formatted ? formatted : "Unknown");
+  free(formatted);
+}
+
+static void ir_specialize_type_arg_into(ZBuf *buf, const ZTypeArena *arena, const ZTypeArg *arg, const Function *fun, const TypeArgVec *type_args) {
+  if (!arg) return;
+  if (arg->kind == Z_TYPE_ARG_STATIC) {
+    ir_specialize_static_value_into(buf, &arg->as.static_value, fun, type_args);
+  } else {
+    ir_specialize_type_core_into(buf, arena, arg->as.type, fun, type_args);
+  }
+}
+
+static void ir_specialize_type_core_into(ZBuf *buf, const ZTypeArena *arena, ZTypeId type, const Function *fun, const TypeArgVec *type_args) {
+  ZTypeNodeKind kind = z_type_kind(arena, type);
+  if (kind == Z_TYPE_NODE_NAME) {
+    zbuf_append(buf, z_type_name(arena, type) ? z_type_name(arena, type) : "Unknown");
+  } else if (kind == Z_TYPE_NODE_BINDER) {
+    const char *arg = ir_specialization_arg_for_binder(fun, type_args, z_type_binder(arena, type));
+    zbuf_append(buf, arg ? arg : (z_type_name(arena, type) ? z_type_name(arena, type) : "Unknown"));
+  } else if (kind == Z_TYPE_NODE_CONST) {
+    zbuf_append(buf, "const ");
+    ir_specialize_type_core_into(buf, arena, z_type_const_inner(arena, type), fun, type_args);
+  } else if (kind == Z_TYPE_NODE_ARRAY) {
+    zbuf_append_char(buf, '[');
+    ir_specialize_static_value_into(buf, z_type_array_length(arena, type), fun, type_args);
+    zbuf_append_char(buf, ']');
+    ir_specialize_type_core_into(buf, arena, z_type_array_element(arena, type), fun, type_args);
+  } else if (kind == Z_TYPE_NODE_APPLY) {
+    zbuf_append(buf, z_type_name(arena, type) ? z_type_name(arena, type) : "Unknown");
+    zbuf_append_char(buf, '<');
+    for (size_t i = 0; i < z_type_apply_arg_len(arena, type); i++) {
+      if (i > 0) zbuf_append_char(buf, ',');
+      ir_specialize_type_arg_into(buf, arena, z_type_apply_arg(arena, type, i), fun, type_args);
+    }
+    zbuf_append_char(buf, '>');
+  } else {
+    zbuf_append(buf, "Unknown");
+  }
+}
+
+static char *ir_specialize_static_arg_text(const char *text, const Function *fun, const TypeArgVec *type_args) {
+  if (!text || !fun || !type_args || fun->type_params.len == 0) return NULL;
+  ZTypeBinderDecl *decls = ir_specialization_binder_decls(fun);
+  ZTypeBinderScope scope = {.items = decls, .len = fun->type_params.len};
+  ZStaticValue value = {0};
+  ZTypeParseError error = {0};
+  if (!z_static_value_parse_with_binders(text, &scope, &value, &error) || value.kind != Z_STATIC_VALUE_BINDER) {
+    z_static_value_free(&value);
+    free(decls);
+    return NULL;
+  }
+  ZBuf buf;
+  zbuf_init(&buf);
+  ir_specialize_static_value_into(&buf, &value, fun, type_args);
+  z_static_value_free(&value);
+  free(decls);
+  return buf.data ? buf.data : z_strdup("");
+}
+
 static char *ir_specialize_type_text(const char *type, const Function *fun, const TypeArgVec *type_args) {
-  return z_strdup(ir_substitute_type_param(fun, type_args, type));
+  if (!type) return z_strdup("Unknown");
+  if (!fun || !type_args || fun->type_params.len == 0) return z_strdup(type);
+  char *static_arg = ir_specialize_static_arg_text(type, fun, type_args);
+  if (static_arg) return static_arg;
+  ZTypeBinderDecl *decls = ir_specialization_binder_decls(fun);
+  ZTypeBinderScope scope = {.items = decls, .len = fun->type_params.len};
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeId parsed = Z_TYPE_ID_INVALID;
+  ZTypeParseError error = {0};
+  if (!z_type_parse_with_binders(&arena, type, &scope, &parsed, &error)) {
+    z_type_arena_free(&arena);
+    free(decls);
+    return z_strdup(ir_substitute_type_param(fun, type_args, type));
+  }
+  ZBuf buf;
+  zbuf_init(&buf);
+  ir_specialize_type_core_into(&buf, &arena, parsed, fun, type_args);
+  z_type_arena_free(&arena);
+  free(decls);
+  return buf.data ? buf.data : z_strdup("");
 }
 
 static void ir_specialize_stmt_types(StmtVec *body, const Function *fun, const TypeArgVec *type_args);
@@ -3175,6 +3364,11 @@ static void ir_specialize_expr_types(Expr *expr, const Function *fun, const Type
     char *substituted = ir_specialize_type_text(expr->type_args.items[i].type, fun, type_args);
     free(expr->type_args.items[i].type);
     expr->type_args.items[i].type = substituted;
+  }
+  for (size_t i = 0; i < expr->checked_type_args.len; i++) {
+    char *substituted = ir_specialize_type_text(expr->checked_type_args.items[i].type, fun, type_args);
+    free(expr->checked_type_args.items[i].type);
+    expr->checked_type_args.items[i].type = substituted;
   }
   ir_specialize_expr_types(expr->left, fun, type_args);
   ir_specialize_expr_types(expr->right, fun, type_args);
@@ -3345,6 +3539,16 @@ static void ir_lower_direct_backend_subset(IrProgram *ir, const Program *program
       z_free_program(&temp_program);
       return;
     }
+  }
+  if (!ir_verify_direct_call_targets(ir)) {
+    free(order);
+    for (size_t stable_index = 0; stable_index < direct_functions.len; stable_index++) free(stable_ids[stable_index]);
+    free(stable_ids);
+    z_specialization_plan_free(&specialization_plan);
+    Program temp_program = {0};
+    temp_program.functions = direct_functions;
+    z_free_program(&temp_program);
+    return;
   }
   free(order);
   for (size_t stable_index = 0; stable_index < direct_functions.len; stable_index++) free(stable_ids[stable_index]);

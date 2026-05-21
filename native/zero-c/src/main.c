@@ -7441,7 +7441,9 @@ static bool direct_bindings_complete(const DirectGenericBinding *bindings, size_
 
 static const TypeArgVec *direct_call_type_args(const Expr *call) {
   if (!call) return NULL;
+  if (call->checked_type_args.len > 0) return &call->checked_type_args;
   if (call->type_args.len > 0) return &call->type_args;
+  if (call->kind == EXPR_CALL && call->left && call->left->checked_type_args.len > 0) return &call->left->checked_type_args;
   if (call->left && call->left->type_args.len > 0) return &call->left->type_args;
   return NULL;
 }
@@ -7617,8 +7619,8 @@ static void append_direct_generic_specializations_json(ZBuf *buf, const Program 
           direct_collect_shape_specializations_from_type(buf, &state, program, fun->params.items[param_index].type, NULL, 0);
         }
         direct_collect_shape_specializations_from_stmt_vec(buf, &state, program, &fun->body, NULL, 0);
+        direct_collect_generic_function_specializations_from_stmt_vec(buf, &state, program, &fun->body, NULL, 0);
       }
-      direct_collect_generic_function_specializations_from_stmt_vec(buf, &state, program, &fun->body, NULL, 0);
     }
   }
   zbuf_append(buf, "]");

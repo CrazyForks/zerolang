@@ -1055,6 +1055,8 @@ static void free_expr(Expr *expr) {
   free(expr->args.items);
   for (size_t i = 0; i < expr->type_args.len; i++) free(expr->type_args.items[i].type);
   free(expr->type_args.items);
+  for (size_t i = 0; i < expr->checked_type_args.len; i++) free(expr->checked_type_args.items[i].type);
+  free(expr->checked_type_args.items);
   for (size_t i = 0; i < expr->fields.len; i++) {
     free(expr->fields.items[i].name);
     free_expr(expr->fields.items[i].value);

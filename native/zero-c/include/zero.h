@@ -141,6 +141,7 @@ struct Expr {
   Expr *right;
   ExprVec args;
   TypeArgVec type_args;
+  TypeArgVec checked_type_args;
   FieldInitVec fields;
   int line;
   int column;
