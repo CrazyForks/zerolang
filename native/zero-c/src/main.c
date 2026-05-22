@@ -3,6 +3,7 @@
 #endif
 
 #include "zero.h"
+#include "std_sig.h"
 
 #include <ctype.h>
 #include <dirent.h>
@@ -752,16 +753,6 @@ typedef struct {
 
 typedef struct {
   const char *name;
-  const char *return_type;
-  int arg_count;
-  const char *capability;
-  const char *target_support;
-  const char *allocation_behavior;
-  bool emits_runtime_helper;
-} StdHelperInfo;
-
-typedef struct {
-  const char *name;
   const char *symbol;
   const char *category;
   int estimated_direct_bytes;
@@ -804,157 +795,7 @@ typedef struct {
   size_t unknown_capacity_sites;
 } MemoryModelSummary;
 
-static const StdHelperInfo std_helpers[] = {
-  {"std.args.len", "usize", 0, "args", "host", "borrows process argv", true},
-  {"std.args.get", "Maybe<String>", 1, "args", "host", "borrows process argv", true},
-  {"std.env.get", "Maybe<String>", 1, "env", "host", "borrows process environment", true},
-  {"std.path.basename", "String", 1, "path", "target-neutral", "borrows input path", true},
-  {"std.path.dirname", "String", 1, "path", "target-neutral", "borrows/static path view", true},
-  {"std.path.extension", "String", 1, "path", "target-neutral", "borrows input path", true},
-  {"std.path.join", "Maybe<String>", 3, "path", "target-neutral", "writes caller buffer", true},
-  {"std.path.normalize", "Maybe<String>", 2, "path", "target-neutral", "writes caller buffer", true},
-  {"std.path.relative", "Maybe<String>", 3, "path", "target-neutral", "writes caller buffer", true},
-  {"std.io.bufferedReader", "BufferedReader", 1, "memory", "target-neutral", "uses caller buffer", true},
-  {"std.io.bufferedWriter", "BufferedWriter", 1, "memory", "target-neutral", "uses caller buffer", true},
-  {"std.io.readerCapacity", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.io.writerCapacity", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.io.copy", "usize", 2, "memory", "target-neutral", "writes caller buffer", true},
-  {"std.codec.crc32", "u32", 1, "codec", "target-neutral", "no allocation", true},
-  {"std.codec.crc32Bytes", "u32", 1, "codec", "target-neutral", "no allocation", true},
-  {"std.codec.encodedVarintLen", "usize", 1, "codec", "target-neutral", "no allocation", true},
-  {"std.codec.readU8", "u8", 1, "codec", "target-neutral", "little-endian byte read", true},
-  {"std.codec.readU16", "u16", 1, "codec", "target-neutral", "little-endian byte read", true},
-  {"std.codec.readU32", "u32", 1, "codec", "target-neutral", "little-endian byte read", true},
-  {"std.codec.writeU16", "u32", 1, "codec", "target-neutral", "little-endian byte write primitive", true},
-  {"std.codec.writeU32", "u32", 1, "codec", "target-neutral", "little-endian byte write primitive", true},
-  {"std.codec.base64EncodedLen", "usize", 1, "codec", "target-neutral", "no allocation", true},
-  {"std.codec.base64Encode", "Maybe<String>", 2, "codec", "target-neutral", "writes caller buffer", true},
-  {"std.codec.hexEncode", "Maybe<String>", 2, "codec", "target-neutral", "writes caller buffer", true},
-  {"std.codec.utf8Valid", "Bool", 1, "codec", "target-neutral", "no allocation", true},
-  {"std.codec.urlEncode", "Maybe<String>", 2, "codec", "target-neutral", "writes caller buffer", true},
-  {"std.mem.copy", "usize", 2, "memory", "target-neutral", "writes caller buffer", true},
-  {"std.mem.fill", "usize", 2, "memory", "target-neutral", "writes caller buffer", true},
-  {"std.mem.eql", "Bool", 2, "memory", "target-neutral", "no allocation", true},
-  {"std.mem.span", "Span<u8>", 1, "memory", "target-neutral", "borrows input bytes", true},
-  {"std.mem.len", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.get", "Maybe<T>", 2, "memory", "target-neutral", "bounds-checked indexed read", false},
-  {"std.mem.eqlBytes", "Bool", 2, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.nullAlloc", "NullAlloc", 0, "alloc", "target-neutral", "never allocates", true},
-  {"std.mem.fixedBufAlloc", "FixedBufAlloc", 1, "alloc", "target-neutral", "uses caller buffer", true},
-  {"std.mem.arena", "FixedBufAlloc", 1, "alloc", "target-neutral", "bulk allocation over caller buffer", true},
-  {"std.mem.pageAlloc", "PageAlloc", 0, "alloc", "host", "explicit page allocator handle", false},
-  {"std.mem.generalAlloc", "GeneralAlloc", 0, "alloc", "host", "explicit general allocator handle", false},
-  {"std.mem.allocBytes", "Maybe<MutSpan<u8>>", 2, "alloc", "target-neutral", "uses explicit allocator only", true},
-  {"std.mem.byteBuf", "Maybe<owned<ByteBuf>>", 2, "alloc", "target-neutral", "uses explicit allocator only", true},
-  {"std.mem.vec", "Vec", 1, "memory", "target-neutral", "uses caller storage", true},
-  {"std.mem.vecPush", "Bool", 2, "memory", "target-neutral", "writes caller storage", true},
-  {"std.mem.vecLen", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.vecCapacity", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.bufBytes", "MutSpan<u8>", 1, "memory", "target-neutral", "borrows owned buffer", false},
-  {"std.mem.bufLen", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.reset", "Void", 1, "alloc", "target-neutral", "resets explicit allocator", true},
-  {"std.mem.capacity", "usize", 1, "alloc", "target-neutral", "no allocation", false},
-  {"std.mem.mapEmpty", "Map", 0, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.mapLen", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.setEmpty", "Set", 0, "memory", "target-neutral", "no allocation", false},
-  {"std.mem.setLen", "usize", 1, "memory", "target-neutral", "no allocation", false},
-  {"std.parse.isAsciiDigit", "Bool", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.isAsciiAlpha", "Bool", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.isIdentifierStart", "Bool", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.isWhitespace", "Bool", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.scanDigits", "usize", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.scanIdentifier", "usize", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.parseU8", "Maybe<u8>", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.parseU16", "Maybe<u16>", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.parse.parseU32", "Maybe<u32>", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.json.validate", "Bool", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.json.validateBytes", "Bool", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.json.parse", "Maybe<JsonDoc>", 2, "alloc", "target-neutral", "uses explicit allocator only", true},
-  {"std.json.parseBytes", "Maybe<JsonDoc>", 2, "alloc", "target-neutral", "uses explicit allocator only", true},
-  {"std.json.streamTokens", "usize", 1, "parse", "target-neutral", "streaming token count", true},
-  {"std.json.streamTokensBytes", "usize", 1, "parse", "target-neutral", "streaming token count", true},
-  {"std.json.writeString", "Maybe<String>", 2, "parse", "target-neutral", "writes caller buffer", true},
-  {"std.json.decodeBoundary", "String", 0, "parse", "target-neutral", "typed decode boundary metadata", false},
-  {"std.time.ms", "Duration", 1, "time", "target-neutral", "no allocation", true},
-  {"std.time.seconds", "Duration", 1, "time", "target-neutral", "no allocation", true},
-  {"std.time.add", "Duration", 2, "time", "target-neutral", "no allocation", true},
-  {"std.time.monotonic", "Duration", 0, "time", "host", "no allocation", true},
-  {"std.time.wallSeconds", "i64", 0, "time", "host", "no allocation", true},
-  {"std.time.sub", "Duration", 2, "time", "target-neutral", "no allocation", true},
-  {"std.time.asMsFloor", "i32", 1, "time", "target-neutral", "no allocation", true},
-  {"std.time.min", "Duration", 2, "time", "target-neutral", "no allocation", true},
-  {"std.time.max", "Duration", 2, "time", "target-neutral", "no allocation", true},
-  {"std.time.lessThan", "Bool", 2, "time", "target-neutral", "no allocation", true},
-  {"std.rand.seed", "RandSource", 1, "rand", "target-neutral", "deterministic test source", true},
-  {"std.rand.nextU32", "u32", 1, "rand", "target-neutral", "updates explicit source", true},
-  {"std.rand.entropyU32", "u32", 0, "rand", "host", "target entropy source", true},
-  {"std.proc.spawn", "ProcStatus", 1, "proc", "host", "explicit process capability", true},
-  {"std.proc.exitCode", "i32", 1, "proc", "host", "no allocation", false},
-  {"std.crypto.hash32", "u32", 1, "codec", "target-neutral", "no allocation", true},
-  {"std.crypto.hmac32", "u32", 2, "codec", "target-neutral", "no allocation", true},
-  {"std.crypto.constantTimeEql", "Bool", 2, "memory", "target-neutral", "no allocation", true},
-  {"std.crypto.secureRandomU32", "u32", 0, "rand", "host", "target entropy source", true},
-  {"std.net.host", "Net", 0, "net", "host", "explicit network capability handle", false},
-  {"std.net.address", "Address", 2, "net", "target-neutral", "no allocation", true},
-  {"std.net.dnsName", "String", 1, "net", "target-neutral", "borrows address host", false},
-  {"std.net.connect", "Maybe<Conn>", 2, "net", "host", "no allocation; returns unopened bootstrap handle", true},
-  {"std.net.listen", "Maybe<Listener>", 2, "net", "host", "no allocation; returns unopened bootstrap handle", true},
-  {"std.net.withTimeout", "Address", 2, "net", "target-neutral", "no allocation", true},
-  {"std.http.parseMethod", "HttpMethod", 1, "parse", "target-neutral", "no allocation", true},
-  {"std.http.client", "HttpClient", 1, "net", "host", "borrows network capability", true},
-  {"std.http.server", "HttpServer", 2, "net", "host", "borrows network capability", true},
-  {"std.http.fetch", "HttpResult", 4, "net", "host-runtime", "writes caller response buffer from raw HTTP request envelope", true},
-  {"std.http.resultOk", "Bool", 1, "net", "host-runtime", "inspects HTTP result metadata", true},
-  {"std.http.resultStatus", "u16", 1, "net", "host-runtime", "reads HTTP status metadata", true},
-  {"std.http.resultBodyLen", "usize", 1, "net", "host-runtime", "reads response body length metadata", true},
-  {"std.http.resultError", "HttpError", 1, "net", "host-runtime", "reads transport error metadata", true},
-  {"std.http.errorNone", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorInvalidUrl", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorUnsupportedProtocol", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorDns", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorConnect", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorTls", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorTimeout", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorTooLarge", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorProviderUnavailable", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorIo", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.errorInvalidRequest", "HttpError", 0, "none", "target-neutral", "no allocation", false},
-  {"std.http.responseLen", "usize", 1, "memory", "host-runtime", "reads response bytes written into caller storage", true},
-  {"std.http.responseHeadersLen", "usize", 1, "memory", "host-runtime", "reads response header byte length", true},
-  {"std.http.responseBodyOffset", "usize", 1, "memory", "host-runtime", "reads body start offset within caller response storage", true},
-  {"std.http.headerValue", "HttpHeaderValue", 2, "memory", "host-runtime", "locates a response header value by name", true},
-  {"std.http.headerFound", "Bool", 1, "memory", "host-runtime", "inspects header-value metadata", true},
-  {"std.http.headerOffset", "usize", 1, "memory", "host-runtime", "reads header-value offset metadata", true},
-  {"std.http.headerLen", "usize", 1, "memory", "host-runtime", "reads header-value length metadata", true},
-  {"std.http.tlsBoundary", "String", 0, "net", "host", "declares platform-or-C-library TLS boundary", false},
-  {"std.fs.host", "Fs", 0, "fs", "host", "no allocation", true},
-  {"std.fs.open", "Maybe<owned<File>>", 2, "fs", "host", "owned file handle", true},
-  {"std.fs.openOrRaise", "owned<File>", 2, "fs", "host", "owned file handle", true},
-  {"std.fs.create", "Maybe<owned<File>>", 2, "fs", "host", "owned file handle", true},
-  {"std.fs.createOrRaise", "owned<File>", 2, "fs", "host", "owned file handle", true},
-  {"std.fs.read", "usize", 2, "fs", "host", "writes caller buffer", true},
-  {"std.fs.readOrRaise", "usize", 2, "fs", "host", "writes caller buffer", true},
-  {"std.fs.write", "usize", 2, "fs", "host", "writes bytes to path", true},
-  {"std.fs.writeAll", "Bool", 2, "fs", "host", "writes file resource bytes", true},
-  {"std.fs.writeAllOrRaise", "Void", 2, "fs", "host", "no allocation", true},
-  {"std.fs.fileLenOrRaise", "usize", 1, "fs", "host", "no allocation", true},
-  {"std.fs.readAll", "Maybe<owned<ByteBuf>>", 4, "fs", "host", "uses explicit allocator only", true},
-  {"std.fs.readAllOrRaise", "owned<ByteBuf>", 4, "fs", "host", "uses explicit allocator only", true},
-  {"std.fs.exists", "Bool", 1, "fs", "host", "no allocation", true},
-  {"std.fs.readBytes", "Maybe<usize>", 2, "fs", "host", "writes caller buffer", true},
-  {"std.fs.writeBytes", "Maybe<usize>", 2, "fs", "host", "no allocation", true},
-  {"std.fs.isDir", "Bool", 1, "fs", "host", "no allocation", true},
-  {"std.fs.makeDir", "Bool", 1, "fs", "host", "creates a directory", true},
-  {"std.fs.removeDir", "Bool", 1, "fs", "host", "removes a directory", true},
-  {"std.fs.remove", "Bool", 1, "fs", "host", "no allocation", true},
-  {"std.fs.rename", "Bool", 2, "fs", "host", "no allocation", true},
-  {"std.fs.dirEntryCount", "Maybe<usize>", 1, "fs", "host", "directory traversal", true},
-  {"std.fs.tempName", "Maybe<String>", 2, "fs", "host", "writes caller buffer", true},
-  {"std.fs.atomicWrite", "Bool", 3, "fs", "host", "uses caller-provided temp path", true},
-  {"std.fs.fileLen", "Maybe<usize>", 1, "fs", "host", "no allocation", true},
-  {"std.fs.close", "Void", 1, "fs", "host", "closes owned file handle", true},
-  {NULL, NULL, 0, NULL, NULL, NULL, false},
-};
+
 
 static const CompilerRuntimeHelperInfo compiler_runtime_helpers[] = {
   {"runtime.arenaPlan", "compiler_runtime_arena_plan", "alloc", 160},
@@ -1002,24 +843,8 @@ static const CompilerRuntimeHelperInfo compiler_runtime_helpers[] = {
   {NULL, NULL, NULL, 0},
 };
 
-static const StdHelperInfo *find_std_helper(const char *name) {
-  if (!name) return NULL;
-  for (size_t i = 0; std_helpers[i].name; i++) {
-    if (strcmp(std_helpers[i].name, name) == 0) return &std_helpers[i];
-  }
-  return NULL;
-}
-
-static int find_std_helper_index(const char *name) {
-  if (!name) return -1;
-  for (size_t i = 0; std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (strcmp(std_helpers[i].name, name) == 0) return (int)i;
-  }
-  return -1;
-}
-
 static void helper_summary_mark(HelperUseSummary *helpers, const char *name) {
-  int index = find_std_helper_index(name);
+  int index = z_std_helper_index(name, STD_HELPER_MAX);
   if (helpers && index >= 0) helpers->used[index] = true;
 }
 
@@ -1283,7 +1108,7 @@ static MemoryModelSummary memory_model_summary_from_program(const Program *progr
 
 static void collect_capabilities_from_std_name(const char *name, CapabilitySummary *caps) {
   if (!name || !caps) return;
-  const StdHelperInfo *helper = find_std_helper(name);
+  const ZStdHelperInfo *helper = z_std_helper_find(name);
   if (helper) {
     capability_summary_set(caps, helper->capability);
     return;
@@ -6930,23 +6755,23 @@ static int run_tests_direct(const Command *command, const SourceInput *input, co
   return ok ? 0 : 1;
 }
 
-static void append_std_helper_object_json(ZBuf *buf, const StdHelperInfo *helper, bool include_estimate);
+static void append_std_helper_object_json(ZBuf *buf, const ZStdHelperInfo *helper, bool include_estimate);
 
 static void append_stdlib_helpers_json(ZBuf *buf) {
   zbuf_append(buf, "[");
-  for (size_t i = 0; std_helpers[i].name; i++) {
+  for (size_t i = 0; z_std_helpers[i].name; i++) {
     if (i > 0) zbuf_append(buf, ", ");
-    append_std_helper_object_json(buf, &std_helpers[i], false);
+    append_std_helper_object_json(buf, &z_std_helpers[i], false);
   }
   zbuf_append(buf, "]");
 }
 
-static int helper_estimated_direct_bytes(const StdHelperInfo *helper) {
+static int helper_estimated_direct_bytes(const ZStdHelperInfo *helper) {
   if (!helper || !helper->emits_runtime_helper) return 0;
   return 96 + (int)strlen(helper->name) * 4 + helper->arg_count * 16;
 }
 
-static const char *helper_module_name(const StdHelperInfo *helper) {
+static const char *helper_module_name(const ZStdHelperInfo *helper) {
   const char *name = helper && helper->name ? helper->name : "";
   if (strncmp(name, "std.args.", strlen("std.args.")) == 0) return "std.args";
   if (strncmp(name, "std.env.", strlen("std.env.")) == 0) return "std.env";
@@ -6966,7 +6791,7 @@ static const char *helper_module_name(const StdHelperInfo *helper) {
   return "std";
 }
 
-static const char *helper_error_behavior(const StdHelperInfo *helper) {
+static const char *helper_error_behavior(const ZStdHelperInfo *helper) {
   if (!helper) return "unknown";
   if (strstr(helper->name, "OrRaise")) return "![NotFound TooLarge Io]";
   if (helper->return_type && strncmp(helper->return_type, "Maybe<", strlen("Maybe<")) == 0) return "returns null on failure";
@@ -6974,7 +6799,7 @@ static const char *helper_error_behavior(const StdHelperInfo *helper) {
   return "infallible";
 }
 
-static const char *helper_ownership_notes(const StdHelperInfo *helper) {
+static const char *helper_ownership_notes(const ZStdHelperInfo *helper) {
   if (!helper) return "unknown";
   if (helper->return_type && strstr(helper->return_type, "owned<File>")) return "returns owned file handle; close or deterministic cleanup";
   if (helper->return_type && strstr(helper->return_type, "owned<ByteBuf>")) return "returns owned byte buffer backed by the explicit allocator";
@@ -6984,7 +6809,7 @@ static const char *helper_ownership_notes(const StdHelperInfo *helper) {
   return "no ownership transfer";
 }
 
-static const char *helper_example_path(const StdHelperInfo *helper) {
+static const char *helper_example_path(const ZStdHelperInfo *helper) {
   const char *module = helper_module_name(helper);
   if (strcmp(module, "std.mem") == 0) return "examples/memory-primitives.0";
   if (strcmp(module, "std.io") == 0 || strcmp(module, "std.path") == 0) return "examples/std-path-io.0";
@@ -6998,7 +6823,7 @@ static const char *helper_example_path(const StdHelperInfo *helper) {
   return "examples/README.md";
 }
 
-static void append_std_helper_object_json(ZBuf *buf, const StdHelperInfo *helper, bool include_estimate) {
+static void append_std_helper_object_json(ZBuf *buf, const ZStdHelperInfo *helper, bool include_estimate) {
   zbuf_append(buf, "{\"name\":");
   append_json_string(buf, helper->name);
   zbuf_append(buf, ",\"module\":");
@@ -7034,10 +6859,10 @@ static void append_std_helper_object_json(ZBuf *buf, const StdHelperInfo *helper
 static void append_used_stdlib_helpers_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
   bool wrote = false;
-  for (size_t i = 0; std_helpers[i].name && i < STD_HELPER_MAX; i++) {
+  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
     if (!helpers || !helpers->used[i]) continue;
     if (wrote) zbuf_append(buf, ", ");
-    append_std_helper_object_json(buf, &std_helpers[i], true);
+    append_std_helper_object_json(buf, &z_std_helpers[i], true);
     wrote = true;
   }
   zbuf_append(buf, "]");
@@ -7050,9 +6875,9 @@ static void append_top_emitted_helpers_json(ZBuf *buf, const HelperUseSummary *h
   for (int rank = 0; rank < 5; rank++) {
     int best_index = -1;
     int best_bytes = -1;
-    for (size_t i = 0; std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-      if (!helpers || !helpers->used[i] || emitted[i] || !std_helpers[i].emits_runtime_helper) continue;
-      int bytes = helper_estimated_direct_bytes(&std_helpers[i]);
+    for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
+      if (!helpers || !helpers->used[i] || emitted[i] || !z_std_helpers[i].emits_runtime_helper) continue;
+      int bytes = helper_estimated_direct_bytes(&z_std_helpers[i]);
       if (bytes > best_bytes) {
         best_bytes = bytes;
         best_index = (int)i;
@@ -7061,7 +6886,7 @@ static void append_top_emitted_helpers_json(ZBuf *buf, const HelperUseSummary *h
     if (best_index < 0) break;
     emitted[best_index] = true;
     if (wrote) zbuf_append(buf, ", ");
-    append_std_helper_object_json(buf, &std_helpers[best_index], true);
+    append_std_helper_object_json(buf, &z_std_helpers[best_index], true);
     wrote = true;
   }
   zbuf_append(buf, "]");
@@ -7149,17 +6974,17 @@ static void append_size_literals_json(ZBuf *buf, const SourceInput *input) {
 static void append_size_helper_breakdown_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
   bool wrote = false;
-  for (size_t i = 0; std_helpers[i].name && i < STD_HELPER_MAX; i++) {
+  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
     if (!helpers || !helpers->used[i]) continue;
     if (wrote) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"name\":");
-    append_json_string(buf, std_helpers[i].name);
+    append_json_string(buf, z_std_helpers[i].name);
     zbuf_append(buf, ",\"module\":");
-    append_json_string(buf, helper_module_name(&std_helpers[i]));
+    append_json_string(buf, helper_module_name(&z_std_helpers[i]));
     zbuf_appendf(buf, ",\"estimatedDirectBytes\":%d,\"emitsRuntimeHelper\":%s,\"retainedBy\":\"source helper call\",\"capability\":",
-                 helper_estimated_direct_bytes(&std_helpers[i]),
-                 std_helpers[i].emits_runtime_helper ? "true" : "false");
-    append_json_string(buf, std_helpers[i].capability);
+                 helper_estimated_direct_bytes(&z_std_helpers[i]),
+                 z_std_helpers[i].emits_runtime_helper ? "true" : "false");
+    append_json_string(buf, z_std_helpers[i].capability);
     zbuf_append(buf, "}");
     wrote = true;
   }
@@ -7205,13 +7030,13 @@ static void append_retention_reasons_json(ZBuf *buf, const SourceInput *input, c
     zbuf_append(buf, "}");
     wrote = true;
   }
-  for (size_t i = 0; std_helpers[i].name && i < STD_HELPER_MAX; i++) {
+  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
     if (!helpers || !helpers->used[i]) continue;
     if (wrote) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"kind\":\"stdlibHelper\",\"name\":");
-    append_json_string(buf, std_helpers[i].name);
+    append_json_string(buf, z_std_helpers[i].name);
     zbuf_append(buf, ",\"reason\":\"source helper call\",\"estimatedDirectBytes\":");
-    zbuf_appendf(buf, "%d}", helper_estimated_direct_bytes(&std_helpers[i]));
+    zbuf_appendf(buf, "%d}", helper_estimated_direct_bytes(&z_std_helpers[i]));
     wrote = true;
   }
   if (input && input->direct_readonly_data_bytes > 0) {
@@ -7244,8 +7069,8 @@ static void append_optimization_hints_json(ZBuf *buf, const SourceInput *input, 
   if (caps && caps->fs) APPEND_HINT("hosted-fs-runtime", "std.fs retains hosted filesystem capability shims; move file I/O out of target-neutral paths for smaller cross artifacts");
   if (input && input->direct_readonly_data_bytes > 0) APPEND_HINT("readonly-literals", "string and byte literals are retained by referenced code; inspect literal-heavy output before optimizing code");
   if (helpers) {
-    for (size_t i = 0; std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-      if (helpers->used[i] && std_helpers[i].emits_runtime_helper) {
+    for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
+      if (helpers->used[i] && z_std_helpers[i].emits_runtime_helper) {
         APPEND_HINT("pay-as-used-helper", "topLargestEmittedHelpers identifies the retained stdlib helper budget");
         break;
       }
@@ -7258,7 +7083,7 @@ static void append_optimization_hints_json(ZBuf *buf, const SourceInput *input, 
 
 static size_t helper_count_used(const HelperUseSummary *helpers) {
   size_t count = 0;
-  for (size_t i = 0; helpers && std_helpers[i].name && i < STD_HELPER_MAX; i++) {
+  for (size_t i = 0; helpers && z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
     if (helpers->used[i]) count++;
   }
   return count;

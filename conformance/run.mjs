@@ -599,6 +599,8 @@ assert.deepEqual(compilerMetricsBody.stdlib.mainHelpersMissingFromCheckerReturns
 assert.deepEqual(compilerMetricsBody.stdlib.checkerArgCountsMissingFromMainHelpers, []);
 assert.deepEqual(compilerMetricsBody.stdlib.mainHelpersMissingFromCheckerArgCounts, []);
 assert.deepEqual(compilerMetricsBody.stdlib.argCountMismatches, []);
+assert.equal(compilerMetricsBody.stdlib.sharedSignatureLookup.checkerReturnTypes, true);
+assert.equal(compilerMetricsBody.stdlib.sharedSignatureLookup.checkerArgCounts, true);
 assert.equal(compilerMetricsBody.budget.ok, true);
 assert.deepEqual(compilerMetricsBody.budget.violations, []);
 assert.equal(typeof compilerMetricsBody.budget.reportThreshold, "number");

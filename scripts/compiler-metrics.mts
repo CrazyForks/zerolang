@@ -17,8 +17,8 @@ type CScanState = {
 const fileBudgets = {
   "native/zero-c/include/zero.h": { maxLines: 900, maxStrcmpCalls: 0 },
   "native/zero-c/include/zero_runtime.h": { maxLines: 100, maxStrcmpCalls: 0 },
-  "native/zero-c/src/checker.c": { maxLines: 9800, maxStrcmpCalls: 687 },
-  "native/zero-c/src/main.c": { maxLines: 10300, maxStrcmpCalls: 546 },
+  "native/zero-c/src/checker.c": { maxLines: 9395, maxStrcmpCalls: 403 },
+  "native/zero-c/src/main.c": { maxLines: 10040, maxStrcmpCalls: 544 },
   "native/zero-c/src/ir.c": { maxLines: 3700, maxStrcmpCalls: 224 },
   "native/zero-c/src/row_syntax.c": { maxLines: 2150, maxStrcmpCalls: 11 },
   "native/zero-c/src/ast.c": { maxLines: 250, maxStrcmpCalls: 0 },
@@ -33,6 +33,8 @@ const fileBudgets = {
   "native/zero-c/src/mir_verify.h": { maxLines: 50, maxStrcmpCalls: 0 },
   "native/zero-c/src/specialize.c": { maxLines: 150, maxStrcmpCalls: 2 },
   "native/zero-c/src/specialize.h": { maxLines: 50, maxStrcmpCalls: 0 },
+  "native/zero-c/src/std_sig.c": { maxLines: 180, maxStrcmpCalls: 2 },
+  "native/zero-c/src/std_sig.h": { maxLines: 40, maxStrcmpCalls: 0 },
   "native/zero-c/src/target.c": { maxLines: 550, maxStrcmpCalls: 48 },
   "native/zero-c/src/type_core.c": { maxLines: 900, maxStrcmpCalls: 8 },
   "native/zero-c/src/type_core.h": { maxLines: 150, maxStrcmpCalls: 0 },
@@ -65,10 +67,8 @@ const knownLargeFunctionLimits = new Map([
   ["native/zero-c/src/emit_elf64.c|bool z_emit_elf64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {", 158],
   ["native/zero-c/src/checker.c|static bool expr_reference_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins) {", 152],
   ["native/zero-c/src/main.c|static int run_tests_direct(const Command *command, const SourceInput *input, const Program *program, const ZTargetInfo *target) {", 151],
-  ["native/zero-c/src/checker.c|static const char *std_call_return_type(const Expr *callee) {", 146],
   ["native/zero-c/src/emit_elf64.c|static bool elf_emit_read_all_or_raise_to_local(ZBuf *text, const IrFunction *fun, const IrInstr *instr, ElfEmitContext *ctx, ZDiag *diag) {", 145],
   ["native/zero-c/src/ast.c|void z_free_program(Program *program) {", 143],
-  ["native/zero-c/src/checker.c|static int std_call_arg_count(const char *name) {", 141],
   ["native/zero-c/src/checker.c|static const char *std_call_arg_type(const char *name, size_t index) {", 139],
   ["native/zero-c/src/emit_elf_aarch64.c|bool z_emit_elf_aarch64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {", 134],
   ["native/zero-c/src/mir_verify.c|static bool mir_verify_direct_value_kind_contract(IrProgram *ir, const IrFunction *fun, const MirVerifierState *state, const IrValue *value, MirHelperRequirements *requirements) {", 134],
@@ -328,7 +328,7 @@ function cBlock(text, marker) {
 }
 
 function parseStdHelpers(text) {
-  const block = cTextWithoutComments(cBlock(text, "static const StdHelperInfo std_helpers[] ="));
+  const block = cTextWithoutComments(cBlock(text, "const ZStdHelperInfo z_std_helpers[] ="));
   return [...block.matchAll(/\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(-?\d+)\s*,/g)]
     .map((match) => ({
       name: match[1],
@@ -371,6 +371,11 @@ function parseCheckerReturnTypes(text) {
   };
 }
 
+function checkerUsesSharedReturnTypes(text) {
+  const block = cTextWithoutComments(cBlock(text, "static const char *std_call_return_type"));
+  return /\bz_std_helper_find\s*\(/.test(block) && /->return_type\b/.test(block);
+}
+
 function parseCheckerArgCounts(text) {
   const map = new Map();
   const names = [];
@@ -389,6 +394,11 @@ function parseCheckerArgCounts(text) {
     map,
     duplicates: duplicates(names),
   };
+}
+
+function checkerUsesSharedArgCounts(text) {
+  const block = cTextWithoutComments(cBlock(text, "static int std_call_arg_count"));
+  return /\bz_std_helper_find\s*\(/.test(block) && /->arg_count\b/.test(block);
 }
 
 function parseCheckerArgTypeNames(text) {
@@ -586,12 +596,26 @@ const files = Object.fromEntries([...texts.entries()].map(([path, text]) => [pat
 const checker = texts.get("native/zero-c/src/checker.c") ?? "";
 const main = texts.get("native/zero-c/src/main.c") ?? "";
 const ir = texts.get("native/zero-c/src/ir.c") ?? "";
+const stdSig = texts.get("native/zero-c/src/std_sig.c") ?? "";
 
-const stdHelpers = parseStdHelpers(main);
+const stdHelpers = parseStdHelpers(stdSig);
 const checkerReturnTypeInfo = parseCheckerReturnTypes(checker);
 const checkerArgCountInfo = parseCheckerArgCounts(checker);
 const checkerReturnTypes = checkerReturnTypeInfo.map;
 const checkerArgCounts = checkerArgCountInfo.map;
+const checkerReturnTypesUseSharedTable = checkerUsesSharedReturnTypes(checker);
+const checkerArgCountsUseSharedTable = checkerUsesSharedArgCounts(checker);
+if (checkerReturnTypesUseSharedTable) {
+  for (const helper of stdHelpers) {
+    checkerReturnTypes.set(helper.name, helper.returnType);
+  }
+  if (checkerReturnTypes.has("std.mem.get")) checkerReturnTypes.set("std.mem.get", "Unknown");
+}
+if (checkerArgCountsUseSharedTable) {
+  for (const helper of stdHelpers) {
+    checkerArgCounts.set(helper.name, helper.argCount);
+  }
+}
 const checkerArgTypeNames = parseCheckerArgTypeNames(checker);
 const checkerKnownStdNames = namesFromRegex(cTextWithoutComments(checker), /"(std\.[^"]+)"/g);
 const checkerReturnNames = sortedMapKeys(checkerReturnTypes);
@@ -625,7 +649,11 @@ const stdlib = {
   argCountMismatches: helperArgCountMismatches(stdHelpers, checkerArgCounts),
   checkerArgTypesMissingFromMainHelpers: missingFrom(checkerArgTypeNames, mainHelperNames),
   nonzeroArgHelpersMissingFromCheckerArgTypes: missingFrom(nonzeroArgHelperNames, checkerArgTypeNames),
-  mainHelpersMissingFromCheckerKnownNames: missingFrom(mainHelperNames, checkerKnownStdNames),
+  mainHelpersMissingFromCheckerKnownNames: checkerReturnTypesUseSharedTable && checkerArgCountsUseSharedTable ? [] : missingFrom(mainHelperNames, checkerKnownStdNames),
+  sharedSignatureLookup: {
+    checkerReturnTypes: checkerReturnTypesUseSharedTable,
+    checkerArgCounts: checkerArgCountsUseSharedTable,
+  },
 };
 const violations = budgetViolations(files, allLargeFunctions, stdlib);
 

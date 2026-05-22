@@ -47,6 +47,7 @@ try {
     "native/zero-c/src/type_core.c",
     "native/zero-c/src/unify.c",
     "native/zero-c/src/call_resolve.c",
+    "native/zero-c/src/std_sig.c",
     "native/zero-c/src/target.c",
     "native/zero-c/tests/row_syntax_check_smoke.c",
     "-o",
