@@ -30,9 +30,11 @@ const fileBudgets = {
   "native/zero-c/src/elf_format.h": { maxLines: 60, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_format.c": { maxLines: 470, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_format.h": { maxLines: 90, maxStrcmpCalls: 0 },
-  "native/zero-c/src/emit_macho64.c": { maxLines: 2050, maxStrcmpCalls: 2 },
+  "native/zero-c/src/aarch64_emit.c": { maxLines: 320, maxStrcmpCalls: 0 },
+  "native/zero-c/src/aarch64_emit.h": { maxLines: 80, maxStrcmpCalls: 0 },
+  "native/zero-c/src/emit_macho64.c": { maxLines: 1850, maxStrcmpCalls: 2 },
   "native/zero-c/src/emit_elf64.c": { maxLines: 3000, maxStrcmpCalls: 3 },
-  "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 250, maxStrcmpCalls: 1 },
+  "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 205, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff.c": { maxLines: 1150, maxStrcmpCalls: 1 },
   "native/zero-c/src/fs.c": { maxLines: 1250, maxStrcmpCalls: 32 },
   "native/zero-c/src/mir_verify.c": { maxLines: 1300, maxStrcmpCalls: 0 },
@@ -641,6 +643,20 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats) {
       paths: backendFormats.x64.formatFilesWithLocalEncodingPrimitives,
     });
   }
+  if (!backendFormats.aarch64.sharedEncodingPrimitives ||
+      !backendFormats.aarch64.elfUsesSharedEncodingPrimitives ||
+      !backendFormats.aarch64.machoUsesSharedEncodingPrimitives) {
+    violations.push({
+      kind: "aarch64-encoding-primitives-split",
+      aarch64: backendFormats.aarch64,
+    });
+  }
+  if (backendFormats.aarch64.formatFilesWithLocalEncodingPrimitives.length > 0) {
+    violations.push({
+      kind: "aarch64-encoding-primitive-in-format-file",
+      paths: backendFormats.aarch64.formatFilesWithLocalEncodingPrimitives,
+    });
+  }
   return violations;
 }
 
@@ -721,6 +737,7 @@ const stdlib = {
 const elfFormatSource = texts.get("native/zero-c/src/elf_format.c") ?? "";
 const coffFormatSource = texts.get("native/zero-c/src/coff_format.c") ?? "";
 const machoFormatSource = texts.get("native/zero-c/src/macho_format.c") ?? "";
+const aarch64EmitSource = texts.get("native/zero-c/src/aarch64_emit.c") ?? "";
 const x64EmitSource = texts.get("native/zero-c/src/x64_emit.c") ?? "";
 const elfX64Source = cCodeText(texts.get("native/zero-c/src/emit_elf64.c") ?? "");
 const elfAarch64Source = cCodeText(texts.get("native/zero-c/src/emit_elf_aarch64.c") ?? "");
@@ -775,6 +792,23 @@ const backendFormats = {
       ["native/zero-c/src/emit_coff.c", coffX64Source],
     ]
       .filter(([, text]) => /\bstatic\s+(?:void|size_t)\s+z_x64_/.test(text))
+      .map(([path]) => path),
+  },
+  aarch64: {
+    sharedEncodingPrimitives: /\bz_aarch64_emit_movz_w\s*\(/.test(aarch64EmitSource) &&
+      /\bz_aarch64_emit_bl_placeholder\s*\(/.test(aarch64EmitSource) &&
+      /\bz_aarch64_patch_branch26\s*\(/.test(aarch64EmitSource),
+    elfUsesSharedEncodingPrimitives: /\bz_aarch64_emit_literal_return\s*\(/.test(elfAarch64Source) &&
+      /\bz_aarch64_emit_bl_placeholder\s*\(/.test(elfAarch64Source) &&
+      /\bz_aarch64_patch_branch26\s*\(/.test(elfAarch64Source),
+    machoUsesSharedEncodingPrimitives: /\bz_aarch64_emit_movz_w\s*\(/.test(machoArm64Source) &&
+      /\bz_aarch64_emit_bl_placeholder\s*\(/.test(machoArm64Source) &&
+      /\bz_aarch64_patch_branch26\s*\(/.test(machoArm64Source),
+    formatFilesWithLocalEncodingPrimitives: [
+      ["native/zero-c/src/emit_elf_aarch64.c", elfAarch64Source],
+      ["native/zero-c/src/emit_macho64.c", machoArm64Source],
+    ]
+      .filter(([, text]) => /\bstatic\s+(?:void|size_t)\s+(?:z_aarch64_|a64_(?:append|emit|patch|pad|align)|macho_emit_(?:add_sp_imm|add_x_sp_imm|nop|movz|mov_[wx]|add_[wx]_imm|sub_w_imm|div_reg|msub_reg|cmp_[wx]|ldrb_w|ldr_x_imm|strb_w|add_x_reg|add_x_reg_lsl|bl_placeholder|b_placeholder|b_cond_placeholder|cbz_w_placeholder)|macho_patch_(?:branch26|cond19|adrp_add))\b/.test(text))
       .map(([path]) => path),
   },
 };

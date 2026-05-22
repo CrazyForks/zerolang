@@ -619,6 +619,10 @@ assert.equal(compilerMetricsBody.backendFormats.x64.sharedEncodingPrimitives, tr
 assert.equal(compilerMetricsBody.backendFormats.x64.elfUsesSharedEncodingPrimitives, true);
 assert.equal(compilerMetricsBody.backendFormats.x64.coffUsesSharedEncodingPrimitives, true);
 assert.deepEqual(compilerMetricsBody.backendFormats.x64.formatFilesWithLocalEncodingPrimitives, []);
+assert.equal(compilerMetricsBody.backendFormats.aarch64.sharedEncodingPrimitives, true);
+assert.equal(compilerMetricsBody.backendFormats.aarch64.elfUsesSharedEncodingPrimitives, true);
+assert.equal(compilerMetricsBody.backendFormats.aarch64.machoUsesSharedEncodingPrimitives, true);
+assert.deepEqual(compilerMetricsBody.backendFormats.aarch64.formatFilesWithLocalEncodingPrimitives, []);
 assert.equal(compilerMetricsBody.budget.ok, true);
 assert.deepEqual(compilerMetricsBody.budget.violations, []);
 assert.equal(typeof compilerMetricsBody.budget.reportThreshold, "number");

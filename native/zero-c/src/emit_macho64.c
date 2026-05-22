@@ -1,4 +1,5 @@
 #include "zero.h"
+#include "aarch64_emit.h"
 #include "macho_format.h"
 
 #include <stdint.h>
@@ -15,11 +16,6 @@ static void append_u32le(ZBuf *buf, uint32_t value) {
   append_u8(buf, value >> 8);
   append_u8(buf, value >> 16);
   append_u8(buf, value >> 24);
-}
-
-static void append_u64le(ZBuf *buf, uint64_t value) {
-  append_u32le(buf, (uint32_t)(value & 0xffffffffu));
-  append_u32le(buf, (uint32_t)(value >> 32));
 }
 
 static void append_bytes(ZBuf *buf, const char *bytes, size_t len);
@@ -69,11 +65,6 @@ static bool macho_return_literal(const IrFunction *fun, uint32_t *out, ZDiag *di
 static bool macho_is_literal_return_function(const IrFunction *fun, uint32_t *out, ZDiag *diag) {
   if (!fun || fun->local_len != 0 || fun->instr_len != 1) return false;
   return macho_return_literal(fun, out, diag);
-}
-
-static void macho_emit_aarch64_literal_return(ZBuf *text, uint32_t literal) {
-  append_u32le(text, 0x52800000u | ((literal & 0xffffu) << 5)); // movz w0, #literal
-  append_u32le(text, 0xd65f03c0u); // ret
 }
 
 typedef struct {
@@ -209,58 +200,6 @@ static unsigned macho_slot_offset(unsigned local_index) {
   return local_index * 8;
 }
 
-static void macho_emit_add_sp_imm(ZBuf *text, uint32_t base, unsigned imm) {
-  append_u32le(text, base | ((imm & 0xfffu) << 10));
-}
-
-static void macho_emit_add_x_sp_imm(ZBuf *text, unsigned dst, unsigned imm) {
-  append_u32le(text, 0x910003e0u | ((imm & 0xfffu) << 10) | (dst & 31u));
-}
-
-static void macho_emit_nop(ZBuf *text) {
-  append_u32le(text, 0xd503201fu);
-}
-
-static void macho_emit_movz_w(ZBuf *text, unsigned reg, uint32_t literal) {
-  append_u32le(text, 0x52800000u | ((literal & 0xffffu) << 5) | (reg & 31u));
-  if (literal > 0xffffu) {
-    append_u32le(text, 0x72a00000u | (((literal >> 16) & 0xffffu) << 5) | (reg & 31u));
-  }
-}
-
-static void macho_emit_movz_x(ZBuf *text, unsigned reg, uint64_t literal) {
-  append_u32le(text, 0xd2800000u | ((uint32_t)(literal & 0xffffu) << 5) | (reg & 31u));
-  if (literal > 0xffffu) {
-    append_u32le(text, 0xf2a00000u | ((uint32_t)((literal >> 16) & 0xffffu) << 5) | (reg & 31u));
-  }
-  if (literal > 0xffffffffu) {
-    append_u32le(text, 0xf2c00000u | ((uint32_t)((literal >> 32) & 0xffffu) << 5) | (reg & 31u));
-  }
-  if (literal > 0xffffffffffffu) {
-    append_u32le(text, 0xf2e00000u | ((uint32_t)((literal >> 48) & 0xffffu) << 5) | (reg & 31u));
-  }
-}
-
-static void macho_emit_mov_w(ZBuf *text, unsigned dst, unsigned src) {
-  append_u32le(text, 0x2a0003e0u | ((src & 31u) << 16) | (dst & 31u));
-}
-
-static void macho_emit_mov_x(ZBuf *text, unsigned dst, unsigned src) {
-  append_u32le(text, 0xaa0003e0u | ((src & 31u) << 16) | (dst & 31u));
-}
-
-static void macho_emit_add_x_imm(ZBuf *text, unsigned dst, unsigned src, unsigned imm) {
-  append_u32le(text, 0x91000000u | ((imm & 0xfffu) << 10) | ((src & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_add_w_imm(ZBuf *text, unsigned dst, unsigned src, unsigned imm) {
-  append_u32le(text, 0x11000000u | ((imm & 0xfffu) << 10) | ((src & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_sub_w_imm(ZBuf *text, unsigned dst, unsigned src, unsigned imm) {
-  append_u32le(text, 0x51000000u | ((imm & 0xfffu) << 10) | ((src & 31u) << 5) | (dst & 31u));
-}
-
 static unsigned macho_local_slot_offset(const IrFunction *fun, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   if (fun && local_index < fun->local_len && fun->locals[local_index].frame_offset > 0 && frame_size >= fun->locals[local_index].frame_offset) {
     return frame_size - fun->locals[local_index].frame_offset + slot_offset;
@@ -270,32 +209,32 @@ static unsigned macho_local_slot_offset(const IrFunction *fun, unsigned local_in
 
 static void macho_emit_load_local_w(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
-  append_u32le(text, 0xb9400000u | ((offset / 4u) << 10) | (31u << 5) | (reg & 31u));
+  z_aarch64_emit_load_w_sp(text, reg, offset);
 }
 
 static void macho_emit_load_local_x(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
-  append_u32le(text, 0xf9400000u | ((offset / 8u) << 10) | (31u << 5) | (reg & 31u));
+  z_aarch64_emit_load_x_sp(text, reg, offset);
 }
 
 static void macho_emit_store_local_w(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
-  append_u32le(text, 0xb9000000u | ((offset / 4u) << 10) | (31u << 5) | (reg & 31u));
+  z_aarch64_emit_store_w_sp(text, reg, offset);
 }
 
 static void macho_emit_store_local_x(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
-  append_u32le(text, 0xf9000000u | ((offset / 8u) << 10) | (31u << 5) | (reg & 31u));
+  z_aarch64_emit_store_x_sp(text, reg, offset);
 }
 
 static void macho_emit_load_local_b(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
-  append_u32le(text, 0x39400000u | ((offset & 0xfffu) << 10) | (31u << 5) | (reg & 31u));
+  z_aarch64_emit_load_b_sp(text, reg, offset);
 }
 
 static void macho_emit_store_local_b(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
   unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
-  append_u32le(text, 0x39000000u | ((offset & 0xfffu) << 10) | (31u << 5) | (reg & 31u));
+  z_aarch64_emit_store_b_sp(text, reg, offset);
 }
 
 static bool macho_scratch_slot(unsigned slot, unsigned *offset, const IrValue *value, ZDiag *diag) {
@@ -309,16 +248,16 @@ static bool macho_scratch_slot(unsigned slot, unsigned *offset, const IrValue *v
 static bool macho_emit_store_scratch(ZBuf *text, unsigned reg, IrTypeKind type, unsigned slot, const IrValue *value, ZDiag *diag) {
   unsigned offset = 0;
   if (!macho_scratch_slot(slot, &offset, value, diag)) return false;
-  if (macho_type_is_scalar64(type)) append_u32le(text, 0xf9000000u | ((offset / 8u) << 10) | (31u << 5) | (reg & 31u));
-  else append_u32le(text, 0xb9000000u | ((offset / 4u) << 10) | (31u << 5) | (reg & 31u));
+  if (macho_type_is_scalar64(type)) z_aarch64_emit_store_x_sp(text, reg, offset);
+  else z_aarch64_emit_store_w_sp(text, reg, offset);
   return true;
 }
 
 static bool macho_emit_load_scratch(ZBuf *text, unsigned reg, IrTypeKind type, unsigned slot, const IrValue *value, ZDiag *diag) {
   unsigned offset = 0;
   if (!macho_scratch_slot(slot, &offset, value, diag)) return false;
-  if (macho_type_is_scalar64(type)) append_u32le(text, 0xf9400000u | ((offset / 8u) << 10) | (31u << 5) | (reg & 31u));
-  else append_u32le(text, 0xb9400000u | ((offset / 4u) << 10) | (31u << 5) | (reg & 31u));
+  if (macho_type_is_scalar64(type)) z_aarch64_emit_load_x_sp(text, reg, offset);
+  else z_aarch64_emit_load_w_sp(text, reg, offset);
   return true;
 }
 
@@ -339,121 +278,16 @@ static void macho_emit_store_field(ZBuf *text, const IrFunction *fun, unsigned r
 }
 
 static void macho_emit_binary_reg(ZBuf *text, IrBinaryOp op, unsigned dst, unsigned lhs, unsigned rhs, bool wide) {
-  uint32_t sf = wide ? 0x80000000u : 0;
   if (op == IR_BIN_ADD) {
-    append_u32le(text, sf | 0x0b000000u | ((rhs & 31u) << 16) | ((lhs & 31u) << 5) | (dst & 31u));
+    if (wide) z_aarch64_emit_add_x_reg(text, dst, lhs, rhs);
+    else z_aarch64_emit_add_w_reg(text, dst, lhs, rhs);
   } else if (op == IR_BIN_SUB) {
-    append_u32le(text, sf | 0x4b000000u | ((rhs & 31u) << 16) | ((lhs & 31u) << 5) | (dst & 31u));
+    if (wide) z_aarch64_emit_sub_x_reg(text, dst, lhs, rhs);
+    else z_aarch64_emit_sub_w_reg(text, dst, lhs, rhs);
   } else if (op == IR_BIN_MUL) {
-    append_u32le(text, sf | 0x1b000000u | ((rhs & 31u) << 16) | (31u << 10) | ((lhs & 31u) << 5) | (dst & 31u));
+    if (wide) z_aarch64_emit_mul_x_reg(text, dst, lhs, rhs);
+    else z_aarch64_emit_mul_w_reg(text, dst, lhs, rhs);
   }
-}
-
-static void macho_emit_div_reg(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs, bool is_unsigned, bool wide) {
-  uint32_t sf = wide ? 0x80000000u : 0;
-  append_u32le(text, sf | (is_unsigned ? 0x1ac00800u : 0x1ac00c00u) | ((rhs & 31u) << 16) | ((lhs & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_msub_reg(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs, unsigned acc, bool wide) {
-  uint32_t sf = wide ? 0x80000000u : 0;
-  append_u32le(text, sf | 0x1b008000u | ((rhs & 31u) << 16) | ((acc & 31u) << 10) | ((lhs & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_cmp_w(ZBuf *text, unsigned lhs, unsigned rhs) {
-  append_u32le(text, 0x6b00001fu | ((rhs & 31u) << 16) | ((lhs & 31u) << 5));
-}
-
-static void macho_emit_cmp_x(ZBuf *text, unsigned lhs, unsigned rhs) {
-  append_u32le(text, 0xeb00001fu | ((rhs & 31u) << 16) | ((lhs & 31u) << 5));
-}
-
-static void macho_emit_ldrb_w(ZBuf *text, unsigned dst, unsigned base) {
-  append_u32le(text, 0x39400000u | ((base & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_ldr_x_imm(ZBuf *text, unsigned dst, unsigned base, unsigned byte_offset) {
-  append_u32le(text, 0xf9400000u | (((byte_offset / 8u) & 0xfffu) << 10) | ((base & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_strb_w(ZBuf *text, unsigned src, unsigned base) {
-  append_u32le(text, 0x39000000u | ((base & 31u) << 5) | (src & 31u));
-}
-
-static void macho_emit_add_x_reg(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs) {
-  append_u32le(text, 0x8b000000u | ((rhs & 31u) << 16) | ((lhs & 31u) << 5) | (dst & 31u));
-}
-
-static void macho_emit_add_x_reg_lsl(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs, unsigned shift) {
-  append_u32le(text, 0x8b000000u | ((rhs & 31u) << 16) | ((shift & 0x3fu) << 10) | ((lhs & 31u) << 5) | (dst & 31u));
-}
-
-static size_t macho_emit_bl_placeholder(ZBuf *text) {
-  size_t patch = text->len;
-  append_u32le(text, 0x94000000u);
-  return patch;
-}
-
-static size_t macho_emit_b_placeholder(ZBuf *text) {
-  size_t patch = text->len;
-  append_u32le(text, 0x14000000u);
-  return patch;
-}
-
-static size_t macho_emit_b_cond_placeholder(ZBuf *text, unsigned cond) {
-  size_t patch = text->len;
-  append_u32le(text, 0x54000000u | (cond & 15u));
-  return patch;
-}
-
-static size_t macho_emit_cbz_w_placeholder(ZBuf *text, unsigned reg) {
-  size_t patch = text->len;
-  append_u32le(text, 0x34000000u | (reg & 31u));
-  return patch;
-}
-
-static void macho_patch_branch26(ZBuf *text, size_t patch_offset, size_t target_offset) {
-  uint32_t old_instr = ((unsigned char)text->data[patch_offset]) |
-                       ((uint32_t)(unsigned char)text->data[patch_offset + 1] << 8) |
-                       ((uint32_t)(unsigned char)text->data[patch_offset + 2] << 16) |
-                       ((uint32_t)(unsigned char)text->data[patch_offset + 3] << 24);
-  int64_t delta = (int64_t)target_offset - (int64_t)patch_offset;
-  int64_t words = delta / 4;
-  uint32_t instr = (old_instr & 0xfc000000u) | ((uint32_t)words & 0x03ffffffu);
-  text->data[patch_offset + 0] = (char)(instr & 0xff);
-  text->data[patch_offset + 1] = (char)((instr >> 8) & 0xff);
-  text->data[patch_offset + 2] = (char)((instr >> 16) & 0xff);
-  text->data[patch_offset + 3] = (char)((instr >> 24) & 0xff);
-}
-
-static void macho_patch_cond19(ZBuf *text, size_t patch_offset, size_t target_offset) {
-  uint32_t instr = ((unsigned char)text->data[patch_offset]) |
-                   ((uint32_t)(unsigned char)text->data[patch_offset + 1] << 8) |
-                   ((uint32_t)(unsigned char)text->data[patch_offset + 2] << 16) |
-                   ((uint32_t)(unsigned char)text->data[patch_offset + 3] << 24);
-  int64_t delta = (int64_t)target_offset - (int64_t)patch_offset;
-  int64_t words = delta / 4;
-  instr = (instr & 0xff00001fu) | (((uint32_t)words & 0x7ffffu) << 5);
-  text->data[patch_offset + 0] = (char)(instr & 0xff);
-  text->data[patch_offset + 1] = (char)((instr >> 8) & 0xff);
-  text->data[patch_offset + 2] = (char)((instr >> 16) & 0xff);
-  text->data[patch_offset + 3] = (char)((instr >> 24) & 0xff);
-}
-
-static void macho_patch_adrp_add(ZBuf *text, size_t patch_offset, uint64_t instr_addr, uint64_t target_addr) {
-  uint32_t adrp = ((unsigned char)text->data[patch_offset]) |
-                  ((uint32_t)(unsigned char)text->data[patch_offset + 1] << 8) |
-                  ((uint32_t)(unsigned char)text->data[patch_offset + 2] << 16) |
-                  ((uint32_t)(unsigned char)text->data[patch_offset + 3] << 24);
-  unsigned reg = adrp & 31u;
-  int64_t instr_page = (int64_t)(instr_addr & ~0xfffull);
-  int64_t target_page = (int64_t)(target_addr & ~0xfffull);
-  int64_t pages = (target_page - instr_page) / 4096;
-  uint32_t immlo = (uint32_t)pages & 0x3u;
-  uint32_t immhi = ((uint32_t)pages >> 2) & 0x7ffffu;
-  uint32_t patched_adrp = 0x90000000u | (immlo << 29) | (immhi << 5) | reg;
-  uint32_t pageoff = (uint32_t)(target_addr & 0xfffu);
-  uint32_t patched_add = 0x91000000u | ((pageoff & 0xfffu) << 10) | (reg << 5) | reg;
-  z_macho_patch_u64(text, patch_offset, ((uint64_t)patched_add << 32) | patched_adrp);
 }
 
 static bool macho_record_call_patch(MachOEmitContext *ctx, size_t patch_offset, unsigned callee_index, const IrValue *value, ZDiag *diag) {
@@ -724,15 +558,14 @@ static bool macho_byte_view_const_byte(const IrProgram *program, const IrValue *
 static bool macho_emit_rodata_ptr_literal(ZBuf *text, unsigned reg, unsigned data_offset, MachOEmitContext *ctx, const IrValue *value, ZDiag *diag) {
   if (ctx && ctx->pie_relative_data) {
     size_t patch_offset = text->len;
-    append_u32le(text, 0x90000000u | (reg & 31u));                         // adrp xreg, target@page
-    append_u32le(text, 0x91000000u | ((reg & 31u) << 5) | (reg & 31u));     // add xreg, xreg, target@pageoff
+    z_aarch64_emit_adrp_add_placeholder(text, reg);
     return macho_record_data_patch(ctx, patch_offset, data_offset, value, diag);
   }
-  while (((text->len + 8) % 8) != 0) macho_emit_nop(text);
-  append_u32le(text, 0x58000000u | (2u << 5) | (reg & 31u)); // ldr xreg, .+8
-  append_u32le(text, 0x14000003u); // b .+12, over the relocated literal
+  while (((text->len + 8) % 8) != 0) z_aarch64_emit_nop(text);
+  z_aarch64_emit_ldr_x_literal8(text, reg);
+  z_aarch64_emit_b_offset_words(text, 3);
   size_t patch_offset = text->len;
-  append_u64le(text, data_offset - (ctx ? ctx->rodata_base_offset : 0));
+  z_aarch64_append_u64(text, data_offset - (ctx ? ctx->rodata_base_offset : 0));
   return macho_record_data_patch(ctx, patch_offset, data_offset, value, diag);
 }
 
@@ -754,7 +587,7 @@ static bool macho_emit_json_parse_bytes_call_at(ZBuf *text, const IrFunction *fu
   if (!macho_emit_store_scratch(text, 0, IR_TYPE_U64, scratch_slot, value ? value->left : NULL, diag)) return false;
   if (!macho_emit_byte_view_len_at(text, fun, value->left, 1, frame_size, scratch_slot + 1, ctx, diag)) return false;
   if (!macho_emit_load_scratch(text, 0, IR_TYPE_U64, scratch_slot, value ? value->left : NULL, diag)) return false;
-  size_t patch = macho_emit_bl_placeholder(text);
+  size_t patch = z_aarch64_emit_bl_placeholder(text);
   return macho_record_runtime_json_parse_bytes_patch(ctx, patch, value, diag);
 }
 
@@ -762,7 +595,7 @@ static bool macho_emit_byte_view_len_at(ZBuf *text, const IrFunction *fun, const
   if (!view) return macho_diag_at(diag, "direct AArch64 Mach-O byte view is missing", 1, 1, "missing byte view");
   if (view->kind == IR_VALUE_STRING_LITERAL || view->kind == IR_VALUE_ARRAY_BYTE_VIEW) {
     if (view->data_len > 65535) return macho_diag_at(diag, "direct AArch64 Mach-O byte-view length is too large for the current MVP", view->line, view->column, "large byte view");
-    macho_emit_movz_w(text, reg, view->data_len);
+    z_aarch64_emit_movz_w(text, reg, view->data_len);
     return true;
   }
   if (view->kind == IR_VALUE_LOCAL && view->local_index < fun->local_len && fun->locals[view->local_index].type == IR_TYPE_BYTE_VIEW) {
@@ -778,12 +611,12 @@ static bool macho_emit_byte_view_len_at(ZBuf *text, const IrFunction *fun, const
     unsigned end = 0;
     if ((!view->index || macho_const_u32_value(view->index, &start)) &&
         macho_const_u32_value(view->right, &end) && end >= start && end - start <= 65535) {
-      macho_emit_movz_w(text, reg, end - start);
+      z_aarch64_emit_movz_w(text, reg, end - start);
       return true;
     }
     if ((!view->index || macho_const_u32_value(view->index, &start)) && view->right) {
       if (!macho_emit_value_to_reg_at(text, fun, view->right, reg, frame_size, scratch_slot, ctx, diag)) return false;
-      if (start > 0) macho_emit_sub_w_imm(text, reg, reg, start);
+      if (start > 0) z_aarch64_emit_sub_w_imm(text, reg, reg, start);
       return true;
     }
     if (view->index && view->right) {
@@ -813,7 +646,7 @@ static bool macho_emit_byte_view_ptr_at(ZBuf *text, const IrFunction *fun, const
   if (view->kind == IR_VALUE_ARRAY_BYTE_VIEW && view->array_index < fun->local_len) {
     const IrLocal *local = &fun->locals[view->array_index];
     if (!local->is_array || local->element_type != IR_TYPE_U8) return macho_diag_at(diag, "direct AArch64 Mach-O byte-view array requires [N]u8", view->line, view->column, "unsupported array view");
-    macho_emit_add_x_sp_imm(text, reg, macho_local_slot_offset(fun, view->array_index, 0, frame_size));
+    z_aarch64_emit_add_x_sp_imm(text, reg, macho_local_slot_offset(fun, view->array_index, 0, frame_size));
     return true;
   }
   if (view->kind == IR_VALUE_STRING_LITERAL) {
@@ -825,14 +658,14 @@ static bool macho_emit_byte_view_ptr_at(ZBuf *text, const IrFunction *fun, const
     if (!view->index) return true;
     if (macho_const_u32_value(view->index, &start)) {
       if (start > 4095) return macho_diag_at(diag, "direct AArch64 Mach-O byte slice constant start is too large", view->line, view->column, "unsupported byte slice");
-      if (start > 0) macho_emit_add_x_imm(text, reg, reg, start);
+      if (start > 0) z_aarch64_emit_add_x_imm(text, reg, reg, start);
       return true;
     }
     unsigned tmp = reg == 8 ? 9 : 8;
     if (!macho_emit_store_scratch(text, reg, IR_TYPE_U64, scratch_slot, view, diag)) return false;
     if (!macho_emit_value_to_reg_at(text, fun, view->index, tmp, frame_size, scratch_slot + 1, ctx, diag)) return false;
     if (!macho_emit_load_scratch(text, reg, IR_TYPE_U64, scratch_slot, view, diag)) return false;
-    macho_emit_add_x_reg(text, reg, reg, tmp);
+    z_aarch64_emit_add_x_reg(text, reg, reg, tmp);
     return true;
   }
   return macho_diag_at(diag, "direct AArch64 Mach-O value is not a supported byte view", view->line, view->column, "unsupported byte view");
@@ -852,11 +685,11 @@ static bool macho_emit_call_to_reg(ZBuf *text, const IrFunction *fun, const IrVa
     const IrValue *arg = value->args[i];
     if (!macho_emit_load_scratch(text, (unsigned)i, arg ? arg->type : IR_TYPE_I32, scratch_slot + (unsigned)i, arg, diag)) return false;
   }
-  size_t patch = macho_emit_bl_placeholder(text);
+  size_t patch = z_aarch64_emit_bl_placeholder(text);
   if (!macho_record_call_patch(ctx, patch, value->callee_index, value, diag)) return false;
   if (reg != 0) {
-    if (macho_type_is_scalar64(value->type)) macho_emit_mov_x(text, reg, 0);
-    else macho_emit_mov_w(text, reg, 0);
+    if (macho_type_is_scalar64(value->type)) z_aarch64_emit_mov_x(text, reg, 0);
+    else z_aarch64_emit_mov_w(text, reg, 0);
   }
   return true;
 }
@@ -866,8 +699,8 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
   switch (value->kind) {
     case IR_VALUE_BOOL:
     case IR_VALUE_INT:
-      if (macho_type_is_scalar64(value->type)) macho_emit_movz_x(text, reg, (uint64_t)value->int_value);
-      else macho_emit_movz_w(text, reg, (uint32_t)value->int_value);
+      if (macho_type_is_scalar64(value->type)) z_aarch64_emit_movz_x(text, reg, (uint64_t)value->int_value);
+      else z_aarch64_emit_movz_w(text, reg, (uint32_t)value->int_value);
       return true;
     case IR_VALUE_LOCAL:
       if (value->local_index >= fun->local_len) return macho_diag_at(diag, "direct AArch64 Mach-O local index is out of range", value->line, value->column, "invalid local");
@@ -880,31 +713,31 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
     case IR_VALUE_BINARY:
       if (value->binary_op == IR_BIN_AND) {
         if (!macho_emit_value_to_reg_at(text, fun, value->left, reg, frame_size, scratch_slot, ctx, diag)) return false;
-        size_t left_false = macho_emit_cbz_w_placeholder(text, reg);
+        size_t left_false = z_aarch64_emit_cbz_w_placeholder(text, reg);
         if (!macho_emit_value_to_reg_at(text, fun, value->right, reg, frame_size, scratch_slot, ctx, diag)) return false;
-        size_t right_false = macho_emit_cbz_w_placeholder(text, reg);
-        macho_emit_movz_w(text, reg, 1);
-        size_t end_patch = macho_emit_b_placeholder(text);
-        macho_patch_cond19(text, left_false, text->len);
-        macho_patch_cond19(text, right_false, text->len);
-        macho_emit_movz_w(text, reg, 0);
-        macho_patch_branch26(text, end_patch, text->len);
+        size_t right_false = z_aarch64_emit_cbz_w_placeholder(text, reg);
+        z_aarch64_emit_movz_w(text, reg, 1);
+        size_t end_patch = z_aarch64_emit_b_placeholder(text);
+        z_aarch64_patch_cond19(text, left_false, text->len);
+        z_aarch64_patch_cond19(text, right_false, text->len);
+        z_aarch64_emit_movz_w(text, reg, 0);
+        z_aarch64_patch_branch26(text, end_patch, text->len);
         return true;
       }
       if (value->binary_op == IR_BIN_OR) {
         if (!macho_emit_value_to_reg_at(text, fun, value->left, reg, frame_size, scratch_slot, ctx, diag)) return false;
-        size_t eval_right = macho_emit_cbz_w_placeholder(text, reg);
-        macho_emit_movz_w(text, reg, 1);
-        size_t left_true_end = macho_emit_b_placeholder(text);
-        macho_patch_cond19(text, eval_right, text->len);
+        size_t eval_right = z_aarch64_emit_cbz_w_placeholder(text, reg);
+        z_aarch64_emit_movz_w(text, reg, 1);
+        size_t left_true_end = z_aarch64_emit_b_placeholder(text);
+        z_aarch64_patch_cond19(text, eval_right, text->len);
         if (!macho_emit_value_to_reg_at(text, fun, value->right, reg, frame_size, scratch_slot, ctx, diag)) return false;
-        size_t right_false = macho_emit_cbz_w_placeholder(text, reg);
-        macho_emit_movz_w(text, reg, 1);
-        size_t right_true_end = macho_emit_b_placeholder(text);
-        macho_patch_cond19(text, right_false, text->len);
-        macho_emit_movz_w(text, reg, 0);
-        macho_patch_branch26(text, left_true_end, text->len);
-        macho_patch_branch26(text, right_true_end, text->len);
+        size_t right_false = z_aarch64_emit_cbz_w_placeholder(text, reg);
+        z_aarch64_emit_movz_w(text, reg, 1);
+        size_t right_true_end = z_aarch64_emit_b_placeholder(text);
+        z_aarch64_patch_cond19(text, right_false, text->len);
+        z_aarch64_emit_movz_w(text, reg, 0);
+        z_aarch64_patch_branch26(text, left_true_end, text->len);
+        z_aarch64_patch_branch26(text, right_true_end, text->len);
         return true;
       }
       if (value->binary_op != IR_BIN_ADD && value->binary_op != IR_BIN_SUB && value->binary_op != IR_BIN_MUL &&
@@ -915,10 +748,10 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (!macho_emit_load_scratch(text, 8, value->left ? value->left->type : IR_TYPE_I32, scratch_slot, value->left, diag)) return false;
       bool wide = macho_type_is_scalar64(value->type);
       if (value->binary_op == IR_BIN_DIV) {
-        macho_emit_div_reg(text, reg, 8, 9, macho_type_is_unsigned(value->type), wide);
+        z_aarch64_emit_div_reg(text, reg, 8, 9, macho_type_is_unsigned(value->type), wide);
       } else if (value->binary_op == IR_BIN_MOD) {
-        macho_emit_div_reg(text, 10, 8, 9, macho_type_is_unsigned(value->type), wide);
-        macho_emit_msub_reg(text, reg, 10, 9, 8, wide);
+        z_aarch64_emit_div_reg(text, 10, 8, 9, macho_type_is_unsigned(value->type), wide);
+        z_aarch64_emit_msub_reg(text, reg, 10, 9, 8, wide);
       } else {
         macho_emit_binary_reg(text, value->binary_op, reg, 8, 9, wide);
       }
@@ -931,40 +764,40 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (!macho_emit_store_scratch(text, 8, value->left->type, scratch_slot, value->left, diag)) return false;
       if (!macho_emit_value_to_reg_at(text, fun, value->right, 9, frame_size, scratch_slot + 1, ctx, diag)) return false;
       if (!macho_emit_load_scratch(text, 8, value->left->type, scratch_slot, value->left, diag)) return false;
-      macho_emit_cmp_w(text, 8, 9);
-      macho_emit_movz_w(text, reg, 0);
-      size_t false_patch = macho_emit_b_cond_placeholder(text, macho_invert_cond(macho_cond_for_compare(value->compare_op)));
-      macho_emit_movz_w(text, reg, 1);
-      macho_patch_cond19(text, false_patch, text->len);
+      z_aarch64_emit_cmp_w(text, 8, 9);
+      z_aarch64_emit_movz_w(text, reg, 0);
+      size_t false_patch = z_aarch64_emit_b_cond_placeholder(text, macho_invert_cond(macho_cond_for_compare(value->compare_op)));
+      z_aarch64_emit_movz_w(text, reg, 1);
+      z_aarch64_patch_cond19(text, false_patch, text->len);
       return true;
     }
     case IR_VALUE_CALL:
       return macho_emit_call_to_reg(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_JSON_PARSE_BYTES:
       if (!macho_emit_json_parse_bytes_call_at(text, fun, value, frame_size, scratch_slot, ctx, diag)) return false;
-      if (reg != 0) macho_emit_mov_x(text, reg, 0);
+      if (reg != 0) z_aarch64_emit_mov_x(text, reg, 0);
       return true;
     case IR_VALUE_JSON_VALIDATE_BYTES:
       if (!macho_emit_json_parse_bytes_call_at(text, fun, value, frame_size, scratch_slot, ctx, diag)) return false;
-      macho_emit_cmp_x(text, 0, 31);
-      macho_emit_movz_w(text, reg, 0);
+      z_aarch64_emit_cmp_x(text, 0, 31);
+      z_aarch64_emit_movz_w(text, reg, 0);
       {
-        size_t invalid = macho_emit_b_cond_placeholder(text, 11); // signed less than
-        macho_emit_movz_w(text, reg, 1);
-        macho_patch_cond19(text, invalid, text->len);
+        size_t invalid = z_aarch64_emit_b_cond_placeholder(text, 11); // signed less than
+        z_aarch64_emit_movz_w(text, reg, 1);
+        z_aarch64_patch_cond19(text, invalid, text->len);
       }
       return true;
     case IR_VALUE_JSON_STREAM_TOKENS_BYTES:
       if (!macho_emit_json_parse_bytes_call_at(text, fun, value, frame_size, scratch_slot, ctx, diag)) return false;
-      macho_emit_cmp_x(text, 0, 31);
+      z_aarch64_emit_cmp_x(text, 0, 31);
       {
-        size_t ok = macho_emit_b_cond_placeholder(text, 10); // signed greater or equal
-        if (reg != 0) macho_emit_mov_x(text, reg, 31);
-        else macho_emit_mov_x(text, 0, 31);
-        size_t done = macho_emit_b_placeholder(text);
-        macho_patch_cond19(text, ok, text->len);
-        if (reg != 0) macho_emit_mov_x(text, reg, 0);
-        macho_patch_branch26(text, done, text->len);
+        size_t ok = z_aarch64_emit_b_cond_placeholder(text, 10); // signed greater or equal
+        if (reg != 0) z_aarch64_emit_mov_x(text, reg, 31);
+        else z_aarch64_emit_mov_x(text, 0, 31);
+        size_t done = z_aarch64_emit_b_placeholder(text);
+        z_aarch64_patch_cond19(text, ok, text->len);
+        if (reg != 0) z_aarch64_emit_mov_x(text, reg, 0);
+        z_aarch64_patch_branch26(text, done, text->len);
       }
       return true;
     case IR_VALUE_HTTP_FETCH: {
@@ -981,9 +814,9 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (!macho_emit_load_scratch(text, 1, IR_TYPE_U32, scratch_slot + 1, value->left, diag)) return false;
       if (!macho_emit_load_scratch(text, 2, IR_TYPE_U64, scratch_slot + 2, value->right, diag)) return false;
       if (!macho_emit_load_scratch(text, 3, IR_TYPE_U32, scratch_slot + 3, value->right, diag)) return false;
-      size_t patch = macho_emit_bl_placeholder(text);
+      size_t patch = z_aarch64_emit_bl_placeholder(text);
       if (!macho_record_runtime_http_fetch_patch(ctx, patch, value, diag)) return false;
-      if (reg != 0) macho_emit_mov_x(text, reg, 0);
+      if (reg != 0) z_aarch64_emit_mov_x(text, reg, 0);
       return true;
     }
     case IR_VALUE_HTTP_RESULT_OK:
@@ -994,7 +827,7 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
     case IR_VALUE_HTTP_HEADER_OFFSET:
     case IR_VALUE_HTTP_HEADER_LEN: {
       if (!macho_emit_value_to_reg_at(text, fun, value->left, 0, frame_size, scratch_slot, ctx, diag)) return false;
-      size_t patch = macho_emit_bl_placeholder(text);
+      size_t patch = z_aarch64_emit_bl_placeholder(text);
       if (value->kind == IR_VALUE_HTTP_RESULT_OK) {
         if (!macho_record_runtime_http_result_ok_patch(ctx, patch, value, diag)) return false;
       } else if (value->kind == IR_VALUE_HTTP_RESULT_STATUS) {
@@ -1010,7 +843,7 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       } else if (!macho_record_runtime_http_header_len_patch(ctx, patch, value, diag)) {
         return false;
       }
-      if (reg != 0) macho_emit_mov_w(text, reg, 0);
+      if (reg != 0) z_aarch64_emit_mov_w(text, reg, 0);
       return true;
     }
     case IR_VALUE_HTTP_RESPONSE_LEN:
@@ -1020,7 +853,7 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (!macho_emit_store_scratch(text, 0, IR_TYPE_U64, scratch_slot, value->left, diag)) return false;
       if (!macho_emit_byte_view_len_at(text, fun, value->left, 1, frame_size, scratch_slot + 1, ctx, diag)) return false;
       if (!macho_emit_load_scratch(text, 0, IR_TYPE_U64, scratch_slot, value->left, diag)) return false;
-      size_t patch = macho_emit_bl_placeholder(text);
+      size_t patch = z_aarch64_emit_bl_placeholder(text);
       if (value->kind == IR_VALUE_HTTP_RESPONSE_LEN) {
         if (!macho_record_runtime_http_result_patch(&ctx->runtime_http_response_len_patches, &ctx->runtime_http_response_len_patch_len, &ctx->runtime_http_response_len_patch_cap, patch, value, diag)) return false;
       } else if (value->kind == IR_VALUE_HTTP_RESPONSE_HEADERS_LEN) {
@@ -1028,7 +861,7 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       } else if (!macho_record_runtime_http_result_patch(&ctx->runtime_http_response_body_offset_patches, &ctx->runtime_http_response_body_offset_patch_len, &ctx->runtime_http_response_body_offset_patch_cap, patch, value, diag)) {
         return false;
       }
-      if (reg != 0) macho_emit_mov_w(text, reg, 0);
+      if (reg != 0) z_aarch64_emit_mov_w(text, reg, 0);
       return true;
     }
     case IR_VALUE_HTTP_HEADER_VALUE: {
@@ -1042,9 +875,9 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (!macho_emit_load_scratch(text, 0, IR_TYPE_U64, scratch_slot, value->left, diag)) return false;
       if (!macho_emit_load_scratch(text, 1, IR_TYPE_U32, scratch_slot + 1, value->left, diag)) return false;
       if (!macho_emit_load_scratch(text, 2, IR_TYPE_U64, scratch_slot + 2, value->right, diag)) return false;
-      size_t patch = macho_emit_bl_placeholder(text);
+      size_t patch = z_aarch64_emit_bl_placeholder(text);
       if (!macho_record_runtime_http_header_value_patch(ctx, patch, value, diag)) return false;
-      if (reg != 0) macho_emit_mov_x(text, reg, 0);
+      if (reg != 0) z_aarch64_emit_mov_x(text, reg, 0);
       return true;
     }
     case IR_VALUE_VEC_LEN:
@@ -1056,26 +889,26 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (value->local_index >= fun->local_len || fun->locals[value->local_index].type != IR_TYPE_VEC) return macho_diag_at(diag, "direct AArch64 Mach-O Vec push requires a Vec local", value->line, value->column, "invalid Vec local");
       macho_emit_load_local_w(text, fun, 8, value->local_index, 8, frame_size);
       macho_emit_load_local_w(text, fun, 9, value->local_index, 12, frame_size);
-      macho_emit_cmp_w(text, 8, 9);
-      size_t ok_patch = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-      macho_emit_movz_w(text, reg, 0);
-      size_t end_patch = macho_emit_b_placeholder(text);
-      macho_patch_cond19(text, ok_patch, text->len);
+      z_aarch64_emit_cmp_w(text, 8, 9);
+      size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+      z_aarch64_emit_movz_w(text, reg, 0);
+      size_t end_patch = z_aarch64_emit_b_placeholder(text);
+      z_aarch64_patch_cond19(text, ok_patch, text->len);
       macho_emit_store_local_w(text, fun, 8, value->local_index, 8, frame_size);
       macho_emit_load_local_x(text, fun, 9, value->local_index, 0, frame_size);
-      macho_emit_add_x_reg(text, 9, 9, 8);
+      z_aarch64_emit_add_x_reg(text, 9, 9, 8);
       if (!macho_emit_store_scratch(text, 9, IR_TYPE_U64, scratch_slot, value, diag)) return false;
       if (!macho_emit_value_to_reg_at(text, fun, value->left, 10, frame_size, scratch_slot + 1, ctx, diag)) return false;
       if (!macho_emit_load_scratch(text, 9, IR_TYPE_U64, scratch_slot, value, diag)) return false;
-      macho_emit_strb_w(text, 10, 9);
-      macho_emit_add_w_imm(text, 8, 8, 1);
+      z_aarch64_emit_store_b_imm(text, 10, 9, 0);
+      z_aarch64_emit_add_w_imm(text, 8, 8, 1);
       macho_emit_store_local_w(text, fun, 8, value->local_index, 8, frame_size);
-      macho_emit_movz_w(text, reg, 1);
-      macho_patch_branch26(text, end_patch, text->len);
+      z_aarch64_emit_movz_w(text, reg, 1);
+      z_aarch64_patch_branch26(text, end_patch, text->len);
       return true;
     }
     case IR_VALUE_ARGS_LEN:
-      macho_emit_mov_w(text, reg, 20);
+      z_aarch64_emit_mov_w(text, reg, 20);
       return true;
     case IR_VALUE_MAYBE_HAS:
       if (value->local_index >= fun->local_len ||
@@ -1091,21 +924,21 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       unsigned char byte = 0;
       if (macho_const_u32_value(value->index, &const_index) &&
           macho_byte_view_const_byte(ctx ? ctx->program : NULL, value->left, const_index, &byte)) {
-        macho_emit_movz_w(text, reg, byte);
+        z_aarch64_emit_movz_w(text, reg, byte);
         return true;
       }
       if (!value->index || !macho_emit_value_to_reg_at(text, fun, value->index, 8, frame_size, scratch_slot, ctx, diag)) return false;
       if (!macho_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
       if (!macho_emit_byte_view_len_at(text, fun, value->left, 9, frame_size, scratch_slot + 1, ctx, diag)) return false;
       if (!macho_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-      macho_emit_cmp_w(text, 8, 9);
-      size_t ok_patch = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-      append_u32le(text, 0xd4200000u); // brk #0
-      macho_patch_cond19(text, ok_patch, text->len);
+      z_aarch64_emit_cmp_w(text, 8, 9);
+      size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+      z_aarch64_emit_brk(text);
+      z_aarch64_patch_cond19(text, ok_patch, text->len);
       if (!macho_emit_byte_view_ptr_at(text, fun, value->left, 9, frame_size, scratch_slot + 1, ctx, diag)) return false;
       if (!macho_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-      macho_emit_add_x_reg(text, 9, 9, 8);
-      macho_emit_ldrb_w(text, reg, 9);
+      z_aarch64_emit_add_x_reg(text, 9, 9, 8);
+      z_aarch64_emit_load_b_imm(text, reg, 9, 0);
       return true;
     }
     case IR_VALUE_INDEX_LOAD: {
@@ -1119,29 +952,29 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
       if (local->is_array && (local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 || local->element_type == IR_TYPE_USIZE)) {
         if (!value->index || !macho_emit_value_to_reg_at(text, fun, value->index, 8, frame_size, scratch_slot, ctx, diag)) return false;
         if (!macho_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-        macho_emit_movz_w(text, 9, local->array_len);
-        macho_emit_cmp_w(text, 8, 9);
-        size_t ok_patch = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-        append_u32le(text, 0xd4200000u); // brk #0
-        macho_patch_cond19(text, ok_patch, text->len);
+        z_aarch64_emit_movz_w(text, 9, local->array_len);
+        z_aarch64_emit_cmp_w(text, 8, 9);
+        size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+        z_aarch64_emit_brk(text);
+        z_aarch64_patch_cond19(text, ok_patch, text->len);
         if (!macho_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-        macho_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, value->array_index, 0, frame_size));
-        macho_emit_add_x_reg_lsl(text, 9, 9, 8, 2);
-        append_u32le(text, 0xb9400000u | (9u << 5) | (reg & 31u));
+        z_aarch64_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, value->array_index, 0, frame_size));
+        z_aarch64_emit_add_x_reg_lsl(text, 9, 9, 8, 2);
+        z_aarch64_emit_load_w_imm(text, reg, 9, 0);
         return true;
       }
       if (!local->is_array || local->element_type != IR_TYPE_U8) return macho_diag_at(diag, "direct AArch64 Mach-O indexed load requires [N]u8 or integer arrays", value->line, value->column, "unsupported array local");
       if (!value->index || !macho_emit_value_to_reg_at(text, fun, value->index, 8, frame_size, scratch_slot, ctx, diag)) return false;
       if (!macho_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-      macho_emit_movz_w(text, 9, local->array_len);
-      macho_emit_cmp_w(text, 8, 9);
-      size_t ok_patch = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-      append_u32le(text, 0xd4200000u); // brk #0
-      macho_patch_cond19(text, ok_patch, text->len);
+      z_aarch64_emit_movz_w(text, 9, local->array_len);
+      z_aarch64_emit_cmp_w(text, 8, 9);
+      size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+      z_aarch64_emit_brk(text);
+      z_aarch64_patch_cond19(text, ok_patch, text->len);
       if (!macho_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-      macho_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, value->array_index, 0, frame_size));
-      macho_emit_add_x_reg(text, 9, 9, 8);
-      macho_emit_ldrb_w(text, reg, 9);
+      z_aarch64_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, value->array_index, 0, frame_size));
+      z_aarch64_emit_add_x_reg(text, 9, 9, 8);
+      z_aarch64_emit_load_b_imm(text, reg, 9, 0);
       return true;
     }
     case IR_VALUE_FIELD_LOAD:
@@ -1186,10 +1019,10 @@ static unsigned macho_frame_size(const IrFunction *fun) {
 }
 
 static void macho_emit_epilogue(ZBuf *text, unsigned frame_size, bool restore_process_args) {
-  if (frame_size > 0) macho_emit_add_sp_imm(text, 0x910003ffu, frame_size); // add sp, sp, #frame_size
-  append_u32le(text, 0xa8c17bfdu); // ldp x29, x30, [sp], #16
-  if (restore_process_args) append_u32le(text, 0xa8c157f4u); // ldp x20, x21, [sp], #16
-  append_u32le(text, 0xd65f03c0u); // ret
+  if (frame_size > 0) z_aarch64_emit_add_sp_imm(text, frame_size);
+  z_aarch64_emit_ldp_x29_x30_sp_post16(text);
+  if (restore_process_args) z_aarch64_emit_ldp_x20_x21_sp_post16(text);
+  z_aarch64_emit_ret(text);
 }
 
 static bool macho_emit_instrs(ZBuf *text, const IrFunction *fun, const IrInstr *instrs, size_t len, unsigned frame_size, bool restore_process_args, MachOEmitContext *ctx, ZDiag *diag);
@@ -1198,44 +1031,44 @@ static bool macho_emit_world_write(ZBuf *text, const IrFunction *fun, const IrIn
   if (!instr || !instr->value) return macho_diag_at(diag, "direct AArch64 Mach-O World write requires bytes", instr ? instr->line : 1, instr ? instr->column : 1, "missing byte view");
   if (!macho_emit_byte_view_ptr(text, fun, instr->value, 1, frame_size, ctx, diag)) return false;
   if (!macho_emit_byte_view_len(text, fun, instr->value, 2, frame_size, ctx, diag)) return false;
-  macho_emit_movz_w(text, 0, instr->field_offset == 2 ? 2u : 1u);
-  size_t patch = macho_emit_bl_placeholder(text);
+  z_aarch64_emit_movz_w(text, 0, instr->field_offset == 2 ? 2u : 1u);
+  size_t patch = z_aarch64_emit_bl_placeholder(text);
   if (!macho_record_world_write_patch(ctx, patch, instr, diag)) return false;
-  size_t ok_patch = macho_emit_cbz_w_placeholder(text, 0);
-  append_u32le(text, 0xd4200000u); // brk #0 on runtime write failure
-  macho_patch_cond19(text, ok_patch, text->len);
+  size_t ok_patch = z_aarch64_emit_cbz_w_placeholder(text, 0);
+  z_aarch64_emit_brk(text);
+  z_aarch64_patch_cond19(text, ok_patch, text->len);
   return true;
 }
 
 static bool macho_emit_args_get_to_local(ZBuf *text, const IrFunction *fun, const IrValue *value, const IrLocal *local, unsigned frame_size, MachOEmitContext *ctx, ZDiag *diag) {
   if (!value || !value->left) return macho_diag_at(diag, "direct AArch64 Mach-O std.args.get requires an index", value ? value->line : 1, value ? value->column : 1, "missing index");
   if (!macho_emit_value_to_reg(text, fun, value->left, 10, frame_size, ctx, diag)) return false;
-  macho_emit_cmp_w(text, 10, 20);
-  size_t in_range = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-  macho_emit_movz_w(text, 8, 0);
+  z_aarch64_emit_cmp_w(text, 10, 20);
+  size_t in_range = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+  z_aarch64_emit_movz_w(text, 8, 0);
   macho_emit_store_local_w(text, fun, 8, local->index, 0, frame_size);
   macho_emit_store_local_x(text, fun, 8, local->index, 8, frame_size);
   macho_emit_store_local_w(text, fun, 8, local->index, 16, frame_size);
-  size_t end_patch = macho_emit_b_placeholder(text);
-  macho_patch_cond19(text, in_range, text->len);
+  size_t end_patch = z_aarch64_emit_b_placeholder(text);
+  z_aarch64_patch_cond19(text, in_range, text->len);
 
-  macho_emit_add_x_reg_lsl(text, 12, 21, 10, 3);
-  macho_emit_ldr_x_imm(text, 12, 12, 0);
-  macho_emit_movz_w(text, 10, 0);
+  z_aarch64_emit_add_x_reg_lsl(text, 12, 21, 10, 3);
+  z_aarch64_emit_load_x_imm(text, 12, 12, 0);
+  z_aarch64_emit_movz_w(text, 10, 0);
   size_t loop_start = text->len;
-  macho_emit_add_x_reg(text, 13, 12, 10);
-  macho_emit_ldrb_w(text, 14, 13);
-  size_t done_patch = macho_emit_cbz_w_placeholder(text, 14);
-  macho_emit_add_w_imm(text, 10, 10, 1);
-  size_t loop_patch = macho_emit_b_placeholder(text);
-  macho_patch_branch26(text, loop_patch, loop_start);
-  macho_patch_cond19(text, done_patch, text->len);
+  z_aarch64_emit_add_x_reg(text, 13, 12, 10);
+  z_aarch64_emit_load_b_imm(text, 14, 13, 0);
+  size_t done_patch = z_aarch64_emit_cbz_w_placeholder(text, 14);
+  z_aarch64_emit_add_w_imm(text, 10, 10, 1);
+  size_t loop_patch = z_aarch64_emit_b_placeholder(text);
+  z_aarch64_patch_branch26(text, loop_patch, loop_start);
+  z_aarch64_patch_cond19(text, done_patch, text->len);
 
-  macho_emit_movz_w(text, 8, 1);
+  z_aarch64_emit_movz_w(text, 8, 1);
   macho_emit_store_local_w(text, fun, 8, local->index, 0, frame_size);
   macho_emit_store_local_x(text, fun, 12, local->index, 8, frame_size);
   macho_emit_store_local_w(text, fun, 10, local->index, 16, frame_size);
-  macho_patch_branch26(text, end_patch, text->len);
+  z_aarch64_patch_branch26(text, end_patch, text->len);
   return true;
 }
 
@@ -1258,7 +1091,7 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
       macho_emit_store_local_x(text, fun, 8, instr->local_index, 0, frame_size);
       if (!macho_emit_byte_view_len(text, fun, instr->value->left, 8, frame_size, ctx, diag)) return false;
       macho_emit_store_local_w(text, fun, 8, instr->local_index, 8, frame_size);
-      macho_emit_movz_w(text, 8, 0);
+      z_aarch64_emit_movz_w(text, 8, 0);
       macho_emit_store_local_w(text, fun, 8, instr->local_index, 12, frame_size);
       return true;
     }
@@ -1266,7 +1099,7 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
       if (!instr->value || instr->value->kind != IR_VALUE_VEC_INIT) return macho_diag_at(diag, "direct AArch64 Mach-O Vec local requires std.mem.vec", instr->line, instr->column, "unsupported Vec initializer");
       if (!macho_emit_byte_view_ptr(text, fun, instr->value->left, 8, frame_size, ctx, diag)) return false;
       macho_emit_store_local_x(text, fun, 8, instr->local_index, 0, frame_size);
-      macho_emit_movz_w(text, 8, 0);
+      z_aarch64_emit_movz_w(text, 8, 0);
       macho_emit_store_local_w(text, fun, 8, instr->local_index, 8, frame_size);
       if (!macho_emit_byte_view_len(text, fun, instr->value->left, 8, frame_size, ctx, diag)) return false;
       macho_emit_store_local_w(text, fun, 8, instr->local_index, 12, frame_size);
@@ -1280,32 +1113,32 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
       if (!macho_emit_value_to_reg(text, fun, instr->value->left, 10, frame_size, ctx, diag)) return false;
       macho_emit_load_local_w(text, fun, 8, instr->value->local_index, 12, frame_size);
       macho_emit_load_local_w(text, fun, 9, instr->value->local_index, 8, frame_size);
-      macho_emit_add_w_imm(text, 11, 8, 0);
+      z_aarch64_emit_add_w_imm(text, 11, 8, 0);
       macho_emit_binary_reg(text, IR_BIN_ADD, 11, 11, 10, false);
-      macho_emit_cmp_w(text, 11, 9);
-      size_t ok_patch = macho_emit_b_cond_placeholder(text, 9); // unsigned lower or same
-      macho_emit_movz_w(text, 8, 0);
+      z_aarch64_emit_cmp_w(text, 11, 9);
+      size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 9); // unsigned lower or same
+      z_aarch64_emit_movz_w(text, 8, 0);
       macho_emit_store_local_w(text, fun, 8, instr->local_index, 0, frame_size);
       macho_emit_store_local_x(text, fun, 8, instr->local_index, 8, frame_size);
       macho_emit_store_local_w(text, fun, 8, instr->local_index, 16, frame_size);
-      size_t end_patch = macho_emit_b_placeholder(text);
-      macho_patch_cond19(text, ok_patch, text->len);
-      macho_emit_movz_w(text, 12, 1);
+      size_t end_patch = z_aarch64_emit_b_placeholder(text);
+      z_aarch64_patch_cond19(text, ok_patch, text->len);
+      z_aarch64_emit_movz_w(text, 12, 1);
       macho_emit_store_local_w(text, fun, 12, instr->local_index, 0, frame_size);
       macho_emit_load_local_x(text, fun, 12, instr->value->local_index, 0, frame_size);
-      macho_emit_add_x_reg(text, 12, 12, 8);
+      z_aarch64_emit_add_x_reg(text, 12, 12, 8);
       macho_emit_store_local_x(text, fun, 12, instr->local_index, 8, frame_size);
       macho_emit_store_local_w(text, fun, 10, instr->local_index, 16, frame_size);
       macho_emit_store_local_w(text, fun, 11, instr->value->local_index, 12, frame_size);
-      macho_patch_branch26(text, end_patch, text->len);
+      z_aarch64_patch_branch26(text, end_patch, text->len);
       return true;
     }
     if (fun->locals[instr->local_index].type == IR_TYPE_MAYBE_SCALAR) {
       if (!instr->value) return macho_diag_at(diag, "direct AArch64 Mach-O Maybe scalar initializer is missing", instr->line, instr->column, "missing maybe value");
       if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
-        macho_emit_movz_w(text, 8, instr->value->data_len ? 1u : 0u);
+        z_aarch64_emit_movz_w(text, 8, instr->value->data_len ? 1u : 0u);
         macho_emit_store_local_w(text, fun, 8, instr->local_index, 0, frame_size);
-        macho_emit_movz_x(text, 8, (uint64_t)instr->value->int_value);
+        z_aarch64_emit_movz_x(text, 8, (uint64_t)instr->value->int_value);
         macho_emit_store_local_x(text, fun, 8, instr->local_index, 8, frame_size);
         return true;
       }
@@ -1314,39 +1147,39 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
           return macho_diag_at(diag, "direct AArch64 Mach-O JSON parse allocator is invalid", instr->line, instr->column, "invalid allocator");
         }
         if (!macho_emit_value_to_reg(text, fun, instr->value, 8, frame_size, ctx, diag)) return false;
-        macho_emit_cmp_x(text, 8, 31);
-        size_t fail = macho_emit_b_cond_placeholder(text, 11); // signed less than
+        z_aarch64_emit_cmp_x(text, 8, 31);
+        size_t fail = z_aarch64_emit_b_cond_placeholder(text, 11); // signed less than
         macho_emit_load_local_w(text, fun, 9, instr->value->local_index, 12, frame_size);
-        macho_emit_mov_w(text, 10, 8);
+        z_aarch64_emit_mov_w(text, 10, 8);
         macho_emit_binary_reg(text, IR_BIN_ADD, 11, 9, 10, false);
         macho_emit_load_local_w(text, fun, 12, instr->value->local_index, 8, frame_size);
-        macho_emit_cmp_w(text, 11, 12);
-        size_t overflow = macho_emit_b_cond_placeholder(text, 8); // unsigned higher
-        macho_emit_movz_w(text, 9, 1);
+        z_aarch64_emit_cmp_w(text, 11, 12);
+        size_t overflow = z_aarch64_emit_b_cond_placeholder(text, 8); // unsigned higher
+        z_aarch64_emit_movz_w(text, 9, 1);
         macho_emit_store_local_w(text, fun, 9, instr->local_index, 0, frame_size);
         macho_emit_store_local_x(text, fun, 8, instr->local_index, 8, frame_size);
         macho_emit_store_local_w(text, fun, 11, instr->value->local_index, 12, frame_size);
-        size_t end = macho_emit_b_placeholder(text);
-        macho_patch_cond19(text, fail, text->len);
-        macho_patch_cond19(text, overflow, text->len);
-        macho_emit_movz_w(text, 9, 0);
+        size_t end = z_aarch64_emit_b_placeholder(text);
+        z_aarch64_patch_cond19(text, fail, text->len);
+        z_aarch64_patch_cond19(text, overflow, text->len);
+        z_aarch64_emit_movz_w(text, 9, 0);
         macho_emit_store_local_w(text, fun, 9, instr->local_index, 0, frame_size);
         macho_emit_store_local_x(text, fun, 9, instr->local_index, 8, frame_size);
-        macho_patch_branch26(text, end, text->len);
+        z_aarch64_patch_branch26(text, end, text->len);
         return true;
       }
       if (!macho_emit_value_to_reg(text, fun, instr->value, 8, frame_size, ctx, diag)) return false;
-      macho_emit_cmp_x(text, 8, 31);
-      size_t fail = macho_emit_b_cond_placeholder(text, 11); // signed less than
-      macho_emit_movz_w(text, 9, 1);
+      z_aarch64_emit_cmp_x(text, 8, 31);
+      size_t fail = z_aarch64_emit_b_cond_placeholder(text, 11); // signed less than
+      z_aarch64_emit_movz_w(text, 9, 1);
       macho_emit_store_local_w(text, fun, 9, instr->local_index, 0, frame_size);
       macho_emit_store_local_x(text, fun, 8, instr->local_index, 8, frame_size);
-      size_t end = macho_emit_b_placeholder(text);
-      macho_patch_cond19(text, fail, text->len);
-      macho_emit_movz_w(text, 9, 0);
+      size_t end = z_aarch64_emit_b_placeholder(text);
+      z_aarch64_patch_cond19(text, fail, text->len);
+      z_aarch64_emit_movz_w(text, 9, 0);
       macho_emit_store_local_w(text, fun, 9, instr->local_index, 0, frame_size);
       macho_emit_store_local_x(text, fun, 9, instr->local_index, 8, frame_size);
-      macho_patch_branch26(text, end, text->len);
+      z_aarch64_patch_branch26(text, end, text->len);
       return true;
     }
     if (!macho_emit_value_to_reg(text, fun, instr->value, 8, frame_size, ctx, diag)) return false;
@@ -1373,27 +1206,27 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
     if (local->is_array && (local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 || local->element_type == IR_TYPE_USIZE)) {
       if (!macho_emit_value_to_reg(text, fun, instr->value, 10, frame_size, ctx, diag)) return false;
       if (!instr->index || !macho_emit_value_to_reg(text, fun, instr->index, 8, frame_size, ctx, diag)) return false;
-      macho_emit_movz_w(text, 9, local->array_len);
-      macho_emit_cmp_w(text, 8, 9);
-      size_t ok_patch = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-      append_u32le(text, 0xd4200000u); // brk #0
-      macho_patch_cond19(text, ok_patch, text->len);
-      macho_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, instr->array_index, 0, frame_size));
-      macho_emit_add_x_reg_lsl(text, 9, 9, 8, 2);
-      append_u32le(text, 0xb9000000u | (9u << 5) | (10u & 31u));
+      z_aarch64_emit_movz_w(text, 9, local->array_len);
+      z_aarch64_emit_cmp_w(text, 8, 9);
+      size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+      z_aarch64_emit_brk(text);
+      z_aarch64_patch_cond19(text, ok_patch, text->len);
+      z_aarch64_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, instr->array_index, 0, frame_size));
+      z_aarch64_emit_add_x_reg_lsl(text, 9, 9, 8, 2);
+      z_aarch64_emit_store_w_imm(text, 10, 9, 0);
       return true;
     }
     if (!local->is_array || local->element_type != IR_TYPE_U8) return macho_diag_at(diag, "direct AArch64 Mach-O indexed store requires [N]u8 or integer arrays", instr->line, instr->column, "unsupported array local");
     if (!macho_emit_value_to_reg(text, fun, instr->value, 10, frame_size, ctx, diag)) return false;
     if (!instr->index || !macho_emit_value_to_reg(text, fun, instr->index, 8, frame_size, ctx, diag)) return false;
-    macho_emit_movz_w(text, 9, local->array_len);
-    macho_emit_cmp_w(text, 8, 9);
-    size_t ok_patch = macho_emit_b_cond_placeholder(text, 3); // unsigned lower
-    append_u32le(text, 0xd4200000u); // brk #0
-    macho_patch_cond19(text, ok_patch, text->len);
-    macho_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, instr->array_index, 0, frame_size));
-    macho_emit_add_x_reg(text, 9, 9, 8);
-    macho_emit_strb_w(text, 10, 9);
+    z_aarch64_emit_movz_w(text, 9, local->array_len);
+    z_aarch64_emit_cmp_w(text, 8, 9);
+    size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3); // unsigned lower
+    z_aarch64_emit_brk(text);
+    z_aarch64_patch_cond19(text, ok_patch, text->len);
+    z_aarch64_emit_add_x_sp_imm(text, 9, macho_local_slot_offset(fun, instr->array_index, 0, frame_size));
+    z_aarch64_emit_add_x_reg(text, 9, 9, 8);
+    z_aarch64_emit_store_b_imm(text, 10, 9, 0);
     return true;
   }
   if (instr->kind == IR_INSTR_EXPR) {
@@ -1406,26 +1239,26 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
   }
   if (instr->kind == IR_INSTR_IF) {
     if (!macho_emit_value_to_reg(text, fun, instr->value, 0, frame_size, ctx, diag)) return false;
-    size_t false_patch = macho_emit_cbz_w_placeholder(text, 0);
+    size_t false_patch = z_aarch64_emit_cbz_w_placeholder(text, 0);
     if (!macho_emit_instrs(text, fun, instr->then_instrs, instr->then_len, frame_size, restore_process_args, ctx, diag)) return false;
     if (instr->else_len > 0) {
-      size_t end_patch = macho_emit_b_placeholder(text);
-      macho_patch_cond19(text, false_patch, text->len);
+      size_t end_patch = z_aarch64_emit_b_placeholder(text);
+      z_aarch64_patch_cond19(text, false_patch, text->len);
       if (!macho_emit_instrs(text, fun, instr->else_instrs, instr->else_len, frame_size, restore_process_args, ctx, diag)) return false;
-      macho_patch_branch26(text, end_patch, text->len);
+      z_aarch64_patch_branch26(text, end_patch, text->len);
     } else {
-      macho_patch_cond19(text, false_patch, text->len);
+      z_aarch64_patch_cond19(text, false_patch, text->len);
     }
     return true;
   }
   if (instr->kind == IR_INSTR_WHILE) {
     size_t loop_start = text->len;
     if (!macho_emit_value_to_reg(text, fun, instr->value, 0, frame_size, ctx, diag)) return false;
-    size_t false_patch = macho_emit_cbz_w_placeholder(text, 0);
+    size_t false_patch = z_aarch64_emit_cbz_w_placeholder(text, 0);
     if (!macho_emit_instrs(text, fun, instr->then_instrs, instr->then_len, frame_size, restore_process_args, ctx, diag)) return false;
-    size_t loop_patch = macho_emit_b_placeholder(text);
-    macho_patch_branch26(text, loop_patch, loop_start);
-    macho_patch_cond19(text, false_patch, text->len);
+    size_t loop_patch = z_aarch64_emit_b_placeholder(text);
+    z_aarch64_patch_branch26(text, loop_patch, loop_start);
+    z_aarch64_patch_cond19(text, false_patch, text->len);
     return true;
   }
   char actual[64];
@@ -1468,19 +1301,19 @@ static bool macho_validate_function(const IrFunction *fun, ZDiag *diag) {
 static bool macho_emit_function_text(ZBuf *text, const IrFunction *fun, MachOEmitContext *ctx, ZDiag *diag) {
   uint32_t literal = 0;
   if (macho_is_literal_return_function(fun, &literal, NULL)) {
-    macho_emit_aarch64_literal_return(text, literal);
+    z_aarch64_emit_literal_return(text, literal);
     return true;
   }
 
   unsigned frame_size = macho_frame_size(fun);
   bool seed_process_args = ctx && ctx->seed_main_process_args && fun->is_exported && fun->name && strcmp(fun->name, "main") == 0;
-  if (seed_process_args) append_u32le(text, 0xa9bf57f4u); // stp x20, x21, [sp, #-16]!
-  append_u32le(text, 0xa9bf7bfdu); // stp x29, x30, [sp, #-16]!
-  append_u32le(text, 0x910003fdu); // mov x29, sp
-  if (frame_size > 0) macho_emit_add_sp_imm(text, 0xd10003ffu, frame_size); // sub sp, sp, #frame_size
+  if (seed_process_args) z_aarch64_emit_stp_x20_x21_sp_pre16(text);
+  z_aarch64_emit_stp_x29_x30_sp_pre16(text);
+  z_aarch64_emit_mov_x29_sp(text);
+  if (frame_size > 0) z_aarch64_emit_sub_sp_imm(text, frame_size);
   if (seed_process_args) {
-    macho_emit_mov_x(text, 20, 0);
-    macho_emit_mov_x(text, 21, 1);
+    z_aarch64_emit_mov_x(text, 20, 0);
+    z_aarch64_emit_mov_x(text, 21, 1);
   }
   for (size_t i = 0; i < fun->param_count; i++) {
     if (macho_type_is_scalar64(fun->locals[i].type)) macho_emit_store_local_x(text, fun, (unsigned)i, (unsigned)i, 0, frame_size);
@@ -1858,18 +1691,18 @@ static const IrFunction *macho_find_executable_main(const IrProgram *program, ZD
 }
 
 static size_t macho_emit_exe_start_stub(ZBuf *text) {
-  macho_emit_mov_x(text, 20, 0);
-  macho_emit_mov_x(text, 21, 1);
-  size_t patch = macho_emit_b_placeholder(text); // tail-call main so it returns to dyld's LC_MAIN trampoline
+  z_aarch64_emit_mov_x(text, 20, 0);
+  z_aarch64_emit_mov_x(text, 21, 1);
+  size_t patch = z_aarch64_emit_b_placeholder(text); // tail-call main so it returns to dyld's LC_MAIN trampoline
   return patch;
 }
 
 static size_t macho_emit_exe_world_write(ZBuf *text) {
   size_t offset = text->len;
-  macho_emit_movz_x(text, 16, 0x02000004u); // Darwin SYS_write(fd=x0, buf=x1, len=x2)
-  append_u32le(text, 0xd4001001u); // svc #0x80
-  macho_emit_movz_w(text, 0, 0);   // report success to the checked std.io shim
-  append_u32le(text, 0xd65f03c0u); // ret
+  z_aarch64_emit_movz_x(text, 16, 0x02000004u); // Darwin SYS_write(fd=x0, buf=x1, len=x2)
+  z_aarch64_emit_svc(text, 0x80);
+  z_aarch64_emit_movz_w(text, 0, 0);   // report success to the checked std.io shim
+  z_aarch64_emit_ret(text);
   return offset;
 }
 
@@ -1947,13 +1780,13 @@ bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag
     macho_pad_to(&text, macho_align(text.len, 4));
     world_write_offset = macho_emit_exe_world_write(&text);
   }
-  macho_patch_branch26(&text, start_call_patch, offsets[main_index]);
+  z_aarch64_patch_branch26(&text, start_call_patch, offsets[main_index]);
   for (size_t i = 0; i < ctx.call_patch_len; i++) {
     const MachOCallPatch *patch = &ctx.call_patches[i];
-    macho_patch_branch26(&text, patch->patch_offset, offsets[patch->callee_index]);
+    z_aarch64_patch_branch26(&text, patch->patch_offset, offsets[patch->callee_index]);
   }
   for (size_t i = 0; i < ctx.world_write_patch_len; i++) {
-    macho_patch_branch26(&text, ctx.world_write_patches[i].patch_offset, world_write_offset);
+    z_aarch64_patch_branch26(&text, ctx.world_write_patches[i].patch_offset, world_write_offset);
   }
 
   const char *code_signature_id = "zero-direct";
@@ -1964,7 +1797,7 @@ bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag
   for (size_t i = 0; i < ctx.data_patch_len; i++) {
     const MachODataPatch *patch = &ctx.data_patches[i];
     uint64_t addr = layout.base_addr + layout.rodata_offset + (patch->data_offset - rodata_base_offset);
-    if (ctx.pie_relative_data) macho_patch_adrp_add(&text, patch->patch_offset, layout.base_addr + layout.text_offset + patch->patch_offset, addr);
+    if (ctx.pie_relative_data) z_aarch64_patch_adrp_add(&text, patch->patch_offset, layout.base_addr + layout.text_offset + patch->patch_offset, addr);
     else z_macho_patch_u64(&text, patch->patch_offset, addr);
   }
   if (ctx.data_patch_len > 0 && !ctx.pie_relative_data) {

@@ -1,34 +1,10 @@
 #include "zero.h"
+#include "aarch64_emit.h"
 #include "elf_format.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-
-static void a64_append_u8(ZBuf *buf, unsigned value) {
-  zbuf_append_char(buf, (char)(value & 0xff));
-}
-
-static void a64_append_u32(ZBuf *buf, uint32_t value) {
-  a64_append_u8(buf, value);
-  a64_append_u8(buf, value >> 8);
-  a64_append_u8(buf, value >> 16);
-  a64_append_u8(buf, value >> 24);
-}
-
-static void a64_append_zeros(ZBuf *buf, size_t len) {
-  for (size_t i = 0; i < len; i++) a64_append_u8(buf, 0);
-}
-
-static size_t a64_align(size_t value, size_t alignment) {
-  size_t remainder = alignment ? value % alignment : 0;
-  return remainder == 0 ? value : value + (alignment - remainder);
-}
-
-static void a64_pad_to(ZBuf *buf, size_t offset) {
-  while (buf->len < offset) a64_append_u8(buf, 0);
-}
 
 static bool a64_diag(ZDiag *diag, const char *message, int line, int column, const char *actual) {
   if (diag) {
@@ -57,24 +33,6 @@ static bool a64_return_literal(const IrFunction *fun, uint32_t *out, ZDiag *diag
     return true;
   }
   return true;
-}
-
-static void a64_emit_function_text(ZBuf *text, uint32_t literal) {
-  a64_append_u32(text, 0x52800000u | ((literal & 0xffffu) << 5)); // movz w0, #literal
-  if (literal > 0xffffu) {
-    a64_append_u32(text, 0x72a00000u | (((literal >> 16) & 0xffffu) << 5)); // movk w0, #literal>>16, lsl #16
-  }
-  a64_append_u32(text, 0xd65f03c0u); // ret
-}
-
-static void a64_patch_branch(ZBuf *text, size_t patch_offset, size_t target_offset) {
-  int64_t delta = (int64_t)target_offset - (int64_t)patch_offset;
-  int64_t words = delta / 4;
-  uint32_t instr = 0x94000000u | ((uint32_t)words & 0x03ffffffu);
-  text->data[patch_offset + 0] = (char)(instr & 0xff);
-  text->data[patch_offset + 1] = (char)((instr >> 8) & 0xff);
-  text->data[patch_offset + 2] = (char)((instr >> 16) & 0xff);
-  text->data[patch_offset + 3] = (char)((instr >> 24) & 0xff);
 }
 
 static const IrFunction *a64_find_main(const IrProgram *ir, unsigned *out_index, ZDiag *diag) {
@@ -112,8 +70,8 @@ bool z_emit_elf_aarch64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *di
   zbuf_init(&text);
   zbuf_init(&strtab);
   zbuf_init(&symtab);
-  a64_append_u8(&strtab, 0);
-  a64_append_zeros(&symtab, 24);
+  z_elf_append_u8(&strtab, 0);
+  z_elf_append_zeros(&symtab, 24);
 
   size_t *function_offsets = z_checked_calloc(ir->function_len, sizeof(size_t));
   size_t *function_sizes = z_checked_calloc(ir->function_len, sizeof(size_t));
@@ -142,13 +100,13 @@ bool z_emit_elf_aarch64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *di
       zbuf_free(&symtab);
       return false;
     }
-    a64_pad_to(&text, a64_align(text.len, 4));
+    z_aarch64_pad_to(&text, z_aarch64_align(text.len, 4));
     function_offsets[i] = text.len;
-    a64_emit_function_text(&text, literal);
+    z_aarch64_emit_literal_return(&text, literal);
     function_sizes[i] = text.len - function_offsets[i];
     symbol_names[i] = (uint32_t)strtab.len;
     zbuf_append(&strtab, ir->functions[i].name ? ir->functions[i].name : "zero_fn");
-    a64_append_u8(&strtab, 0);
+    z_elf_append_u8(&strtab, 0);
   }
   if (!has_export) {
     free(function_offsets);
@@ -195,11 +153,10 @@ bool z_emit_elf_aarch64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag)
 
   ZBuf text;
   zbuf_init(&text);
-  size_t start_call_patch = text.len;
-  a64_append_u32(&text, 0x94000000u); // bl main
-  a64_append_u32(&text, 0xd2800ba8u); // movz x8, #93
-  a64_append_u32(&text, 0xd4000001u); // svc #0
-  a64_pad_to(&text, a64_align(text.len, 16));
+  size_t start_call_patch = z_aarch64_emit_bl_placeholder(&text);
+  z_aarch64_emit_movz_x(&text, 8, 93);
+  z_aarch64_emit_svc(&text, 0);
+  z_aarch64_pad_to(&text, z_aarch64_align(text.len, 16));
 
   size_t *function_offsets = z_checked_calloc(ir->function_len, sizeof(size_t));
   if (!function_offsets) {
@@ -214,11 +171,11 @@ bool z_emit_elf_aarch64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag)
       zbuf_free(&text);
       return false;
     }
-    a64_pad_to(&text, a64_align(text.len, 4));
+    z_aarch64_pad_to(&text, z_aarch64_align(text.len, 4));
     function_offsets[i] = text.len;
-    a64_emit_function_text(&text, literal);
+    z_aarch64_emit_literal_return(&text, literal);
   }
-  a64_patch_branch(&text, start_call_patch, function_offsets[main_index]);
+  z_aarch64_patch_branch26(&text, start_call_patch, function_offsets[main_index]);
 
   const uint64_t base_addr = 0x400000;
   const size_t ehdr_size = 64;
