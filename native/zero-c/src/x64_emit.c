@@ -87,6 +87,29 @@ void z_x64_emit_pop_reg64(ZBuf *buf, unsigned reg) {
   z_x64_append_u8(buf, 0x58 + (reg & 7u));
 }
 
+void z_x64_emit_prologue(ZBuf *buf, unsigned stack_size) {
+  z_x64_append_u8(buf, 0x55);
+  z_x64_append_u8(buf, 0x48);
+  z_x64_append_u8(buf, 0x89);
+  z_x64_append_u8(buf, 0xe5);
+  z_x64_emit_sub_rsp(buf, stack_size);
+}
+
+void z_x64_emit_epilogue(ZBuf *buf) {
+  z_x64_append_u8(buf, 0xc9);
+  z_x64_append_u8(buf, 0xc3);
+}
+
+void z_x64_emit_mov_eax_u32(ZBuf *buf, uint32_t value) {
+  z_x64_append_u8(buf, 0xb8);
+  z_x64_append_u32(buf, value);
+}
+
+void z_x64_emit_ud2(ZBuf *buf) {
+  z_x64_append_u8(buf, 0x0f);
+  z_x64_append_u8(buf, 0x0b);
+}
+
 void z_x64_emit_sub_rsp(ZBuf *buf, unsigned amount) {
   if (amount == 0) return;
   z_x64_append_u8(buf, 0x48);

@@ -8,39 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-static void elf_append_u8(ZBuf *buf, unsigned value) {
-  zbuf_append_char(buf, (char)(value & 0xff));
-}
-
-static void elf_append_u32(ZBuf *buf, uint32_t value) {
-  elf_append_u8(buf, value);
-  elf_append_u8(buf, value >> 8);
-  elf_append_u8(buf, value >> 16);
-  elf_append_u8(buf, value >> 24);
-}
-
-static void elf_append_u64(ZBuf *buf, uint64_t value) {
-  elf_append_u32(buf, (uint32_t)value);
-  elf_append_u32(buf, (uint32_t)(value >> 32));
-}
-
-static void elf_append_bytes(ZBuf *buf, const unsigned char *bytes, size_t len) {
-  for (size_t i = 0; i < len; i++) elf_append_u8(buf, bytes[i]);
-}
-
-static void elf_append_zeros(ZBuf *buf, size_t len) {
-  for (size_t i = 0; i < len; i++) elf_append_u8(buf, 0);
-}
-
-static size_t elf_align(size_t value, size_t alignment) {
-  size_t remainder = alignment ? value % alignment : 0;
-  return remainder == 0 ? value : value + (alignment - remainder);
-}
-
-static void elf_pad_to(ZBuf *buf, size_t offset) {
-  while (buf->len < offset) elf_append_u8(buf, 0);
-}
-
 static bool elf_diag(ZDiag *diag, const char *message, int line, int column, const char *actual) {
   diag->code = 4004;
   diag->line = line > 0 ? line : 1;
@@ -121,7 +88,7 @@ static unsigned elf_record_field_disp(const IrLocal *local, unsigned field_offse
 static void elf_emit_load_field_rax(ZBuf *code, const IrLocal *local, unsigned field_offset, IrTypeKind type) {
   unsigned disp = elf_record_field_disp(local, field_offset);
   if (type == IR_TYPE_U8 || type == IR_TYPE_BOOL) {
-    elf_append_u8(code, 0x0f);
+    z_x64_append_u8(code, 0x0f);
     z_x64_emit_rbp_disp_reg(code, 0xb6, 0, disp, false);
   } else if (elf_type_is_i64(type)) {
     z_x64_emit_rbp_disp_reg(code, 0x8b, 0, disp, true);
@@ -148,25 +115,25 @@ static unsigned elf_type_byte_size(IrTypeKind type) {
 }
 
 static void elf_emit_lea_array_base_rax(ZBuf *code, const IrLocal *local) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x8d);
-  elf_append_u8(code, 0x85);
-  elf_append_u32(code, (uint32_t)(-(int32_t)local->frame_offset));
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x8d);
+  z_x64_append_u8(code, 0x85);
+  z_x64_append_u32(code, (uint32_t)(-(int32_t)local->frame_offset));
 }
 
 static void elf_emit_scale_index_into_rax(ZBuf *code, IrTypeKind element_type) {
   unsigned size = elf_type_byte_size(element_type);
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x8d);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x8d);
   if (size == 1) {
-    elf_append_u8(code, 0x04);
-    elf_append_u8(code, 0x08);
+    z_x64_append_u8(code, 0x04);
+    z_x64_append_u8(code, 0x08);
   } else if (size == 4) {
-    elf_append_u8(code, 0x04);
-    elf_append_u8(code, 0x88);
+    z_x64_append_u8(code, 0x04);
+    z_x64_append_u8(code, 0x88);
   } else {
-    elf_append_u8(code, 0x04);
-    elf_append_u8(code, 0xc8);
+    z_x64_append_u8(code, 0x04);
+    z_x64_append_u8(code, 0xc8);
   }
 }
 
@@ -216,7 +183,7 @@ static bool elf_function_seeds_process_args(const IrFunction *fun, const ElfEmit
 }
 
 static unsigned elf_base_stack_size(const IrFunction *fun) {
-  return (unsigned)elf_align(fun ? fun->frame_bytes : 0, 16);
+  return (unsigned)z_elf_align(fun ? fun->frame_bytes : 0, 16);
 }
 
 static unsigned elf_total_stack_size(const IrFunction *fun, const ElfEmitContext *ctx) {
@@ -231,12 +198,11 @@ static void elf_emit_epilogue(ZBuf *code, const IrFunction *fun, const ElfEmitCo
     z_x64_emit_rbp_disp_reg(code, 0x8b, 14, base + 16, true);
     z_x64_emit_rbp_disp_reg(code, 0x8b, 15, base + 24, true);
   }
-  elf_append_u8(code, 0xc9);
-  elf_append_u8(code, 0xc3);
+  z_x64_emit_epilogue(code);
 }
 
 static void elf_emit_push_rax(ZBuf *code) {
-  elf_append_u8(code, 0x50);
+  z_x64_append_u8(code, 0x50);
 }
 
 static void elf_emit_store_local_slot_reg(ZBuf *code, const IrLocal *local, unsigned slot_offset, unsigned reg, bool wide);
@@ -244,109 +210,105 @@ static void elf_emit_store_local_slot_rax(ZBuf *code, const IrLocal *local, unsi
 static bool elf_emit_byte_view_ptr(ZBuf *code, const IrFunction *fun, const IrValue *view, ElfEmitContext *ctx, ZDiag *diag);
 
 static void elf_emit_strlen_rax_to_ecx(ZBuf *code) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x89);
-  elf_append_u8(code, 0xc2);
-  elf_append_u8(code, 0x31);
-  elf_append_u8(code, 0xc9);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x89);
+  z_x64_append_u8(code, 0xc2);
+  z_x64_append_u8(code, 0x31);
+  z_x64_append_u8(code, 0xc9);
   size_t loop = code->len;
-  elf_append_u8(code, 0x80);
-  elf_append_u8(code, 0x3c);
-  elf_append_u8(code, 0x0a);
-  elf_append_u8(code, 0x00);
+  z_x64_append_u8(code, 0x80);
+  z_x64_append_u8(code, 0x3c);
+  z_x64_append_u8(code, 0x0a);
+  z_x64_append_u8(code, 0x00);
   size_t done = z_x64_emit_jcc32_placeholder(code, 0x84);
-  elf_append_u8(code, 0xff);
-  elf_append_u8(code, 0xc1);
+  z_x64_append_u8(code, 0xff);
+  z_x64_append_u8(code, 0xc1);
   size_t back = z_x64_emit_jmp32_placeholder(code, 0xe9);
   z_x64_patch_rel32(code, back, loop);
   z_x64_patch_rel32(code, done, code->len);
 }
 
 static void elf_emit_maybe_clear(ZBuf *code, const IrLocal *local) {
-  elf_append_u8(code, 0x31);
-  elf_append_u8(code, 0xc0);
+  z_x64_append_u8(code, 0x31);
+  z_x64_append_u8(code, 0xc0);
   elf_emit_store_local_slot_reg(code, local, 0, 0, false);
   elf_emit_store_local_slot_reg(code, local, 8, 0, true);
   elf_emit_store_local_slot_reg(code, local, 16, 0, false);
 }
 
 static void elf_emit_maybe_scalar_clear(ZBuf *code, const IrLocal *local) {
-  elf_append_u8(code, 0x31);
-  elf_append_u8(code, 0xc0);
+  z_x64_append_u8(code, 0x31);
+  z_x64_append_u8(code, 0xc0);
   elf_emit_store_local_slot_reg(code, local, 0, 0, false);
   elf_emit_store_local_slot_reg(code, local, 8, 0, true);
 }
 
 static void elf_emit_maybe_scalar_store_rax(ZBuf *code, const IrLocal *local) {
-  elf_append_u8(code, 0x50);
-  elf_append_u8(code, 0xb8);
-  elf_append_u32(code, 1);
+  z_x64_append_u8(code, 0x50);
+  z_x64_emit_mov_eax_u32(code, 1);
   elf_emit_store_local_slot_reg(code, local, 0, 0, false);
-  elf_append_u8(code, 0x58);
+  z_x64_append_u8(code, 0x58);
   elf_emit_store_local_slot_rax(code, local, 8);
 }
 
 static size_t elf_emit_js_placeholder(ZBuf *code) {
-  elf_append_u8(code, 0x0f);
-  elf_append_u8(code, 0x88);
+  z_x64_append_u8(code, 0x0f);
+  z_x64_append_u8(code, 0x88);
   size_t patch = code->len;
-  elf_append_u32(code, 0);
+  z_x64_append_u32(code, 0);
   return patch;
 }
 
 static void elf_emit_bool_from_nonnegative_rax(ZBuf *code) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x85);
-  elf_append_u8(code, 0xc0);
-  elf_append_u8(code, 0x0f);
-  elf_append_u8(code, 0x99);
-  elf_append_u8(code, 0xc0);
-  elf_append_u8(code, 0x0f);
-  elf_append_u8(code, 0xb6);
-  elf_append_u8(code, 0xc0);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x85);
+  z_x64_append_u8(code, 0xc0);
+  z_x64_append_u8(code, 0x0f);
+  z_x64_append_u8(code, 0x99);
+  z_x64_append_u8(code, 0xc0);
+  z_x64_append_u8(code, 0x0f);
+  z_x64_append_u8(code, 0xb6);
+  z_x64_append_u8(code, 0xc0);
 }
 
 static bool elf_emit_openat_path(ZBuf *code, const IrFunction *fun, const IrValue *path, unsigned flags, unsigned mode, ElfEmitContext *ctx, ZDiag *diag) {
   if (!elf_emit_byte_view_ptr(code, fun, path, ctx, diag)) return false;
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x89);
-  elf_append_u8(code, 0xc6);
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0xbf);
-  elf_append_u64(code, 0xffffffffffffff9cULL);
-  elf_append_u8(code, 0xba);
-  elf_append_u32(code, flags);
-  elf_append_u8(code, 0x41);
-  elf_append_u8(code, 0xba);
-  elf_append_u32(code, mode);
-  elf_append_u8(code, 0xb8);
-  elf_append_u32(code, 257);
-  elf_append_u8(code, 0x0f);
-  elf_append_u8(code, 0x05);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x89);
+  z_x64_append_u8(code, 0xc6);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0xbf);
+  z_x64_append_u64(code, 0xffffffffffffff9cULL);
+  z_x64_append_u8(code, 0xba);
+  z_x64_append_u32(code, flags);
+  z_x64_append_u8(code, 0x41);
+  z_x64_append_u8(code, 0xba);
+  z_x64_append_u32(code, mode);
+  z_x64_emit_mov_eax_u32(code, 257);
+  z_x64_append_u8(code, 0x0f);
+  z_x64_append_u8(code, 0x05);
   return true;
 }
 
 static void elf_emit_close_rax_fd(ZBuf *code) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x89);
-  elf_append_u8(code, 0xc7);
-  elf_append_u8(code, 0xb8);
-  elf_append_u32(code, 3);
-  elf_append_u8(code, 0x0f);
-  elf_append_u8(code, 0x05);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x89);
+  z_x64_append_u8(code, 0xc7);
+  z_x64_emit_mov_eax_u32(code, 3);
+  z_x64_append_u8(code, 0x0f);
+  z_x64_append_u8(code, 0x05);
 }
 
 static bool elf_emit_bounds_checked_address(ZBuf *code, const IrFunction *fun, const IrLocal *local, const IrValue *index, ElfEmitContext *ctx, ZDiag *diag) {
   if (!local || !local->is_array) return elf_diag(diag, "direct ELF64 indexed access requires fixed array local", index ? index->line : 1, index ? index->column : 1, "non-array local");
   if (!elf_emit_value(code, fun, index, ctx, diag)) return false;
-  elf_append_u8(code, 0x3d);
-  elf_append_u32(code, local->array_len);
+  z_x64_append_u8(code, 0x3d);
+  z_x64_append_u32(code, local->array_len);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(code, 0x82);
-  elf_append_u8(code, 0x0f);
-  elf_append_u8(code, 0x0b);
+  z_x64_emit_ud2(code);
   z_x64_patch_rel32(code, ok_patch, code->len);
-  elf_append_u8(code, 0x89);
-  elf_append_u8(code, 0xc1);
+  z_x64_append_u8(code, 0x89);
+  z_x64_append_u8(code, 0xc1);
   elf_emit_lea_array_base_rax(code, local);
   elf_emit_scale_index_into_rax(code, local->element_type);
   return true;
@@ -411,29 +373,29 @@ static bool elf_byte_view_const_byte(const IrProgram *ir, const IrFunction *fun,
 }
 
 static void elf_emit_error_condition_from_rax(ZBuf *code) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0x89);
-  elf_append_u8(code, 0xc1);
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0xc1);
-  elf_append_u8(code, 0xe9);
-  elf_append_u8(code, 32);
-  elf_append_u8(code, 0x85);
-  elf_append_u8(code, 0xc9);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0x89);
+  z_x64_append_u8(code, 0xc1);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0xc1);
+  z_x64_append_u8(code, 0xe9);
+  z_x64_append_u8(code, 32);
+  z_x64_append_u8(code, 0x85);
+  z_x64_append_u8(code, 0xc9);
 }
 
 static void elf_emit_packed_error_rax(ZBuf *code, unsigned code_value) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0xb8);
-  elf_append_u64(code, ((uint64_t)code_value) << 32);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0xb8);
+  z_x64_append_u64(code, ((uint64_t)code_value) << 32);
 }
 
 static bool elf_emit_rodata_ptr_rax(ZBuf *code, unsigned data_offset, ElfEmitContext *ctx, ZDiag *diag, const IrValue *value) {
-  elf_append_u8(code, 0x48);
-  elf_append_u8(code, 0xb8);
+  z_x64_append_u8(code, 0x48);
+  z_x64_append_u8(code, 0xb8);
   size_t imm_offset = code->len;
   unsigned compact_offset = ctx ? data_offset - ctx->rodata_base_offset : data_offset;
-  elf_append_u64(code, ctx && ctx->emit_rodata_relocations ? 0 : (ctx ? ctx->rodata_addr : 0) + compact_offset);
+  z_x64_append_u64(code, ctx && ctx->emit_rodata_relocations ? 0 : (ctx ? ctx->rodata_addr : 0) + compact_offset);
   return z_elf_record_rodata_patch(ctx, imm_offset, data_offset, diag, value);
 }
 
@@ -474,16 +436,14 @@ static bool elf_emit_json_parse_bytes_call(ZBuf *code, const IrFunction *fun, co
 static bool elf_emit_byte_view_len(ZBuf *code, const IrFunction *fun, const IrValue *view, ElfEmitContext *ctx, ZDiag *diag) {
   unsigned len = 0;
   if (elf_byte_view_const_len(fun, view, &len)) {
-    elf_append_u8(code, 0xb8);
-    elf_append_u32(code, len);
+    z_x64_emit_mov_eax_u32(code, len);
     return true;
   }
   if (view && view->kind == IR_VALUE_BYTE_SLICE && view->index && view->right) {
     unsigned start = 0;
     unsigned end = 0;
     if (elf_const_u32_value(view->index, &start) && elf_const_u32_value(view->right, &end) && start <= end) {
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, end - start);
+      z_x64_emit_mov_eax_u32(code, end - start);
       return true;
     }
   }
@@ -493,9 +453,9 @@ static bool elf_emit_byte_view_len(ZBuf *code, const IrFunction *fun, const IrVa
         !elf_const_u32_value(view->right, NULL)) {
       if (!elf_emit_value(code, fun, view->right, ctx, diag)) return false;
       if (start > 0) {
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x2d);
-        elf_append_u32(code, start);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x2d);
+        z_x64_append_u32(code, start);
       }
       return true;
     }
@@ -505,9 +465,9 @@ static bool elf_emit_byte_view_len(ZBuf *code, const IrFunction *fun, const IrVa
     elf_emit_push_rax(code);
     if (!elf_emit_value(code, fun, view->right, ctx, diag)) return false;
     z_x64_emit_pop_reg64(code, 1);
-    elf_append_u8(code, 0x48);
-    elf_append_u8(code, 0x29);
-    elf_append_u8(code, 0xc8);
+    z_x64_append_u8(code, 0x48);
+    z_x64_append_u8(code, 0x29);
+    z_x64_append_u8(code, 0xc8);
     return true;
   }
   if (view && view->kind == IR_VALUE_LOCAL && view->local_index < fun->local_len && fun->locals[view->local_index].type == IR_TYPE_BYTE_VIEW) {
@@ -543,17 +503,16 @@ static bool elf_emit_byte_view_ptr(ZBuf *code, const IrFunction *fun, const IrVa
   }
   if (view->kind == IR_VALUE_BYTE_SLICE) {
     if (!elf_emit_byte_view_ptr(code, fun, view->left, ctx, diag)) return false;
-    elf_append_u8(code, 0x50);
+    z_x64_append_u8(code, 0x50);
     if (view->index) {
       if (!elf_emit_value(code, fun, view->index, ctx, diag)) return false;
     } else {
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0);
+      z_x64_emit_mov_eax_u32(code, 0);
     }
-    elf_append_u8(code, 0x59);
-    elf_append_u8(code, 0x48);
-    elf_append_u8(code, 0x01);
-    elf_append_u8(code, 0xc8);
+    z_x64_append_u8(code, 0x59);
+    z_x64_append_u8(code, 0x48);
+    z_x64_append_u8(code, 0x01);
+    z_x64_append_u8(code, 0xc8);
     return true;
   }
   return elf_diag(diag, "direct ELF64 value is not a supported byte view", view->line, view->column, "unsupported byte view");
@@ -571,12 +530,11 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
     case IR_VALUE_BOOL:
     case IR_VALUE_INT:
       if (elf_type_is_i64(value->type)) {
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0xb8);
-        elf_append_u64(code, (uint64_t)value->int_value);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0xb8);
+        z_x64_append_u64(code, (uint64_t)value->int_value);
       } else {
-        elf_append_u8(code, 0xb8);
-        elf_append_u32(code, (uint32_t)value->int_value);
+        z_x64_emit_mov_eax_u32(code, (uint32_t)value->int_value);
       }
       return true;
     case IR_VALUE_LOCAL:
@@ -591,70 +549,70 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
     case IR_VALUE_BINARY: {
       bool wide = elf_type_is_i64(value->type);
       if (!elf_emit_value(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_value(code, fun, value->right, ctx, diag)) return false;
-      if (wide) elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc1);
-      elf_append_u8(code, 0x58);
+      if (wide) z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x58);
       if (value->binary_op == IR_BIN_ADD) {
-        if (wide) elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x01);
-        elf_append_u8(code, 0xc8);
+        if (wide) z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x01);
+        z_x64_append_u8(code, 0xc8);
       } else if (value->binary_op == IR_BIN_SUB) {
-        if (wide) elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x29);
-        elf_append_u8(code, 0xc8);
+        if (wide) z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x29);
+        z_x64_append_u8(code, 0xc8);
       } else if (value->binary_op == IR_BIN_MUL) {
-        if (wide) elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x0f);
-        elf_append_u8(code, 0xaf);
-        elf_append_u8(code, 0xc1);
+        if (wide) z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x0f);
+        z_x64_append_u8(code, 0xaf);
+        z_x64_append_u8(code, 0xc1);
       } else if (value->binary_op == IR_BIN_AND || value->binary_op == IR_BIN_OR) {
-        if (wide) elf_append_u8(code, 0x48);
-        elf_append_u8(code, value->binary_op == IR_BIN_AND ? 0x21 : 0x09);
-        elf_append_u8(code, 0xc8);
+        if (wide) z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, value->binary_op == IR_BIN_AND ? 0x21 : 0x09);
+        z_x64_append_u8(code, 0xc8);
       } else if (value->binary_op == IR_BIN_DIV) {
         if (elf_type_is_unsigned(value->type)) {
-          if (wide) elf_append_u8(code, 0x48);
-          elf_append_u8(code, 0x31);
-          elf_append_u8(code, 0xd2);
-          if (wide) elf_append_u8(code, 0x48);
-          elf_append_u8(code, 0xf7);
-          elf_append_u8(code, 0xf1);
+          if (wide) z_x64_append_u8(code, 0x48);
+          z_x64_append_u8(code, 0x31);
+          z_x64_append_u8(code, 0xd2);
+          if (wide) z_x64_append_u8(code, 0x48);
+          z_x64_append_u8(code, 0xf7);
+          z_x64_append_u8(code, 0xf1);
         } else {
           if (wide) {
-            elf_append_u8(code, 0x48);
-            elf_append_u8(code, 0x99);
+            z_x64_append_u8(code, 0x48);
+            z_x64_append_u8(code, 0x99);
           } else {
-            elf_append_u8(code, 0x99);
+            z_x64_append_u8(code, 0x99);
           }
-          if (wide) elf_append_u8(code, 0x48);
-          elf_append_u8(code, 0xf7);
-          elf_append_u8(code, 0xf9);
+          if (wide) z_x64_append_u8(code, 0x48);
+          z_x64_append_u8(code, 0xf7);
+          z_x64_append_u8(code, 0xf9);
         }
       } else if (value->binary_op == IR_BIN_MOD) {
         if (elf_type_is_unsigned(value->type)) {
-          if (wide) elf_append_u8(code, 0x48);
-          elf_append_u8(code, 0x31);
-          elf_append_u8(code, 0xd2);
-          if (wide) elf_append_u8(code, 0x48);
-          elf_append_u8(code, 0xf7);
-          elf_append_u8(code, 0xf1);
+          if (wide) z_x64_append_u8(code, 0x48);
+          z_x64_append_u8(code, 0x31);
+          z_x64_append_u8(code, 0xd2);
+          if (wide) z_x64_append_u8(code, 0x48);
+          z_x64_append_u8(code, 0xf7);
+          z_x64_append_u8(code, 0xf1);
         } else {
           if (wide) {
-            elf_append_u8(code, 0x48);
-            elf_append_u8(code, 0x99);
+            z_x64_append_u8(code, 0x48);
+            z_x64_append_u8(code, 0x99);
           } else {
-            elf_append_u8(code, 0x99);
+            z_x64_append_u8(code, 0x99);
           }
-          if (wide) elf_append_u8(code, 0x48);
-          elf_append_u8(code, 0xf7);
-          elf_append_u8(code, 0xf9);
+          if (wide) z_x64_append_u8(code, 0x48);
+          z_x64_append_u8(code, 0xf7);
+          z_x64_append_u8(code, 0xf9);
         }
-        if (wide) elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x89);
-        elf_append_u8(code, 0xd0);
+        if (wide) z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x89);
+        z_x64_append_u8(code, 0xd0);
       } else {
         return elf_diag(diag, "direct ELF64 binary operator is unsupported", value->line, value->column, "unsupported operator");
       }
@@ -666,21 +624,21 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       }
       bool wide = elf_type_is_i64(value->left->type);
       if (!elf_emit_value(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_value(code, fun, value->right, ctx, diag)) return false;
-      if (wide) elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc1);
-      elf_append_u8(code, 0x58);
-      if (wide) elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc8);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, elf_setcc_opcode(value->compare_op, elf_type_is_unsigned(value->left->type)));
-      elf_append_u8(code, 0xc0);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0xb6);
-      elf_append_u8(code, 0xc0);
+      if (wide) z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x58);
+      if (wide) z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, elf_setcc_opcode(value->compare_op, elf_type_is_unsigned(value->left->type)));
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0xb6);
+      z_x64_append_u8(code, 0xc0);
       return true;
     }
     case IR_VALUE_CALL: {
@@ -700,26 +658,26 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       return elf_emit_json_parse_bytes_call(code, fun, value, ctx, diag);
     case IR_VALUE_JSON_VALIDATE_BYTES:
       if (!elf_emit_json_parse_bytes_call(code, fun, value, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xf8);
-      elf_append_u8(code, 0x00);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x9d);
-      elf_append_u8(code, 0xc0);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0xb6);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xf8);
+      z_x64_append_u8(code, 0x00);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x9d);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0xb6);
+      z_x64_append_u8(code, 0xc0);
       return true;
     case IR_VALUE_JSON_STREAM_TOKENS_BYTES: {
       if (!elf_emit_json_parse_bytes_call(code, fun, value, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t ok = z_x64_emit_jcc32_placeholder(code, 0x89);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc0);
       z_x64_patch_rel32(code, ok, code->len);
       return true;
     }
@@ -789,99 +747,96 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
         z_x64_emit_pop_reg64(code, 0);
         return true;
       }
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x07);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x07);
       return true;
     case IR_VALUE_TIME_WALL_SECONDS:
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 201);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xff);
+      z_x64_emit_mov_eax_u32(code, 201);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       return true;
     case IR_VALUE_TIME_MONOTONIC:
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xec);
-      elf_append_u8(code, 0x10);
-      elf_append_u8(code, 0xbf);
-      elf_append_u32(code, 1);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xe6);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 228);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x04);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x69);
-      elf_append_u8(code, 0xc0);
-      elf_append_u32(code, 1000000000u);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x03);
-      elf_append_u8(code, 0x44);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0x08);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xc4);
-      elf_append_u8(code, 0x10);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xec);
+      z_x64_append_u8(code, 0x10);
+      z_x64_append_u8(code, 0xbf);
+      z_x64_append_u32(code, 1);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xe6);
+      z_x64_emit_mov_eax_u32(code, 228);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x04);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x69);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u32(code, 1000000000u);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x03);
+      z_x64_append_u8(code, 0x44);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x08);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xc4);
+      z_x64_append_u8(code, 0x10);
       return true;
     case IR_VALUE_TIME_AS_MS:
       if (!elf_emit_value(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xc1);
-      elf_append_u32(code, 1000000u);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x99);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xf7);
-      elf_append_u8(code, 0xf9);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0xc1);
+      z_x64_append_u32(code, 1000000u);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x99);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xf7);
+      z_x64_append_u8(code, 0xf9);
       return true;
     case IR_VALUE_RAND_NEXT_U32:
       if (value->local_index >= fun->local_len) return elf_diag(diag, "direct ELF64 std.rand.nextU32 local is out of range", value->line, value->column, "invalid RandSource");
       elf_emit_load_local_rax(code, fun, value->local_index);
-      elf_append_u8(code, 0x69);
-      elf_append_u8(code, 0xc0);
-      elf_append_u32(code, 1664525u);
-      elf_append_u8(code, 0x05);
-      elf_append_u32(code, 1013904223u);
+      z_x64_append_u8(code, 0x69);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u32(code, 1664525u);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u32(code, 1013904223u);
       elf_emit_store_local_from_reg(code, fun, value->local_index, 0);
       return true;
     case IR_VALUE_RAND_ENTROPY_U32:
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 201);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x35);
-      elf_append_u32(code, 0x9e3779b9u);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xff);
+      z_x64_emit_mov_eax_u32(code, 201);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x35);
+      z_x64_append_u32(code, 0x9e3779b9u);
       return true;
     case IR_VALUE_FS_HOST:
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc0);
       return true;
     case IR_VALUE_FS_OPEN:
     case IR_VALUE_FS_CREATE: {
       bool create = value->kind == IR_VALUE_FS_CREATE;
       if (!elf_emit_openat_path(code, fun, value->left, create ? 577 : 0, create ? 0644 : 0, ctx, diag)) return false;
       if (value->type == IR_TYPE_I64) {
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x85);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x85);
+        z_x64_append_u8(code, 0xc0);
         size_t fail = elf_emit_js_placeholder(code);
-        elf_append_u8(code, 0x89);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x89);
+        z_x64_append_u8(code, 0xc0);
         size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
         z_x64_patch_rel32(code, fail, code->len);
         elf_emit_packed_error_rax(code, value->error_code ? value->error_code : IR_ERROR_UNKNOWN);
@@ -898,289 +853,276 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
     case IR_VALUE_FS_IS_DIR: {
       unsigned flags = value->kind == IR_VALUE_FS_IS_DIR ? 65536u : 0u;
       if (!elf_emit_openat_path(code, fun, value->left, flags, 0, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t fail = elf_emit_js_placeholder(code);
       elf_emit_close_rax_fd(code);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 1);
+      z_x64_emit_mov_eax_u32(code, 1);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, fail, code->len);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0);
+      z_x64_emit_mov_eax_u32(code, 0);
       z_x64_patch_rel32(code, end, code->len);
       return true;
     }
     case IR_VALUE_FS_REMOVE:
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 87);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_emit_mov_eax_u32(code, 87);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       elf_emit_bool_from_nonnegative_rax(code);
       return true;
     case IR_VALUE_FS_REMOVE_DIR:
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 84);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_emit_mov_eax_u32(code, 84);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       elf_emit_bool_from_nonnegative_rax(code);
       return true;
     case IR_VALUE_FS_MAKE_DIR:
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xbe);
-      elf_append_u32(code, 0755);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 83);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0xbe);
+      z_x64_append_u32(code, 0755);
+      z_x64_emit_mov_eax_u32(code, 83);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       elf_emit_bool_from_nonnegative_rax(code);
       return true;
     case IR_VALUE_FS_RENAME:
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc6);
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 82);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc6);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_emit_mov_eax_u32(code, 82);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       elf_emit_bool_from_nonnegative_rax(code);
       return true;
     case IR_VALUE_FS_DIR_ENTRY_COUNT: {
       if (!elf_emit_openat_path(code, fun, value->left, 65536, 0, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t open_fail = elf_emit_js_placeholder(code);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x81);
-      elf_append_u8(code, 0xec);
-      elf_append_u32(code, 1040);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0x84);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1024);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0x84);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1032);
-      elf_append_u32(code, 0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x81);
+      z_x64_append_u8(code, 0xec);
+      z_x64_append_u32(code, 1040);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0x84);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1024);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0x84);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1032);
+      z_x64_append_u32(code, 0);
       size_t read_loop = code->len;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0xbc);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1024);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8d);
-      elf_append_u8(code, 0x34);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0xba);
-      elf_append_u32(code, 1024);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 217);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0xbc);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1024);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8d);
+      z_x64_append_u8(code, 0x34);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0xba);
+      z_x64_append_u32(code, 1024);
+      z_x64_emit_mov_eax_u32(code, 217);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t read_fail = elf_emit_js_placeholder(code);
       size_t done = z_x64_emit_jcc32_placeholder(code, 0x84);
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xe1);
-      elf_append_u8(code, 0x4c);
-      elf_append_u8(code, 0x8d);
-      elf_append_u8(code, 0x04);
-      elf_append_u8(code, 0x04);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xe1);
+      z_x64_append_u8(code, 0x4c);
+      z_x64_append_u8(code, 0x8d);
+      z_x64_append_u8(code, 0x04);
+      z_x64_append_u8(code, 0x04);
       size_t scan_loop = code->len;
-      elf_append_u8(code, 0x4d);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x4d);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc1);
       size_t scan_done = z_x64_emit_jcc32_placeholder(code, 0x83);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0x84);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1032);
-      elf_append_u8(code, 0x41);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0xb7);
-      elf_append_u8(code, 0x41);
-      elf_append_u8(code, 0x10);
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x01);
-      elf_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xff);
+      z_x64_append_u8(code, 0x84);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1032);
+      z_x64_append_u8(code, 0x41);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0xb7);
+      z_x64_append_u8(code, 0x41);
+      z_x64_append_u8(code, 0x10);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x01);
+      z_x64_append_u8(code, 0xc1);
       size_t scan_back = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, scan_back, scan_loop);
       z_x64_patch_rel32(code, scan_done, code->len);
       size_t loop_back = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, loop_back, read_loop);
       z_x64_patch_rel32(code, done, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x84);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1024);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x84);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1024);
       elf_emit_close_rax_fd(code);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x84);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1032);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x81);
-      elf_append_u8(code, 0xc4);
-      elf_append_u32(code, 1040);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x84);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1032);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x81);
+      z_x64_append_u8(code, 0xc4);
+      z_x64_append_u32(code, 1040);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, read_fail, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x84);
-      elf_append_u8(code, 0x24);
-      elf_append_u32(code, 1024);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x84);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u32(code, 1024);
       elf_emit_close_rax_fd(code);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x81);
-      elf_append_u8(code, 0xc4);
-      elf_append_u32(code, 1040);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x81);
+      z_x64_append_u8(code, 0xc4);
+      z_x64_append_u32(code, 1040);
       z_x64_patch_rel32(code, open_fail, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xc0);
-      elf_append_u32(code, 0xffffffffu);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u32(code, 0xffffffffu);
       z_x64_patch_rel32(code, end, code->len);
       return true;
     }
     case IR_VALUE_FS_ATOMIC_WRITE: {
       if (!value->left || !value->right || !value->index) return elf_diag(diag, "direct ELF64 std.fs.atomicWrite requires path, temp path, and bytes", value->line, value->column, "missing argument");
       if (!elf_emit_openat_path(code, fun, value->right, 577, 0644, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t open_fail = elf_emit_js_placeholder(code);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->index, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->index, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x74);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0x08);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x7c);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0x10);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 1);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x74);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x08);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x7c);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x10);
+      z_x64_emit_mov_eax_u32(code, 1);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t write_fail = elf_emit_js_placeholder(code);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x3b);
-      elf_append_u8(code, 0x04);
-      elf_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x3b);
+      z_x64_append_u8(code, 0x04);
+      z_x64_append_u8(code, 0x24);
       size_t short_write = z_x64_emit_jcc32_placeholder(code, 0x85);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x7c);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0x10);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 3);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xc4);
-      elf_append_u8(code, 0x18);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x7c);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x10);
+      z_x64_emit_mov_eax_u32(code, 3);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xc4);
+      z_x64_append_u8(code, 0x18);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t close_fail = elf_emit_js_placeholder(code);
       if (!elf_emit_byte_view_ptr(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc6);
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 82);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc6);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_emit_mov_eax_u32(code, 82);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       elf_emit_bool_from_nonnegative_rax(code);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, write_fail, code->len);
       z_x64_patch_rel32(code, short_write, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x8b);
-      elf_append_u8(code, 0x7c);
-      elf_append_u8(code, 0x24);
-      elf_append_u8(code, 0x10);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 3);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xc4);
-      elf_append_u8(code, 0x18);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x8b);
+      z_x64_append_u8(code, 0x7c);
+      z_x64_append_u8(code, 0x24);
+      z_x64_append_u8(code, 0x10);
+      z_x64_emit_mov_eax_u32(code, 3);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xc4);
+      z_x64_append_u8(code, 0x18);
       z_x64_patch_rel32(code, open_fail, code->len);
       z_x64_patch_rel32(code, close_fail, code->len);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0);
+      z_x64_emit_mov_eax_u32(code, 0);
       z_x64_patch_rel32(code, end, code->len);
       return true;
     }
     case IR_VALUE_FS_FILE_LEN:
       if (value->local_index >= fun->local_len) return elf_diag(diag, "direct ELF64 std.fs.fileLen local is out of range", value->line, value->column, "invalid File");
       elf_emit_load_local_rax(code, fun, value->local_index);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xf6);
-      elf_append_u8(code, 0xba);
-      elf_append_u32(code, 2);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 8);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xf6);
+      z_x64_append_u8(code, 0xba);
+      z_x64_append_u32(code, 2);
+      z_x64_emit_mov_eax_u32(code, 8);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       if (value->type == IR_TYPE_I64) {
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x85);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x85);
+        z_x64_append_u8(code, 0xc0);
         size_t fail = elf_emit_js_placeholder(code);
-        elf_append_u8(code, 0x89);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x89);
+        z_x64_append_u8(code, 0xc0);
         size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
         z_x64_patch_rel32(code, fail, code->len);
         elf_emit_packed_error_rax(code, value->error_code ? value->error_code : IR_ERROR_UNKNOWN);
@@ -1190,26 +1132,26 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
     case IR_VALUE_FS_READ_FILE:
       if (value->local_index >= fun->local_len) return elf_diag(diag, "direct ELF64 std.fs.read local is out of range", value->line, value->column, "invalid File");
       elf_emit_load_local_rax(code, fun, value->local_index);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x5e);
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc0);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x5e);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
       if (value->type == IR_TYPE_I64) {
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x85);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x85);
+        z_x64_append_u8(code, 0xc0);
         size_t fail = elf_emit_js_placeholder(code);
-        elf_append_u8(code, 0x89);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x89);
+        z_x64_append_u8(code, 0xc0);
         size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
         z_x64_patch_rel32(code, fail, code->len);
         elf_emit_packed_error_rax(code, value->error_code ? value->error_code : IR_ERROR_UNKNOWN);
@@ -1219,109 +1161,107 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
     case IR_VALUE_FS_WRITE_ALL_FILE:
       if (value->local_index >= fun->local_len) return elf_diag(diag, "direct ELF64 std.fs.writeAll local is out of range", value->line, value->column, "invalid File");
       elf_emit_load_local_rax(code, fun, value->local_index);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x5e);
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 1);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x59);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc8);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x94);
-      elf_append_u8(code, 0xc0);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0xb6);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x5e);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_emit_mov_eax_u32(code, 1);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x59);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x94);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0xb6);
+      z_x64_append_u8(code, 0xc0);
       if (value->type == IR_TYPE_I64) {
-        elf_append_u8(code, 0x85);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x85);
+        z_x64_append_u8(code, 0xc0);
         size_t success = z_x64_emit_jcc32_placeholder(code, 0x85);
         elf_emit_packed_error_rax(code, value->error_code ? value->error_code : IR_ERROR_UNKNOWN);
         size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
         z_x64_patch_rel32(code, success, code->len);
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x31);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x31);
+        z_x64_append_u8(code, 0xc0);
         z_x64_patch_rel32(code, end, code->len);
       }
       return true;
     case IR_VALUE_FS_READ_PATH:
     case IR_VALUE_FS_READ_BYTES_PATH: {
       if (!elf_emit_openat_path(code, fun, value->left, 0, 0, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t open_fail = elf_emit_js_placeholder(code);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x5e);
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc0);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x50);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xf8);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x5e);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xf8);
       elf_emit_close_rax_fd(code);
-      elf_append_u8(code, 0x58);
+      z_x64_append_u8(code, 0x58);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, open_fail, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xc0);
-      elf_append_u32(code, 0xffffffffu);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u32(code, 0xffffffffu);
       z_x64_patch_rel32(code, end, code->len);
       return true;
     }
     case IR_VALUE_FS_WRITE_PATH:
     case IR_VALUE_FS_WRITE_BYTES_PATH: {
       if (!elf_emit_openat_path(code, fun, value->left, 577, 0644, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x85);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x85);
+      z_x64_append_u8(code, 0xc0);
       size_t open_fail = elf_emit_js_placeholder(code);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x5e);
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 1);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x05);
-      elf_append_u8(code, 0x50);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xf8);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x5e);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_emit_mov_eax_u32(code, 1);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0x05);
+      z_x64_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xf8);
       elf_emit_close_rax_fd(code);
-      elf_append_u8(code, 0x58);
+      z_x64_append_u8(code, 0x58);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, open_fail, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xc7);
-      elf_append_u8(code, 0xc0);
-      elf_append_u32(code, 0xffffffffu);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xc7);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u32(code, 0xffffffffu);
       z_x64_patch_rel32(code, end, code->len);
       return true;
     }
@@ -1346,30 +1286,28 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       const IrLocal *local = &fun->locals[value->local_index];
       elf_emit_load_local_slot_reg(code, local, 8, 0, false);
       elf_emit_load_local_slot_reg(code, local, 12, 1, false);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc8);
       size_t ok_patch = z_x64_emit_jcc32_placeholder(code, 0x82);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0);
+      z_x64_emit_mov_eax_u32(code, 0);
       size_t end_patch = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, ok_patch, code->len);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_value(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x59);
+      z_x64_append_u8(code, 0x59);
       elf_emit_load_local_slot_reg(code, local, 0, 2, true);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x01);
-      elf_append_u8(code, 0xca);
-      elf_append_u8(code, 0x88);
-      elf_append_u8(code, 0x02);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc8);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xc0);
-      elf_append_u8(code, 0x01);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x01);
+      z_x64_append_u8(code, 0xca);
+      z_x64_append_u8(code, 0x88);
+      z_x64_append_u8(code, 0x02);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x01);
       elf_emit_store_local_slot_reg(code, local, 8, 0, false);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 1);
+      z_x64_emit_mov_eax_u32(code, 1);
       z_x64_patch_rel32(code, end_patch, code->len);
       return true;
     }
@@ -1381,14 +1319,13 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       if (elf_function_propagates_to_process_exit(fun)) {
         elf_emit_epilogue(code, fun, ctx);
       } else {
-        elf_append_u8(code, 0xb8);
-        elf_append_u32(code, 1);
+        z_x64_emit_mov_eax_u32(code, 1);
         elf_emit_epilogue(code, fun, ctx);
       }
       z_x64_patch_rel32(code, ok_patch, code->len);
       if (!elf_type_is_i64(value->type)) {
-        elf_append_u8(code, 0x89);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x89);
+        z_x64_append_u8(code, 0xc0);
       }
       return true;
     }
@@ -1403,8 +1340,8 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       size_t end_patch = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, success_patch, code->len);
       if (!elf_type_is_i64(value->type)) {
-        elf_append_u8(code, 0x89);
-        elf_append_u8(code, 0xc0);
+        z_x64_append_u8(code, 0x89);
+        z_x64_append_u8(code, 0xc0);
       }
       z_x64_patch_rel32(code, end_patch, code->len);
       return true;
@@ -1414,16 +1351,16 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       const IrLocal *local = &fun->locals[value->array_index];
       if (!elf_emit_bounds_checked_address(code, fun, local, value->index, ctx, diag)) return false;
       if (local->element_type == IR_TYPE_U8) {
-        elf_append_u8(code, 0x0f);
-        elf_append_u8(code, 0xb6);
-        elf_append_u8(code, 0x00);
+        z_x64_append_u8(code, 0x0f);
+        z_x64_append_u8(code, 0xb6);
+        z_x64_append_u8(code, 0x00);
       } else if (elf_type_is_i64(local->element_type)) {
-        elf_append_u8(code, 0x48);
-        elf_append_u8(code, 0x8b);
-        elf_append_u8(code, 0x00);
+        z_x64_append_u8(code, 0x48);
+        z_x64_append_u8(code, 0x8b);
+        z_x64_append_u8(code, 0x00);
       } else {
-        elf_append_u8(code, 0x8b);
-        elf_append_u8(code, 0x00);
+        z_x64_append_u8(code, 0x8b);
+        z_x64_append_u8(code, 0x00);
       }
       return true;
     }
@@ -1440,162 +1377,157 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
     case IR_VALUE_CRC32_BYTES: {
       if (!value->left) return elf_diag(diag, "direct ELF64 CRC32 requires a byte view", value->line, value->column, "missing byte view");
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc1);
-      elf_append_u8(code, 0x5e);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0xffffffffu);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc9);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x5e);
+      z_x64_emit_mov_eax_u32(code, 0xffffffffu);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc9);
       size_t byte_loop = code->len;
-      elf_append_u8(code, 0x4c);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc9);
+      z_x64_append_u8(code, 0x4c);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc9);
       size_t done = z_x64_emit_jcc32_placeholder(code, 0x83);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0xb6);
-      elf_append_u8(code, 0x14);
-      elf_append_u8(code, 0x0e);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xd0);
-      elf_append_u8(code, 0x41);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 8);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0xb6);
+      z_x64_append_u8(code, 0x14);
+      z_x64_append_u8(code, 0x0e);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xd0);
+      z_x64_append_u8(code, 0x41);
+      z_x64_emit_mov_eax_u32(code, 8);
       size_t bit_loop = code->len;
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x83);
-      elf_append_u8(code, 0xe2);
-      elf_append_u8(code, 1);
-      elf_append_u8(code, 0xf7);
-      elf_append_u8(code, 0xda);
-      elf_append_u8(code, 0x81);
-      elf_append_u8(code, 0xe2);
-      elf_append_u32(code, 0xedb88320u);
-      elf_append_u8(code, 0xd1);
-      elf_append_u8(code, 0xe8);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xd0);
-      elf_append_u8(code, 0x41);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x83);
+      z_x64_append_u8(code, 0xe2);
+      z_x64_append_u8(code, 1);
+      z_x64_append_u8(code, 0xf7);
+      z_x64_append_u8(code, 0xda);
+      z_x64_append_u8(code, 0x81);
+      z_x64_append_u8(code, 0xe2);
+      z_x64_append_u32(code, 0xedb88320u);
+      z_x64_append_u8(code, 0xd1);
+      z_x64_append_u8(code, 0xe8);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xd0);
+      z_x64_append_u8(code, 0x41);
+      z_x64_append_u8(code, 0xff);
+      z_x64_append_u8(code, 0xc8);
       size_t bit_back = z_x64_emit_jcc32_placeholder(code, 0x85);
       z_x64_patch_rel32(code, bit_back, bit_loop);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xff);
+      z_x64_append_u8(code, 0xc1);
       size_t byte_back = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, byte_back, byte_loop);
       z_x64_patch_rel32(code, done, code->len);
-      elf_append_u8(code, 0x35);
-      elf_append_u32(code, 0xffffffffu);
+      z_x64_append_u8(code, 0x35);
+      z_x64_append_u32(code, 0xffffffffu);
       return true;
     }
     case IR_VALUE_BYTE_COPY: {
       if (!value->left || !value->right) return elf_diag(diag, "direct ELF64 byte copy requires source and destination byte views", value->line, value->column, "missing byte view");
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x5f);
-      elf_append_u8(code, 0x59);
-      elf_append_u8(code, 0x5e);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x5f);
+      z_x64_append_u8(code, 0x59);
+      z_x64_append_u8(code, 0x5e);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc8);
       size_t keep_dst_len = z_x64_emit_jcc32_placeholder(code, 0x86);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc8);
       z_x64_patch_rel32(code, keep_dst_len, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
-      elf_append_u8(code, 0x45);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x45);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc0);
       size_t loop = code->len;
-      elf_append_u8(code, 0x4c);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x4c);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc2);
       size_t done = z_x64_emit_jcc32_placeholder(code, 0x86);
-      elf_append_u8(code, 0x42);
-      elf_append_u8(code, 0x8a);
-      elf_append_u8(code, 0x1c);
-      elf_append_u8(code, 0x06);
-      elf_append_u8(code, 0x42);
-      elf_append_u8(code, 0x88);
-      elf_append_u8(code, 0x1c);
-      elf_append_u8(code, 0x07);
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x42);
+      z_x64_append_u8(code, 0x8a);
+      z_x64_append_u8(code, 0x1c);
+      z_x64_append_u8(code, 0x06);
+      z_x64_append_u8(code, 0x42);
+      z_x64_append_u8(code, 0x88);
+      z_x64_append_u8(code, 0x1c);
+      z_x64_append_u8(code, 0x07);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0xff);
+      z_x64_append_u8(code, 0xc0);
       size_t back = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, back, loop);
       z_x64_patch_rel32(code, done, code->len);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xd0);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xd0);
       return true;
     }
     case IR_VALUE_BYTE_VIEW_EQ: {
       if (!value->left || !value->right) return elf_diag(diag, "direct ELF64 byte-view equality requires two byte views", value->line, value->column, "missing byte view");
       if (!elf_emit_byte_view_len(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x59);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x59);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc1);
       size_t same_len = z_x64_emit_jcc32_placeholder(code, 0x84);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0);
+      z_x64_emit_mov_eax_u32(code, 0);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, same_len, code->len);
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc2);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc2);
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc0);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc0);
       if (!elf_emit_byte_view_ptr(code, fun, value->right, ctx, diag)) return false;
-      elf_append_u8(code, 0x49);
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc1);
-      elf_append_u8(code, 0x31);
-      elf_append_u8(code, 0xc9);
+      z_x64_append_u8(code, 0x49);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x31);
+      z_x64_append_u8(code, 0xc9);
       size_t loop = code->len;
-      elf_append_u8(code, 0x4c);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xd1);
+      z_x64_append_u8(code, 0x4c);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xd1);
       size_t equal = z_x64_emit_jcc32_placeholder(code, 0x83);
-      elf_append_u8(code, 0x41);
-      elf_append_u8(code, 0x8a);
-      elf_append_u8(code, 0x04);
-      elf_append_u8(code, 0x08);
-      elf_append_u8(code, 0x41);
-      elf_append_u8(code, 0x38);
-      elf_append_u8(code, 0x04);
-      elf_append_u8(code, 0x09);
+      z_x64_append_u8(code, 0x41);
+      z_x64_append_u8(code, 0x8a);
+      z_x64_append_u8(code, 0x04);
+      z_x64_append_u8(code, 0x08);
+      z_x64_append_u8(code, 0x41);
+      z_x64_append_u8(code, 0x38);
+      z_x64_append_u8(code, 0x04);
+      z_x64_append_u8(code, 0x09);
       size_t mismatch = z_x64_emit_jcc32_placeholder(code, 0x85);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0xff);
-      elf_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0xff);
+      z_x64_append_u8(code, 0xc1);
       size_t back = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, back, loop);
       z_x64_patch_rel32(code, mismatch, code->len);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 0);
+      z_x64_emit_mov_eax_u32(code, 0);
       size_t after_false = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, equal, code->len);
-      elf_append_u8(code, 0xb8);
-      elf_append_u32(code, 1);
+      z_x64_emit_mov_eax_u32(code, 1);
       z_x64_patch_rel32(code, after_false, code->len);
       z_x64_patch_rel32(code, end, code->len);
       return true;
@@ -1605,31 +1537,29 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       unsigned char byte = 0;
       if (elf_const_u32_value(value->index, &const_index) &&
           elf_byte_view_const_byte(ctx ? ctx->ir : NULL, fun, value->left, const_index, &byte)) {
-        elf_append_u8(code, 0xb8);
-        elf_append_u32(code, byte);
+        z_x64_emit_mov_eax_u32(code, byte);
         return true;
       }
       if (!value->index || !elf_emit_value(code, fun, value->index, ctx, diag)) return false;
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_len(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x89);
-      elf_append_u8(code, 0xc1);
-      elf_append_u8(code, 0x58);
-      elf_append_u8(code, 0x39);
-      elf_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x89);
+      z_x64_append_u8(code, 0xc1);
+      z_x64_append_u8(code, 0x58);
+      z_x64_append_u8(code, 0x39);
+      z_x64_append_u8(code, 0xc8);
       size_t ok_patch = z_x64_emit_jcc32_placeholder(code, 0x82);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0x0b);
+      z_x64_emit_ud2(code);
       z_x64_patch_rel32(code, ok_patch, code->len);
-      elf_append_u8(code, 0x50);
+      z_x64_append_u8(code, 0x50);
       if (!elf_emit_byte_view_ptr(code, fun, value->left, ctx, diag)) return false;
-      elf_append_u8(code, 0x59);
-      elf_append_u8(code, 0x48);
-      elf_append_u8(code, 0x01);
-      elf_append_u8(code, 0xc8);
-      elf_append_u8(code, 0x0f);
-      elf_append_u8(code, 0xb6);
-      elf_append_u8(code, 0x00);
+      z_x64_append_u8(code, 0x59);
+      z_x64_append_u8(code, 0x48);
+      z_x64_append_u8(code, 0x01);
+      z_x64_append_u8(code, 0xc8);
+      z_x64_append_u8(code, 0x0f);
+      z_x64_append_u8(code, 0xb6);
+      z_x64_append_u8(code, 0x00);
       return true;
     }
     default:
@@ -1670,23 +1600,21 @@ static bool elf_emit_instrs(ZBuf *text, const IrFunction *fun, const IrInstr *in
 static bool elf_emit_world_write(ZBuf *text, const IrFunction *fun, const IrInstr *instr, ElfEmitContext *ctx, ZDiag *diag) {
   if (!instr || !instr->value) return elf_diag(diag, "direct ELF64 World write requires bytes", instr ? instr->line : 1, instr ? instr->column : 1, "missing byte view");
   if (!elf_emit_byte_view_ptr(text, fun, instr->value, ctx, diag)) return false;
-  elf_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x50);
   if (!elf_emit_byte_view_len(text, fun, instr->value, ctx, diag)) return false;
-  elf_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x50);
   z_x64_emit_pop_reg64(text, 2);
   z_x64_emit_pop_reg64(text, 6);
-  elf_append_u8(text, 0xbf);
-  elf_append_u32(text, instr->field_offset == 2 ? 2 : 1);
-  elf_append_u8(text, 0xb8);
-  elf_append_u32(text, 1);
-  elf_append_u8(text, 0x0f);
-  elf_append_u8(text, 0x05);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x85);
-  elf_append_u8(text, 0xc0);
+  z_x64_append_u8(text, 0xbf);
+  z_x64_append_u32(text, instr->field_offset == 2 ? 2 : 1);
+  z_x64_emit_mov_eax_u32(text, 1);
+  z_x64_append_u8(text, 0x0f);
+  z_x64_append_u8(text, 0x05);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x85);
+  z_x64_append_u8(text, 0xc0);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x89);
-  elf_append_u8(text, 0x0f);
-  elf_append_u8(text, 0x0b);
+  z_x64_emit_ud2(text);
   z_x64_patch_rel32(text, ok_patch, text->len);
   return true;
 }
@@ -1697,13 +1625,13 @@ static bool elf_emit_args_get_to_local(ZBuf *text, const IrFunction *fun, const 
   if (ctx && ctx->seed_main_process_args) {
     z_x64_emit_push_reg64(text, 14);
     z_x64_emit_pop_reg64(text, 1);
-    elf_append_u8(text, 0x48);
-    elf_append_u8(text, 0x39);
-    elf_append_u8(text, 0xc8);
+    z_x64_append_u8(text, 0x48);
+    z_x64_append_u8(text, 0x39);
+    z_x64_append_u8(text, 0xc8);
   } else {
-    elf_append_u8(text, 0x49);
-    elf_append_u8(text, 0x3b);
-    elf_append_u8(text, 0x07);
+    z_x64_append_u8(text, 0x49);
+    z_x64_append_u8(text, 0x3b);
+    z_x64_append_u8(text, 0x07);
   }
   size_t in_range = z_x64_emit_jcc32_placeholder(text, 0x82);
   elf_emit_maybe_clear(text, local);
@@ -1711,23 +1639,22 @@ static bool elf_emit_args_get_to_local(ZBuf *text, const IrFunction *fun, const 
   z_x64_patch_rel32(text, in_range, text->len);
 
   if (ctx && ctx->seed_main_process_args) {
-    elf_append_u8(text, 0x49);
-    elf_append_u8(text, 0x8b);
-    elf_append_u8(text, 0x04);
-    elf_append_u8(text, 0xc7);
+    z_x64_append_u8(text, 0x49);
+    z_x64_append_u8(text, 0x8b);
+    z_x64_append_u8(text, 0x04);
+    z_x64_append_u8(text, 0xc7);
   } else {
-    elf_append_u8(text, 0x49);
-    elf_append_u8(text, 0x8b);
-    elf_append_u8(text, 0x44);
-    elf_append_u8(text, 0xc7);
-    elf_append_u8(text, 0x08);
+    z_x64_append_u8(text, 0x49);
+    z_x64_append_u8(text, 0x8b);
+    z_x64_append_u8(text, 0x44);
+    z_x64_append_u8(text, 0xc7);
+    z_x64_append_u8(text, 0x08);
   }
-  elf_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x50);
   elf_emit_strlen_rax_to_ecx(text);
-  elf_append_u8(text, 0xb8);
-  elf_append_u32(text, 1);
+  z_x64_emit_mov_eax_u32(text, 1);
   elf_emit_store_local_slot_reg(text, local, 0, 0, false);
-  elf_append_u8(text, 0x58);
+  z_x64_append_u8(text, 0x58);
   elf_emit_store_local_slot_rax(text, local, 8);
   elf_emit_store_local_slot_reg(text, local, 16, 1, false);
   z_x64_patch_rel32(text, end, text->len);
@@ -1737,92 +1664,91 @@ static bool elf_emit_args_get_to_local(ZBuf *text, const IrFunction *fun, const 
 static bool elf_emit_env_get_to_local(ZBuf *text, const IrFunction *fun, const IrValue *value, const IrLocal *local, ElfEmitContext *ctx, ZDiag *diag) {
   if (!value || !value->left) return elf_diag(diag, "direct ELF64 std.env.get requires a key", value ? value->line : 1, value ? value->column : 1, "missing key");
   if (!elf_emit_byte_view_ptr(text, fun, value->left, ctx, diag)) return false;
-  elf_append_u8(text, 0x49);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xc1);
+  z_x64_append_u8(text, 0x49);
+  z_x64_append_u8(text, 0x89);
+  z_x64_append_u8(text, 0xc1);
   if (!elf_emit_byte_view_len(text, fun, value->left, ctx, diag)) return false;
-  elf_append_u8(text, 0x49);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xc2);
+  z_x64_append_u8(text, 0x49);
+  z_x64_append_u8(text, 0x89);
+  z_x64_append_u8(text, 0xc2);
 
   if (ctx && ctx->seed_main_process_args) {
     z_x64_emit_push_reg64(text, 13);
     z_x64_emit_pop_reg64(text, 8);
   } else {
-    elf_append_u8(text, 0x4d);
-    elf_append_u8(text, 0x8b);
-    elf_append_u8(text, 0x07);
-    elf_append_u8(text, 0x49);
-    elf_append_u8(text, 0x83);
-    elf_append_u8(text, 0xc0);
-    elf_append_u8(text, 0x02);
-    elf_append_u8(text, 0x49);
-    elf_append_u8(text, 0xc1);
-    elf_append_u8(text, 0xe0);
-    elf_append_u8(text, 0x03);
-    elf_append_u8(text, 0x4d);
-    elf_append_u8(text, 0x01);
-    elf_append_u8(text, 0xf8);
+    z_x64_append_u8(text, 0x4d);
+    z_x64_append_u8(text, 0x8b);
+    z_x64_append_u8(text, 0x07);
+    z_x64_append_u8(text, 0x49);
+    z_x64_append_u8(text, 0x83);
+    z_x64_append_u8(text, 0xc0);
+    z_x64_append_u8(text, 0x02);
+    z_x64_append_u8(text, 0x49);
+    z_x64_append_u8(text, 0xc1);
+    z_x64_append_u8(text, 0xe0);
+    z_x64_append_u8(text, 0x03);
+    z_x64_append_u8(text, 0x4d);
+    z_x64_append_u8(text, 0x01);
+    z_x64_append_u8(text, 0xf8);
   }
 
   size_t env_loop = text->len;
-  elf_append_u8(text, 0x49);
-  elf_append_u8(text, 0x8b);
-  elf_append_u8(text, 0x18);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x85);
-  elf_append_u8(text, 0xdb);
+  z_x64_append_u8(text, 0x49);
+  z_x64_append_u8(text, 0x8b);
+  z_x64_append_u8(text, 0x18);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x85);
+  z_x64_append_u8(text, 0xdb);
   size_t none = z_x64_emit_jcc32_placeholder(text, 0x84);
-  elf_append_u8(text, 0x31);
-  elf_append_u8(text, 0xc9);
+  z_x64_append_u8(text, 0x31);
+  z_x64_append_u8(text, 0xc9);
 
   size_t compare_loop = text->len;
-  elf_append_u8(text, 0x4c);
-  elf_append_u8(text, 0x39);
-  elf_append_u8(text, 0xd1);
+  z_x64_append_u8(text, 0x4c);
+  z_x64_append_u8(text, 0x39);
+  z_x64_append_u8(text, 0xd1);
   size_t key_done = z_x64_emit_jcc32_placeholder(text, 0x83);
-  elf_append_u8(text, 0x41);
-  elf_append_u8(text, 0x8a);
-  elf_append_u8(text, 0x04);
-  elf_append_u8(text, 0x09);
-  elf_append_u8(text, 0x38);
-  elf_append_u8(text, 0x04);
-  elf_append_u8(text, 0x0b);
+  z_x64_append_u8(text, 0x41);
+  z_x64_append_u8(text, 0x8a);
+  z_x64_append_u8(text, 0x04);
+  z_x64_append_u8(text, 0x09);
+  z_x64_append_u8(text, 0x38);
+  z_x64_append_u8(text, 0x04);
+  z_x64_append_u8(text, 0x0b);
   size_t next = z_x64_emit_jcc32_placeholder(text, 0x85);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0xff);
-  elf_append_u8(text, 0xc1);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0xff);
+  z_x64_append_u8(text, 0xc1);
   size_t compare_back = z_x64_emit_jmp32_placeholder(text, 0xe9);
   z_x64_patch_rel32(text, compare_back, compare_loop);
 
   z_x64_patch_rel32(text, key_done, text->len);
-  elf_append_u8(text, 0x42);
-  elf_append_u8(text, 0x80);
-  elf_append_u8(text, 0x3c);
-  elf_append_u8(text, 0x13);
-  elf_append_u8(text, 0x3d);
+  z_x64_append_u8(text, 0x42);
+  z_x64_append_u8(text, 0x80);
+  z_x64_append_u8(text, 0x3c);
+  z_x64_append_u8(text, 0x13);
+  z_x64_append_u8(text, 0x3d);
   size_t next_after_key = z_x64_emit_jcc32_placeholder(text, 0x85);
-  elf_append_u8(text, 0x4a);
-  elf_append_u8(text, 0x8d);
-  elf_append_u8(text, 0x44);
-  elf_append_u8(text, 0x13);
-  elf_append_u8(text, 0x01);
-  elf_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x4a);
+  z_x64_append_u8(text, 0x8d);
+  z_x64_append_u8(text, 0x44);
+  z_x64_append_u8(text, 0x13);
+  z_x64_append_u8(text, 0x01);
+  z_x64_append_u8(text, 0x50);
   elf_emit_strlen_rax_to_ecx(text);
-  elf_append_u8(text, 0xb8);
-  elf_append_u32(text, 1);
+  z_x64_emit_mov_eax_u32(text, 1);
   elf_emit_store_local_slot_reg(text, local, 0, 0, false);
-  elf_append_u8(text, 0x58);
+  z_x64_append_u8(text, 0x58);
   elf_emit_store_local_slot_rax(text, local, 8);
   elf_emit_store_local_slot_reg(text, local, 16, 1, false);
   size_t end = z_x64_emit_jmp32_placeholder(text, 0xe9);
 
   z_x64_patch_rel32(text, next, text->len);
   z_x64_patch_rel32(text, next_after_key, text->len);
-  elf_append_u8(text, 0x49);
-  elf_append_u8(text, 0x83);
-  elf_append_u8(text, 0xc0);
-  elf_append_u8(text, 0x08);
+  z_x64_append_u8(text, 0x49);
+  z_x64_append_u8(text, 0x83);
+  z_x64_append_u8(text, 0xc0);
+  z_x64_append_u8(text, 0x08);
   size_t loop_back = z_x64_emit_jmp32_placeholder(text, 0xe9);
   z_x64_patch_rel32(text, loop_back, env_loop);
 
@@ -1851,127 +1777,122 @@ static bool elf_emit_read_all_or_raise_to_local(ZBuf *text, const IrFunction *fu
   const IrLocal *local = &fun->locals[instr->local_index];
   const IrLocal *alloc = &fun->locals[value->local_index];
   if (!elf_emit_openat_path(text, fun, value->left, 0, 0, ctx, diag)) return false;
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x85);
-  elf_append_u8(text, 0xc0);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x85);
+  z_x64_append_u8(text, 0xc0);
   size_t open_fail = elf_emit_js_placeholder(text);
 
-  elf_append_u8(text, 0x50);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xc7);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x31);
-  elf_append_u8(text, 0xf6);
-  elf_append_u8(text, 0xba);
-  elf_append_u32(text, 2);
-  elf_append_u8(text, 0xb8);
-  elf_append_u32(text, 8);
-  elf_append_u8(text, 0x0f);
-  elf_append_u8(text, 0x05);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x85);
-  elf_append_u8(text, 0xc0);
+  z_x64_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x89);
+  z_x64_append_u8(text, 0xc7);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x31);
+  z_x64_append_u8(text, 0xf6);
+  z_x64_append_u8(text, 0xba);
+  z_x64_append_u32(text, 2);
+  z_x64_emit_mov_eax_u32(text, 8);
+  z_x64_append_u8(text, 0x0f);
+  z_x64_append_u8(text, 0x05);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x85);
+  z_x64_append_u8(text, 0xc0);
   size_t tell_fail = elf_emit_js_placeholder(text);
   if (value->right) {
-    elf_append_u8(text, 0x50);
+    z_x64_append_u8(text, 0x50);
     if (!elf_emit_value(text, fun, value->right, ctx, diag)) return false;
-    elf_append_u8(text, 0x59);
-    elf_append_u8(text, 0x48);
-    elf_append_u8(text, 0x39);
-    elf_append_u8(text, 0xc1);
+    z_x64_append_u8(text, 0x59);
+    z_x64_append_u8(text, 0x48);
+    z_x64_append_u8(text, 0x39);
+    z_x64_append_u8(text, 0xc1);
     size_t size_ok = z_x64_emit_jcc32_placeholder(text, 0x83);
-    elf_append_u8(text, 0x58);
+    z_x64_append_u8(text, 0x58);
     elf_emit_close_rax_fd(text);
     elf_emit_packed_error_rax(text, IR_ERROR_TOO_LARGE);
     if (!fun->raises) {
-      elf_append_u8(text, 0xb8);
-      elf_append_u32(text, 1);
+      z_x64_emit_mov_eax_u32(text, 1);
     }
     elf_emit_epilogue(text, fun, ctx);
     z_x64_patch_rel32(text, size_ok, text->len);
   }
-  elf_append_u8(text, 0x58);
+  z_x64_append_u8(text, 0x58);
 
-  elf_append_u8(text, 0x50);
-  elf_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x50);
   elf_emit_load_local_slot_reg(text, alloc, 0, 6, true);
   elf_emit_load_local_slot_reg(text, alloc, 12, 1, false);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x01);
-  elf_append_u8(text, 0xce);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x01);
+  z_x64_append_u8(text, 0xce);
   elf_emit_load_local_slot_reg(text, alloc, 8, 2, false);
-  elf_append_u8(text, 0x29);
-  elf_append_u8(text, 0xca);
+  z_x64_append_u8(text, 0x29);
+  z_x64_append_u8(text, 0xca);
   if (value->right) {
     if (!elf_emit_value(text, fun, value->right, ctx, diag)) return false;
-    elf_append_u8(text, 0x39);
-    elf_append_u8(text, 0xc2);
+    z_x64_append_u8(text, 0x39);
+    z_x64_append_u8(text, 0xc2);
     size_t keep_capacity = z_x64_emit_jcc32_placeholder(text, 0x86);
-    elf_append_u8(text, 0x89);
-    elf_append_u8(text, 0xc2);
+    z_x64_append_u8(text, 0x89);
+    z_x64_append_u8(text, 0xc2);
     z_x64_patch_rel32(text, keep_capacity, text->len);
   }
-  elf_append_u8(text, 0x5f);
-  elf_append_u8(text, 0x31);
-  elf_append_u8(text, 0xc0);
-  elf_append_u8(text, 0x0f);
-  elf_append_u8(text, 0x05);
-  elf_append_u8(text, 0x50);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x8b);
-  elf_append_u8(text, 0x44);
-  elf_append_u8(text, 0x24);
-  elf_append_u8(text, 0x08);
+  z_x64_append_u8(text, 0x5f);
+  z_x64_append_u8(text, 0x31);
+  z_x64_append_u8(text, 0xc0);
+  z_x64_append_u8(text, 0x0f);
+  z_x64_append_u8(text, 0x05);
+  z_x64_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x8b);
+  z_x64_append_u8(text, 0x44);
+  z_x64_append_u8(text, 0x24);
+  z_x64_append_u8(text, 0x08);
   elf_emit_close_rax_fd(text);
-  elf_append_u8(text, 0x58);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x83);
-  elf_append_u8(text, 0xc4);
-  elf_append_u8(text, 0x08);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x85);
-  elf_append_u8(text, 0xc0);
+  z_x64_append_u8(text, 0x58);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x83);
+  z_x64_append_u8(text, 0xc4);
+  z_x64_append_u8(text, 0x08);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x85);
+  z_x64_append_u8(text, 0xc0);
   size_t read_fail = elf_emit_js_placeholder(text);
 
-  elf_append_u8(text, 0x50);
+  z_x64_append_u8(text, 0x50);
   elf_emit_load_local_slot_rax(text, alloc, 0);
   elf_emit_load_local_slot_reg(text, alloc, 12, 1, false);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x01);
-  elf_append_u8(text, 0xc8);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x01);
+  z_x64_append_u8(text, 0xc8);
   elf_emit_store_local_slot_rax(text, local, 0);
-  elf_append_u8(text, 0x58);
+  z_x64_append_u8(text, 0x58);
   elf_emit_store_local_slot_rax(text, local, 8);
   elf_emit_load_local_slot_reg(text, alloc, 12, 1, false);
-  elf_append_u8(text, 0x01);
-  elf_append_u8(text, 0xc8);
+  z_x64_append_u8(text, 0x01);
+  z_x64_append_u8(text, 0xc8);
   elf_emit_store_local_slot_reg(text, alloc, 12, 0, false);
   size_t end = z_x64_emit_jmp32_placeholder(text, 0xe9);
 
   z_x64_patch_rel32(text, open_fail, text->len);
   elf_emit_packed_error_rax(text, IR_ERROR_NOT_FOUND);
   if (!fun->raises) {
-    elf_append_u8(text, 0xb8);
-    elf_append_u32(text, 1);
+    z_x64_emit_mov_eax_u32(text, 1);
   }
   elf_emit_epilogue(text, fun, ctx);
 
   z_x64_patch_rel32(text, tell_fail, text->len);
-  elf_append_u8(text, 0x58);
+  z_x64_append_u8(text, 0x58);
   elf_emit_close_rax_fd(text);
   elf_emit_packed_error_rax(text, IR_ERROR_IO);
   if (!fun->raises) {
-    elf_append_u8(text, 0xb8);
-    elf_append_u32(text, 1);
+    z_x64_emit_mov_eax_u32(text, 1);
   }
   elf_emit_epilogue(text, fun, ctx);
 
   z_x64_patch_rel32(text, read_fail, text->len);
   elf_emit_packed_error_rax(text, IR_ERROR_IO);
   if (!fun->raises) {
-    elf_append_u8(text, 0xb8);
-    elf_append_u32(text, 1);
+    z_x64_emit_mov_eax_u32(text, 1);
   }
   elf_emit_epilogue(text, fun, ctx);
   z_x64_patch_rel32(text, end, text->len);
@@ -2001,8 +1922,7 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
       elf_emit_store_local_slot_rax(text, local, 0);
       if (!elf_emit_byte_view_len(text, fun, instr->value->left, ctx, diag)) return false;
       elf_emit_store_local_slot_reg(text, local, 8, 0, false);
-      elf_append_u8(text, 0xb8);
-      elf_append_u32(text, 0);
+      z_x64_emit_mov_eax_u32(text, 0);
       elf_emit_store_local_slot_reg(text, local, 12, 0, false);
       return true;
     }
@@ -2011,8 +1931,7 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
       if (!instr->value || instr->value->kind != IR_VALUE_VEC_INIT) return elf_diag(diag, "direct ELF64 Vec local requires std.mem.vec", instr->line, instr->column, "unsupported Vec initializer");
       if (!elf_emit_byte_view_ptr(text, fun, instr->value->left, ctx, diag)) return false;
       elf_emit_store_local_slot_rax(text, local, 0);
-      elf_append_u8(text, 0xb8);
-      elf_append_u32(text, 0);
+      z_x64_emit_mov_eax_u32(text, 0);
       elf_emit_store_local_slot_reg(text, local, 8, 0, false);
       if (!elf_emit_byte_view_len(text, fun, instr->value->left, ctx, diag)) return false;
       elf_emit_store_local_slot_reg(text, local, 12, 0, false);
@@ -2047,26 +1966,24 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
           if (!elf_byte_view_const_byte(ctx ? ctx->ir : NULL, fun, prefix, i, &byte)) {
             return elf_diag(diag, "direct ELF64 std.fs.tempName prefix byte is unavailable", instr->line, instr->column, "unavailable prefix");
           }
-          elf_append_u8(text, 0xc6);
-          elf_append_u8(text, 0x80);
-          elf_append_u32(text, i);
-          elf_append_u8(text, byte);
+          z_x64_append_u8(text, 0xc6);
+          z_x64_append_u8(text, 0x80);
+          z_x64_append_u32(text, i);
+          z_x64_append_u8(text, byte);
         }
         const unsigned char suffix[] = {'-', 't', 'm', 'p', 0};
         for (unsigned i = 0; i < sizeof(suffix); i++) {
-          elf_append_u8(text, 0xc6);
-          elf_append_u8(text, 0x80);
-          elf_append_u32(text, prefix_len + i);
-          elf_append_u8(text, suffix[i]);
+          z_x64_append_u8(text, 0xc6);
+          z_x64_append_u8(text, 0x80);
+          z_x64_append_u32(text, prefix_len + i);
+          z_x64_append_u8(text, suffix[i]);
         }
-        elf_append_u8(text, 0x50);
-        elf_append_u8(text, 0xb8);
-        elf_append_u32(text, 1);
+        z_x64_append_u8(text, 0x50);
+        z_x64_emit_mov_eax_u32(text, 1);
         elf_emit_store_local_slot_reg(text, local, 0, 0, false);
-        elf_append_u8(text, 0x58);
+        z_x64_append_u8(text, 0x58);
         elf_emit_store_local_slot_rax(text, local, 8);
-        elf_append_u8(text, 0xb8);
-        elf_append_u32(text, total_len);
+        z_x64_emit_mov_eax_u32(text, total_len);
         elf_emit_store_local_slot_reg(text, local, 16, 0, false);
         return true;
       }
@@ -2080,37 +1997,36 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
         if (instr->value->local_index >= fun->local_len || fun->locals[instr->value->local_index].type != IR_TYPE_ALLOC) return elf_diag(diag, "direct ELF64 std.fs.readAll allocator is invalid", instr->line, instr->column, "invalid allocator");
         const IrLocal *alloc = &fun->locals[instr->value->local_index];
         if (!elf_emit_openat_path(text, fun, instr->value->left, 0, 0, ctx, diag)) return false;
-        elf_append_u8(text, 0x48);
-        elf_append_u8(text, 0x85);
-        elf_append_u8(text, 0xc0);
+        z_x64_append_u8(text, 0x48);
+        z_x64_append_u8(text, 0x85);
+        z_x64_append_u8(text, 0xc0);
         size_t open_fail = elf_emit_js_placeholder(text);
-        elf_append_u8(text, 0x50);
+        z_x64_append_u8(text, 0x50);
         elf_emit_load_local_slot_reg(text, alloc, 0, 6, true);
         elf_emit_load_local_slot_reg(text, alloc, 8, 2, false);
-        elf_append_u8(text, 0x5f);
-        elf_append_u8(text, 0x31);
-        elf_append_u8(text, 0xc0);
-        elf_append_u8(text, 0x0f);
-        elf_append_u8(text, 0x05);
-        elf_append_u8(text, 0x50);
+        z_x64_append_u8(text, 0x5f);
+        z_x64_append_u8(text, 0x31);
+        z_x64_append_u8(text, 0xc0);
+        z_x64_append_u8(text, 0x0f);
+        z_x64_append_u8(text, 0x05);
+        z_x64_append_u8(text, 0x50);
         elf_emit_load_local_rax(text, fun, instr->value->local_index);
         (void)alloc;
-        elf_append_u8(text, 0x48);
-        elf_append_u8(text, 0x89);
-        elf_append_u8(text, 0xf8);
+        z_x64_append_u8(text, 0x48);
+        z_x64_append_u8(text, 0x89);
+        z_x64_append_u8(text, 0xf8);
         elf_emit_close_rax_fd(text);
-        elf_append_u8(text, 0x58);
-        elf_append_u8(text, 0x48);
-        elf_append_u8(text, 0x85);
-        elf_append_u8(text, 0xc0);
+        z_x64_append_u8(text, 0x58);
+        z_x64_append_u8(text, 0x48);
+        z_x64_append_u8(text, 0x85);
+        z_x64_append_u8(text, 0xc0);
         size_t read_fail = elf_emit_js_placeholder(text);
-        elf_append_u8(text, 0x50);
-        elf_append_u8(text, 0xb8);
-        elf_append_u32(text, 1);
+        z_x64_append_u8(text, 0x50);
+        z_x64_emit_mov_eax_u32(text, 1);
         elf_emit_store_local_slot_reg(text, local, 0, 0, false);
         elf_emit_load_local_slot_reg(text, alloc, 0, 0, true);
         elf_emit_store_local_slot_reg(text, local, 8, 0, true);
-        elf_append_u8(text, 0x58);
+        z_x64_append_u8(text, 0x58);
         elf_emit_store_local_slot_reg(text, local, 16, 0, false);
         elf_emit_store_local_slot_reg(text, alloc, 12, 0, false);
         size_t end = z_x64_emit_jmp32_placeholder(text, 0xe9);
@@ -2123,20 +2039,19 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
       if (!instr->value || instr->value->kind != IR_VALUE_ALLOC_BYTES || instr->value->local_index >= fun->local_len || fun->locals[instr->value->local_index].type != IR_TYPE_ALLOC) return elf_diag(diag, "direct ELF64 allocation source is invalid", instr->line, instr->column, "invalid allocation");
       const IrLocal *alloc = &fun->locals[instr->value->local_index];
       if (!elf_emit_value(text, fun, instr->value->left, ctx, diag)) return false;
-      elf_append_u8(text, 0x50);
+      z_x64_append_u8(text, 0x50);
       elf_emit_load_local_slot_reg(text, alloc, 12, 1, false);
       elf_emit_load_local_slot_reg(text, alloc, 0, 2, true);
-      elf_append_u8(text, 0x48);
-      elf_append_u8(text, 0x01);
-      elf_append_u8(text, 0xca);
-      elf_append_u8(text, 0xb8);
-      elf_append_u32(text, 1);
+      z_x64_append_u8(text, 0x48);
+      z_x64_append_u8(text, 0x01);
+      z_x64_append_u8(text, 0xca);
+      z_x64_emit_mov_eax_u32(text, 1);
       elf_emit_store_local_slot_reg(text, local, 0, 0, false);
       elf_emit_store_local_slot_reg(text, local, 8, 2, true);
-      elf_append_u8(text, 0x58);
+      z_x64_append_u8(text, 0x58);
       elf_emit_store_local_slot_reg(text, local, 16, 0, false);
-      elf_append_u8(text, 0x01);
-      elf_append_u8(text, 0xc1);
+      z_x64_append_u8(text, 0x01);
+      z_x64_append_u8(text, 0xc1);
       elf_emit_store_local_slot_reg(text, alloc, 12, 1, false);
       return true;
     }
@@ -2144,11 +2059,9 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
       const IrLocal *local = &fun->locals[instr->local_index];
       if (!instr->value) return elf_diag(diag, "direct ELF64 Maybe scalar initializer is missing", instr->line, instr->column, "missing maybe value");
       if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
-        elf_append_u8(text, 0xb8);
-        elf_append_u32(text, instr->value->data_len ? 1u : 0u);
+        z_x64_emit_mov_eax_u32(text, instr->value->data_len ? 1u : 0u);
         elf_emit_store_local_slot_reg(text, local, 0, 0, false);
-        elf_append_u8(text, 0xb8);
-        elf_append_u32(text, (uint32_t)instr->value->int_value);
+        z_x64_emit_mov_eax_u32(text, (uint32_t)instr->value->int_value);
         elf_emit_store_local_slot_reg(text, local, 8, 0, true);
         return true;
       }
@@ -2158,33 +2071,33 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
         }
         const IrLocal *alloc = &fun->locals[instr->value->local_index];
         if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
-        elf_append_u8(text, 0x48);
-        elf_append_u8(text, 0x85);
-        elf_append_u8(text, 0xc0);
+        z_x64_append_u8(text, 0x48);
+        z_x64_append_u8(text, 0x85);
+        z_x64_append_u8(text, 0xc0);
         size_t fail = elf_emit_js_placeholder(text);
-        elf_append_u8(text, 0x50);
+        z_x64_append_u8(text, 0x50);
         elf_emit_load_local_slot_reg(text, alloc, 12, 1, false);
-        elf_append_u8(text, 0x01);
-        elf_append_u8(text, 0xc1);
+        z_x64_append_u8(text, 0x01);
+        z_x64_append_u8(text, 0xc1);
         elf_emit_load_local_slot_reg(text, alloc, 8, 2, false);
-        elf_append_u8(text, 0x39);
-        elf_append_u8(text, 0xd1);
+        z_x64_append_u8(text, 0x39);
+        z_x64_append_u8(text, 0xd1);
         size_t overflow = z_x64_emit_jcc32_placeholder(text, 0x87);
-        elf_append_u8(text, 0x58);
+        z_x64_append_u8(text, 0x58);
         elf_emit_maybe_scalar_store_rax(text, local);
         elf_emit_store_local_slot_reg(text, alloc, 12, 1, false);
         size_t end = z_x64_emit_jmp32_placeholder(text, 0xe9);
         z_x64_patch_rel32(text, overflow, text->len);
-        elf_append_u8(text, 0x58);
+        z_x64_append_u8(text, 0x58);
         z_x64_patch_rel32(text, fail, text->len);
         elf_emit_maybe_scalar_clear(text, local);
         z_x64_patch_rel32(text, end, text->len);
         return true;
       }
       if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
-      elf_append_u8(text, 0x48);
-      elf_append_u8(text, 0x85);
-      elf_append_u8(text, 0xc0);
+      z_x64_append_u8(text, 0x48);
+      z_x64_append_u8(text, 0x85);
+      z_x64_append_u8(text, 0xc0);
       size_t fail = elf_emit_js_placeholder(text);
       elf_emit_maybe_scalar_store_rax(text, local);
       size_t end = z_x64_emit_jmp32_placeholder(text, 0xe9);
@@ -2201,19 +2114,19 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
     if (instr->array_index >= fun->local_len) return elf_diag(diag, "direct ELF64 indexed store array is out of range", instr->line, instr->column, "invalid array local");
     const IrLocal *local = &fun->locals[instr->array_index];
     if (!elf_emit_bounds_checked_address(text, fun, local, instr->index, ctx, diag)) return false;
-    elf_append_u8(text, 0x50);
+    z_x64_append_u8(text, 0x50);
     if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
-    elf_append_u8(text, 0x59);
+    z_x64_append_u8(text, 0x59);
     if (local->element_type == IR_TYPE_U8) {
-      elf_append_u8(text, 0x88);
-      elf_append_u8(text, 0x01);
+      z_x64_append_u8(text, 0x88);
+      z_x64_append_u8(text, 0x01);
     } else if (elf_type_is_i64(local->element_type)) {
-      elf_append_u8(text, 0x48);
-      elf_append_u8(text, 0x89);
-      elf_append_u8(text, 0x01);
+      z_x64_append_u8(text, 0x48);
+      z_x64_append_u8(text, 0x89);
+      z_x64_append_u8(text, 0x01);
     } else {
-      elf_append_u8(text, 0x89);
-      elf_append_u8(text, 0x01);
+      z_x64_append_u8(text, 0x89);
+      z_x64_append_u8(text, 0x01);
     }
     return true;
   }
@@ -2238,20 +2151,20 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
   if (instr->kind == IR_INSTR_RETURN) {
     if (instr->value && !elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
     if (fun->raises && !instr->value) {
-      elf_append_u8(text, 0x48);
-      elf_append_u8(text, 0x31);
-      elf_append_u8(text, 0xc0);
+      z_x64_append_u8(text, 0x48);
+      z_x64_append_u8(text, 0x31);
+      z_x64_append_u8(text, 0xc0);
     } else if (fun->raises && instr->value && !elf_type_is_i64(instr->value->type)) {
-      elf_append_u8(text, 0x89);
-      elf_append_u8(text, 0xc0);
+      z_x64_append_u8(text, 0x89);
+      z_x64_append_u8(text, 0xc0);
     }
     elf_emit_epilogue(text, fun, ctx);
     return true;
   }
   if (instr->kind == IR_INSTR_IF) {
     if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
-    elf_append_u8(text, 0x85);
-    elf_append_u8(text, 0xc0);
+    z_x64_append_u8(text, 0x85);
+    z_x64_append_u8(text, 0xc0);
     size_t false_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
     if (!elf_emit_instrs(text, fun, instr->then_instrs, instr->then_len, ctx, diag)) return false;
     if (instr->else_len > 0) {
@@ -2267,8 +2180,8 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
   if (instr->kind == IR_INSTR_WHILE) {
     size_t loop_start = text->len;
     if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
-    elf_append_u8(text, 0x85);
-    elf_append_u8(text, 0xc0);
+    z_x64_append_u8(text, 0x85);
+    z_x64_append_u8(text, 0xc0);
     size_t exit_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
     if (!elf_emit_instrs(text, fun, instr->then_instrs, instr->then_len, ctx, diag)) return false;
     size_t back_patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
@@ -2288,26 +2201,10 @@ static bool elf_emit_instrs(ZBuf *text, const IrFunction *fun, const IrInstr *in
 
 static bool elf_emit_function_text(ZBuf *text, const IrFunction *fun, ElfEmitContext *ctx, ZDiag *diag) {
   static const unsigned param_regs[] = {7, 6, 2, 1, 8, 9};
-  elf_append_u8(text, 0x55);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xe5);
   bool seed_process_args = elf_function_seeds_process_args(fun, ctx);
   unsigned base_stack_size = elf_base_stack_size(fun);
   unsigned stack_size = elf_total_stack_size(fun, ctx);
-  if (stack_size > 0) {
-    if (stack_size <= 127) {
-      elf_append_u8(text, 0x48);
-      elf_append_u8(text, 0x83);
-      elf_append_u8(text, 0xec);
-      elf_append_u8(text, stack_size);
-    } else {
-      elf_append_u8(text, 0x48);
-      elf_append_u8(text, 0x81);
-      elf_append_u8(text, 0xec);
-      elf_append_u32(text, stack_size);
-    }
-  }
+  z_x64_emit_prologue(text, stack_size);
   if (seed_process_args) {
     z_x64_emit_rbp_disp_reg(text, 0x89, 13, base_stack_size + 8, true);
     z_x64_emit_rbp_disp_reg(text, 0x89, 14, base_stack_size + 16, true);
@@ -2344,8 +2241,8 @@ static unsigned elf_rodata_base_offset(const IrProgram *ir) {
 static void elf_append_rodata(ZBuf *rodata, const IrProgram *ir, unsigned base_offset) {
   for (size_t i = 0; ir && i < ir->data_segment_len; i++) {
     const IrDataSegment *segment = &ir->data_segments[i];
-    elf_pad_to(rodata, segment->offset - base_offset);
-    elf_append_bytes(rodata, segment->bytes, segment->len);
+    z_elf_pad_to(rodata, segment->offset - base_offset);
+    z_elf_append_bytes(rodata, segment->bytes, segment->len);
   }
 }
 
@@ -2370,8 +2267,8 @@ bool z_emit_elf64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
   zbuf_init(&rela_text);
   zbuf_init(&strtab);
   zbuf_init(&symtab);
-  elf_append_u8(&strtab, 0);
-  elf_append_zeros(&symtab, 24);
+  z_elf_append_u8(&strtab, 0);
+  z_elf_append_zeros(&symtab, 24);
   bool has_rodata = ir->readonly_data_bytes > 0 || ir->data_segment_len > 0;
   unsigned rodata_base_offset = elf_rodata_base_offset(ir);
   if (has_rodata) {
@@ -2403,7 +2300,7 @@ bool z_emit_elf64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
   };
 
   for (size_t i = 0; i < ir->function_len; i++) {
-    elf_pad_to(&text, elf_align(text.len, 16));
+    z_elf_pad_to(&text, z_elf_align(text.len, 16));
     function_offsets[i] = text.len;
     if (!elf_emit_function_text(&text, &ir->functions[i], &ctx, diag)) {
       free(function_offsets);
@@ -2420,7 +2317,7 @@ bool z_emit_elf64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
     function_sizes[i] = text.len - function_offsets[i];
     symbol_names[i] = (uint32_t)strtab.len;
     zbuf_append(&strtab, ir->functions[i].name);
-    elf_append_u8(&strtab, 0);
+    z_elf_append_u8(&strtab, 0);
   }
   uint32_t runtime_names[ELF_RUNTIME_HELPER_COUNT] = {0};
   for (unsigned helper = 0; helper < ELF_RUNTIME_HELPER_COUNT; helper++) {
@@ -2428,7 +2325,7 @@ bool z_emit_elf64_object_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
     if (z_elf_runtime_patch_count(&ctx, runtime_helper) == 0) continue;
     runtime_names[helper] = (uint32_t)strtab.len;
     zbuf_append(&strtab, z_elf_runtime_helper_symbol(runtime_helper));
-    elf_append_u8(&strtab, 0);
+    z_elf_append_u8(&strtab, 0);
   }
   z_elf_patch_call_patches(&text, &ctx);
   z_elf_append_rodata_relocations(&rela_text, &ctx, 1);
@@ -2506,31 +2403,30 @@ static const IrFunction *elf_find_executable_main(const IrProgram *ir, ZDiag *di
 }
 
 static size_t elf_emit_start_stub(ZBuf *text) {
-  elf_append_u8(text, 0x49);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xe7);
+  z_x64_append_u8(text, 0x49);
+  z_x64_append_u8(text, 0x89);
+  z_x64_append_u8(text, 0xe7);
   size_t patch = z_x64_emit_jmp32_placeholder(text, 0xe8);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xc1);
-  elf_append_u8(text, 0x48);
-  elf_append_u8(text, 0xc1);
-  elf_append_u8(text, 0xe9);
-  elf_append_u8(text, 32);
-  elf_append_u8(text, 0x85);
-  elf_append_u8(text, 0xc9);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0x89);
+  z_x64_append_u8(text, 0xc1);
+  z_x64_append_u8(text, 0x48);
+  z_x64_append_u8(text, 0xc1);
+  z_x64_append_u8(text, 0xe9);
+  z_x64_append_u8(text, 32);
+  z_x64_append_u8(text, 0x85);
+  z_x64_append_u8(text, 0xc9);
   size_t success_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
-  elf_append_u8(text, 0xbf);
-  elf_append_u32(text, 1);
+  z_x64_append_u8(text, 0xbf);
+  z_x64_append_u32(text, 1);
   size_t exit_patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
   z_x64_patch_rel32(text, success_patch, text->len);
-  elf_append_u8(text, 0x89);
-  elf_append_u8(text, 0xc7);
+  z_x64_append_u8(text, 0x89);
+  z_x64_append_u8(text, 0xc7);
   z_x64_patch_rel32(text, exit_patch, text->len);
-  elf_append_u8(text, 0xb8);
-  elf_append_u32(text, 60);
-  elf_append_u8(text, 0x0f);
-  elf_append_u8(text, 0x05);
+  z_x64_emit_mov_eax_u32(text, 60);
+  z_x64_append_u8(text, 0x0f);
+  z_x64_append_u8(text, 0x05);
   return patch;
 }
 
@@ -2558,7 +2454,7 @@ bool z_emit_elf64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
   unsigned rodata_base_offset = elf_rodata_base_offset(ir);
   if (has_rodata) elf_append_rodata(&rodata, ir, rodata_base_offset);
   size_t start_stub_len = 3 + 5 + 2 + 5 + 2;
-  size_t first_function_offset = elf_align(start_stub_len, 16);
+  size_t first_function_offset = z_elf_align(start_stub_len, 16);
   size_t *function_offsets = z_checked_calloc(ir->function_len, sizeof(size_t));
   if (!function_offsets) {
     zbuf_free(&text);
@@ -2572,9 +2468,9 @@ bool z_emit_elf64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
     .rodata_base_offset = rodata_base_offset
   };
   size_t start_call_patch = elf_emit_start_stub(&text);
-  elf_pad_to(&text, first_function_offset);
+  z_elf_pad_to(&text, first_function_offset);
   for (size_t i = 0; i < ir->function_len; i++) {
-    elf_pad_to(&text, elf_align(text.len, 16));
+    z_elf_pad_to(&text, z_elf_align(text.len, 16));
     function_offsets[i] = text.len;
     if (!elf_emit_function_text(&text, &ir->functions[i], &ctx, diag)) {
       free(function_offsets);

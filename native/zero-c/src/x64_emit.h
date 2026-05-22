@@ -16,6 +16,10 @@ void z_x64_emit_rbp_disp_reg(ZBuf *buf, unsigned opcode, unsigned reg, unsigned 
 void z_x64_emit_load_rbp_positive_reg(ZBuf *buf, unsigned reg, unsigned offset, bool wide);
 void z_x64_emit_push_reg64(ZBuf *buf, unsigned reg);
 void z_x64_emit_pop_reg64(ZBuf *buf, unsigned reg);
+void z_x64_emit_prologue(ZBuf *buf, unsigned stack_size);
+void z_x64_emit_epilogue(ZBuf *buf);
+void z_x64_emit_mov_eax_u32(ZBuf *buf, uint32_t value);
+void z_x64_emit_ud2(ZBuf *buf);
 void z_x64_emit_sub_rsp(ZBuf *buf, unsigned amount);
 void z_x64_emit_add_rsp(ZBuf *buf, unsigned amount);
 
