@@ -590,6 +590,13 @@ assert.equal(compilerMetricsBody.schema, 1);
 assert(compilerMetricsBody.files["native/zero-c/src/checker.c"].lines > 0);
 assert(compilerMetricsBody.largeFunctions.length > 0);
 assert(compilerMetricsBody.stdlib.mainHelperCount > 0);
+assert.equal(compilerMetricsBody.stdlib.mainHelperCount, compilerMetricsBody.stdlib.checkerReturnCount);
+assert.equal(compilerMetricsBody.stdlib.mainHelperCount, compilerMetricsBody.stdlib.checkerArgCountCount);
+assert.deepEqual(compilerMetricsBody.stdlib.checkerReturnsMissingFromMainHelpers, []);
+assert.deepEqual(compilerMetricsBody.stdlib.mainHelpersMissingFromCheckerReturns, []);
+assert.deepEqual(compilerMetricsBody.stdlib.checkerArgCountsMissingFromMainHelpers, []);
+assert.deepEqual(compilerMetricsBody.stdlib.mainHelpersMissingFromCheckerArgCounts, []);
+assert.deepEqual(compilerMetricsBody.stdlib.argCountMismatches, []);
 assert.equal(compilerMetricsBody.budget.ok, true);
 assert.deepEqual(compilerMetricsBody.budget.violations, []);
 

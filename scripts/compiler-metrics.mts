@@ -69,12 +69,17 @@ const knownLargeFunctionLimits = new Map([
   ["native/zero-c/src/row_syntax.c|bool z_row_parse_layout(const ZRowTokenVec *tokens, ZRowTree *tree, ZDiag *diag) {", 123],
 ]);
 
-const allowedMainHelpersMissingFromCheckerKnownNames = [
-  "std.args",
-  "std.env",
-  "std.fs",
-  "std.net",
-  "std.proc",
+const knownReturnTypeDivergences = new Map([
+  ["std.mem.get", {
+    helperReturnType: "Maybe<T>",
+    checkerReturnType: "Unknown",
+    reason: "checker resolves the element-specific Maybe<T> return in a dedicated std.mem.get path",
+  }],
+]);
+
+const allowedHelpersWithSpecialArgTypeChecks = [
+  "std.mem.eqlBytes",
+  "std.mem.len",
 ];
 
 async function nativeSourceFiles() {
@@ -129,6 +134,10 @@ function namesFromRegex(text, pattern) {
   return [...text.matchAll(pattern)].map((match) => match[1]).sort();
 }
 
+function sortedMapKeys(map) {
+  return [...map.keys()].sort((a, b) => a.localeCompare(b));
+}
+
 function duplicates(items) {
   const counts = new Map();
   for (const item of items) counts.set(item, (counts.get(item) ?? 0) + 1);
@@ -145,6 +154,97 @@ function missingFrom(left, right) {
 
 function largeFunctionKey(item) {
   return `${item.path}|${item.signature}`;
+}
+
+function cBlock(text, marker) {
+  const markerIndex = text.indexOf(marker);
+  if (markerIndex < 0) return "";
+  const openIndex = text.indexOf("{", markerIndex);
+  if (openIndex < 0) return "";
+  let depth = 0;
+  for (let index = openIndex; index < text.length; index++) {
+    const ch = text[index];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return text.slice(openIndex + 1, index);
+    }
+  }
+  return "";
+}
+
+function parseStdHelpers(text) {
+  const block = cBlock(text, "static const StdHelperInfo std_helpers[] =");
+  return [...block.matchAll(/\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*(-?\d+)\s*,/g)]
+    .map((match) => ({
+      name: match[1],
+      returnType: match[2],
+      argCount: Number(match[3]),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function parseStdHttpErrorNames(text) {
+  const block = cBlock(text, "static int std_http_error_code");
+  return namesFromRegex(block, /strcmp\(name,\s+"(std\.[^"]+)"\)\s*==\s*0\)\s*return\s*\d+/g);
+}
+
+function parseCheckerReturnTypes(text) {
+  const result = new Map();
+  const block = cBlock(text, "static const char *std_call_return_type");
+  for (const match of block.matchAll(/strcmp\(name\.data,\s+"(std\.[^"]+)"\)\s*==\s*0\)\s*result\s*=\s*"([^"]+)"/g)) {
+    result.set(match[1], match[2]);
+  }
+  for (const name of parseStdHttpErrorNames(text)) {
+    result.set(name, "HttpError");
+  }
+  return result;
+}
+
+function parseCheckerArgCounts(text) {
+  const result = new Map();
+  const block = cBlock(text, "static int std_call_arg_count");
+  for (const match of block.matchAll(/strcmp\(name,\s+"(std\.[^"]+)"\)\s*==\s*0\)\s*return\s*(-?\d+)/g)) {
+    result.set(match[1], Number(match[2]));
+  }
+  for (const name of parseStdHttpErrorNames(text)) {
+    result.set(name, 0);
+  }
+  return result;
+}
+
+function parseCheckerArgTypeNames(text) {
+  const block = cBlock(text, "static const char *std_call_arg_type");
+  return namesFromRegex(block, /strcmp\(name,\s+"(std\.[^"]+)"/g);
+}
+
+function helperReturnTypeMismatches(helpers, checkerReturnTypes) {
+  return helpers
+    .filter((helper) => checkerReturnTypes.has(helper.name) && checkerReturnTypes.get(helper.name) !== helper.returnType)
+    .map((helper) => ({
+      name: helper.name,
+      helperReturnType: helper.returnType,
+      checkerReturnType: checkerReturnTypes.get(helper.name),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function helperArgCountMismatches(helpers, checkerArgCounts) {
+  return helpers
+    .filter((helper) => checkerArgCounts.has(helper.name) && checkerArgCounts.get(helper.name) !== helper.argCount)
+    .map((helper) => ({
+      name: helper.name,
+      helperArgCount: helper.argCount,
+      checkerArgCount: checkerArgCounts.get(helper.name),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function knownReturnTypeDivergenceMatches(mismatch) {
+  const known = knownReturnTypeDivergences.get(mismatch.name);
+  return known &&
+    known.helperReturnType === mismatch.helperReturnType &&
+    known.checkerReturnType === mismatch.checkerReturnType;
 }
 
 function budgetViolations(files, allLargeFunctions, stdlib) {
@@ -206,30 +306,76 @@ function budgetViolations(files, allLargeFunctions, stdlib) {
       helpers: stdlib.duplicateMainHelpers,
     });
   }
-  if (stdlib.returnNamesMissingFromMainHelpers.length > 0) {
+  if (stdlib.checkerReturnsMissingFromMainHelpers.length > 0) {
     violations.push({
-      kind: "stdlib-return-helper-parity",
-      names: stdlib.returnNamesMissingFromMainHelpers,
+      kind: "stdlib-checker-return-extra",
+      names: stdlib.checkerReturnsMissingFromMainHelpers,
     });
   }
-  const unexpectedCheckerGaps = missingFrom(
-    stdlib.mainHelpersMissingFromCheckerKnownNames,
-    allowedMainHelpersMissingFromCheckerKnownNames,
-  );
-  if (unexpectedCheckerGaps.length > 0) {
+  if (stdlib.mainHelpersMissingFromCheckerReturns.length > 0) {
     violations.push({
-      kind: "stdlib-main-helper-checker-parity",
-      names: unexpectedCheckerGaps,
+      kind: "stdlib-helper-return-missing",
+      names: stdlib.mainHelpersMissingFromCheckerReturns,
     });
   }
-  const staleCheckerGapAllowlist = missingFrom(
-    allowedMainHelpersMissingFromCheckerKnownNames,
-    stdlib.mainHelpersMissingFromCheckerKnownNames,
-  );
-  if (staleCheckerGapAllowlist.length > 0) {
+  const unexpectedReturnTypeMismatches = stdlib.returnTypeMismatches.filter((mismatch) => !knownReturnTypeDivergenceMatches(mismatch));
+  if (unexpectedReturnTypeMismatches.length > 0) {
     violations.push({
-      kind: "stale-stdlib-main-helper-checker-parity-allowlist",
-      names: staleCheckerGapAllowlist,
+      kind: "stdlib-helper-return-type-mismatch",
+      mismatches: unexpectedReturnTypeMismatches,
+    });
+  }
+  const staleReturnTypeDivergences = [...knownReturnTypeDivergences.keys()]
+    .filter((name) => !stdlib.returnTypeMismatches.some((mismatch) => knownReturnTypeDivergenceMatches(mismatch) && mismatch.name === name))
+    .sort((a, b) => a.localeCompare(b));
+  if (staleReturnTypeDivergences.length > 0) {
+    violations.push({
+      kind: "stale-stdlib-return-type-divergence-allowlist",
+      names: staleReturnTypeDivergences,
+    });
+  }
+  if (stdlib.checkerArgCountsMissingFromMainHelpers.length > 0) {
+    violations.push({
+      kind: "stdlib-checker-arg-count-extra",
+      names: stdlib.checkerArgCountsMissingFromMainHelpers,
+    });
+  }
+  if (stdlib.mainHelpersMissingFromCheckerArgCounts.length > 0) {
+    violations.push({
+      kind: "stdlib-helper-arg-count-missing",
+      names: stdlib.mainHelpersMissingFromCheckerArgCounts,
+    });
+  }
+  if (stdlib.argCountMismatches.length > 0) {
+    violations.push({
+      kind: "stdlib-helper-arg-count-mismatch",
+      mismatches: stdlib.argCountMismatches,
+    });
+  }
+  if (stdlib.checkerArgTypesMissingFromMainHelpers.length > 0) {
+    violations.push({
+      kind: "stdlib-checker-arg-type-extra",
+      names: stdlib.checkerArgTypesMissingFromMainHelpers,
+    });
+  }
+  const unexpectedArgTypeGaps = missingFrom(
+    stdlib.nonzeroArgHelpersMissingFromCheckerArgTypes,
+    allowedHelpersWithSpecialArgTypeChecks,
+  );
+  if (unexpectedArgTypeGaps.length > 0) {
+    violations.push({
+      kind: "stdlib-helper-arg-type-missing",
+      names: unexpectedArgTypeGaps,
+    });
+  }
+  const staleArgTypeAllowlist = missingFrom(
+    allowedHelpersWithSpecialArgTypeChecks,
+    stdlib.nonzeroArgHelpersMissingFromCheckerArgTypes,
+  );
+  if (staleArgTypeAllowlist.length > 0) {
+    violations.push({
+      kind: "stale-stdlib-helper-arg-type-allowlist",
+      names: staleArgTypeAllowlist,
     });
   }
   return violations;
@@ -251,12 +397,18 @@ const checker = texts.get("native/zero-c/src/checker.c") ?? "";
 const main = texts.get("native/zero-c/src/main.c") ?? "";
 const ir = texts.get("native/zero-c/src/ir.c") ?? "";
 
+const stdHelpers = parseStdHelpers(main);
+const checkerReturnTypes = parseCheckerReturnTypes(checker);
+const checkerArgCounts = parseCheckerArgCounts(checker);
+const checkerArgTypeNames = parseCheckerArgTypeNames(checker);
 const checkerKnownStdNames = namesFromRegex(checker, /"(std\.[^"]+)"/g);
-const checkerReturnNames = namesFromRegex(checker, /strcmp\(name\.data,\s+"(std\.[^"]+)"/g);
-const checkerArgCountNames = namesFromRegex(checker, /strcmp\(name,\s+"(std\.[^"]+)"/g);
-const checkerArgTypeNames = namesFromRegex(checker, /strcmp\(name,\s+"(std\.[^"]+)"/g);
-const mainHelperNames = namesFromRegex(main, /\{\s*"(std\.[^"]+)"/g);
+const checkerReturnNames = sortedMapKeys(checkerReturnTypes);
+const checkerArgCountNames = sortedMapKeys(checkerArgCounts);
+const mainHelperNames = stdHelpers.map((helper) => helper.name);
 const irStdNames = namesFromRegex(ir, /strcmp\(callee_name,\s+"(std\.[^"]+)"/g);
+const nonzeroArgHelperNames = stdHelpers
+  .filter((helper) => helper.argCount > 0)
+  .map((helper) => helper.name);
 
 const allLargeFunctions = [...texts.entries()]
   .flatMap(([path, text]) => largeFunctions(path, text))
@@ -271,6 +423,14 @@ const stdlib = {
   irDirectStdCallCount: new Set(irStdNames).size,
   duplicateMainHelpers: duplicates(mainHelperNames),
   returnNamesMissingFromMainHelpers: missingFrom(checkerReturnNames, mainHelperNames),
+  checkerReturnsMissingFromMainHelpers: missingFrom(checkerReturnNames, mainHelperNames),
+  mainHelpersMissingFromCheckerReturns: missingFrom(mainHelperNames, checkerReturnNames),
+  returnTypeMismatches: helperReturnTypeMismatches(stdHelpers, checkerReturnTypes),
+  checkerArgCountsMissingFromMainHelpers: missingFrom(checkerArgCountNames, mainHelperNames),
+  mainHelpersMissingFromCheckerArgCounts: missingFrom(mainHelperNames, checkerArgCountNames),
+  argCountMismatches: helperArgCountMismatches(stdHelpers, checkerArgCounts),
+  checkerArgTypesMissingFromMainHelpers: missingFrom(checkerArgTypeNames, mainHelperNames),
+  nonzeroArgHelpersMissingFromCheckerArgTypes: missingFrom(nonzeroArgHelperNames, checkerArgTypeNames),
   mainHelpersMissingFromCheckerKnownNames: missingFrom(mainHelperNames, checkerKnownStdNames),
 };
 const violations = budgetViolations(files, allLargeFunctions, stdlib);
@@ -285,7 +445,8 @@ const report = {
     newLargeFunctionLimit: NEW_LARGE_FUNCTION_LIMIT,
     reportThreshold: LARGE_FUNCTION_REPORT_THRESHOLD,
     sourceFileCount: sourceFiles.length,
-    allowedMainHelpersMissingFromCheckerKnownNames,
+    knownReturnTypeDivergences: Object.fromEntries(knownReturnTypeDivergences),
+    allowedHelpersWithSpecialArgTypeChecks,
     violations,
   },
 };
