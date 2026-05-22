@@ -4170,6 +4170,7 @@ static bool resolve_direct_row_package_source(const char *input_path, SourceInpu
 
   char *manifest = z_read_file(manifest_path, diag);
   if (!manifest) {
+    diag->path = z_strdup(manifest_path);
     free(manifest_path);
     return false;
   }
