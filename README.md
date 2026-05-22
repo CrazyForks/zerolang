@@ -1,8 +1,19 @@
 # zerolang
 
-zerolang is a pre-1 programming language experiment with compiler APIs designed for agent workflows.
+Experimental programming language for agent workflows.
 
-Agent-first refers to the compiler and tooling interfaces exposed for programmatic use. An agent can load language rules for the compiler binary in use, inspect source through stable command contracts, read diagnostics with repair metadata, produce a small edit, and rerun the same checks.
+Built for reliable autonomous software generation.
+
+Optimized for:
+
+- Token efficiency
+- Low memory usage
+- Fast startup
+- Fast builds
+- Low runtime latency
+- Zero dependencies
+
+For 
 
 > **Safety status**
 >
