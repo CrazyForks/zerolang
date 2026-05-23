@@ -1356,7 +1356,7 @@ assert.equal(backendBlockedReadiness.targetReadiness.buildable, false);
 assert.equal(backendBlockedReadiness.targetReadiness.languageOk, true);
 assert.equal(backendBlockedReadiness.targetReadiness.emit, "obj");
 assert.equal(backendBlockedReadiness.targetReadiness.target, "linux-musl-x64");
-assert.equal(backendBlockedReadiness.targetReadiness.diagnostics[0].code, "CGEN004");
+assert.equal(backendBlockedReadiness.targetReadiness.diagnostics[0].code, "BLD004");
 assert.deepEqual(backendBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker, {
   target: "linux-musl-x64",
   objectFormat: "elf",
@@ -1372,9 +1372,22 @@ assert.equal(directExeBlockedReadiness.targetReadiness.buildable, false);
 assert.equal(directExeBlockedReadiness.targetReadiness.languageOk, true);
 assert.equal(directExeBlockedReadiness.targetReadiness.emit, "exe");
 assert.equal(directExeBlockedReadiness.targetReadiness.target, "linux-musl-x64");
-assert.equal(directExeBlockedReadiness.targetReadiness.diagnostics[0].code, "CGEN004");
-assert.equal(directExeBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker.stage, "emit");
+assert.equal(directExeBlockedReadiness.targetReadiness.diagnostics[0].code, "BLD004");
+assert.equal(directExeBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
 assert.match(directExeBlockedReadiness.targetReadiness.diagnostics[0].message, /main must not take parameters/);
+const directExeBlockedBuild = json(["build", "--json", "--emit", "exe", "--target", "linux-musl-x64", "examples/direct-call-add.0", "--out", join(outDir, "direct-call-add-blocked")], { allowFailure: true });
+assert.notEqual(directExeBlockedBuild.code, 0);
+for (const key of ["code", "path", "line", "column", "length", "expected", "actual", "help"]) {
+  assert.equal(directExeBlockedBuild.body.diagnostics[0][key], directExeBlockedReadiness.targetReadiness.diagnostics[0][key]);
+}
+assert.equal(directExeBlockedBuild.body.diagnostics[0].backendBlocker.stage, "buildability");
+const directExeBlockedGraph = json(["graph", "--json", "--emit", "exe", "--target", "linux-musl-x64", "examples/direct-call-add.0"]).body;
+assert.equal(directExeBlockedGraph.targetReadiness.ok, false);
+assert.equal(directExeBlockedGraph.targetReadiness.diagnostics[0].code, "BLD004");
+for (const key of ["code", "path", "line", "column", "length", "expected", "actual", "help"]) {
+  assert.equal(directExeBlockedGraph.targetReadiness.diagnostics[0][key], directExeBlockedReadiness.targetReadiness.diagnostics[0][key]);
+}
+assert.equal(directExeBlockedGraph.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
 const machOObjectBlockedReadiness = json(["check", "--json", "--emit", "obj", "--target", "darwin-arm64", "examples/memory-package"]).body;
 assert.equal(machOObjectBlockedReadiness.ok, true);
 assert.equal(machOObjectBlockedReadiness.diagnostics.length, 0);
@@ -1383,9 +1396,9 @@ assert.equal(machOObjectBlockedReadiness.targetReadiness.buildable, false);
 assert.equal(machOObjectBlockedReadiness.targetReadiness.languageOk, true);
 assert.equal(machOObjectBlockedReadiness.targetReadiness.emit, "obj");
 assert.equal(machOObjectBlockedReadiness.targetReadiness.target, "darwin-arm64");
-assert.equal(machOObjectBlockedReadiness.targetReadiness.diagnostics[0].code, "CGEN004");
+assert.equal(machOObjectBlockedReadiness.targetReadiness.diagnostics[0].code, "BLD004");
 assert.equal(machOObjectBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker.backend, "zero-macho64");
-assert.equal(machOObjectBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker.stage, "emit");
+assert.equal(machOObjectBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
 
 const diagnostics = [
   ["PAR100", ["check", "--json", "conformance/check/fail/parse-missing-brace.0"]],

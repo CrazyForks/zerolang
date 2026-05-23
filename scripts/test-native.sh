@@ -144,7 +144,7 @@ run_native_or_gap() {
       exit 1
     fi
   else
-    grep -q '"code"[[:space:]]*:[[:space:]]*"CGEN004"' "$out.json"
+    grep -q '"code"[[:space:]]*:[[:space:]]*"BLD004"' "$out.json"
   fi
 }
 

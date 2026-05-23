@@ -255,6 +255,8 @@ static bool coff_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *va
       }
       coff_emit_load_local_eax(text, fun, value->local_index);
       return true;
+    case IR_VALUE_CAST:
+      return coff_emit_value(text, fun, value->left, ctx, diag);
     case IR_VALUE_BINARY:
       if (value->binary_op != IR_BIN_ADD && value->binary_op != IR_BIN_SUB && value->binary_op != IR_BIN_MUL) return coff_diag_at(diag, "direct COFF binary operator is unsupported", value->line, value->column, "unsupported operator");
       if (!coff_emit_value(text, fun, value->left, ctx, diag)) return false;
