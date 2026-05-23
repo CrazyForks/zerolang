@@ -277,6 +277,29 @@ static bool build_check_value(const ZBuildability *ctx, const IrFunction *fun, c
 
 static bool build_check_instrs(const ZBuildability *ctx, const IrFunction *fun, const IrInstr *instrs, size_t len, ZDiag *diag);
 
+static bool build_aarch64_return_type_ok(IrTypeKind type) {
+  return type == IR_TYPE_VOID || type == IR_TYPE_U8 || type == IR_TYPE_I32 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE;
+}
+
+static bool build_check_aarch64_literal_shape(const ZBuildability *ctx, const IrFunction *fun, ZDiag *diag) {
+  if (fun->param_count != 0) {
+    return build_diag(ctx, diag, "direct AArch64 ELF buildability currently supports functions without parameters", fun->line, fun->column, fun->name);
+  }
+  if (!build_aarch64_return_type_ok(fun->return_type)) {
+    return build_diag(ctx, diag, "direct AArch64 ELF buildability currently supports primitive 32-bit-or-smaller integer returns", fun->line, fun->column, build_type_name(fun->return_type));
+  }
+  if (fun->return_type == IR_TYPE_VOID) {
+    if (fun->instr_len == 0) return true;
+    if (fun->instr_len == 1 && fun->instrs[0].kind == IR_INSTR_RETURN && !fun->instrs[0].value) return true;
+    return build_diag(ctx, diag, "direct AArch64 ELF buildability currently supports only empty Void functions or small integer literal returns", fun->line, fun->column, fun->name);
+  }
+  if (fun->instr_len != 1 || fun->instrs[0].kind != IR_INSTR_RETURN || !fun->instrs[0].value ||
+      fun->instrs[0].value->kind != IR_VALUE_INT || fun->instrs[0].value->int_value > 65535) {
+    return build_diag(ctx, diag, "direct AArch64 ELF buildability currently requires a small integer literal return", fun->line, fun->column, fun->name);
+  }
+  return true;
+}
+
 static bool build_check_instr(const ZBuildability *ctx, const IrFunction *fun, const IrInstr *instr, ZDiag *diag) {
   if (!ctx || !instr) return build_diag(ctx, diag, "direct backend buildability found a missing instruction", 1, 1, "missing instruction");
   if (ctx->backend == Z_BUILD_BACKEND_ELF_AARCH64) return true;
@@ -317,10 +340,7 @@ static bool build_check_function_shape(const ZBuildability *ctx, const IrFunctio
     return build_diag(ctx, diag, "direct backend object buildability supports at most eight parameters", fun->line, fun->column, fun->name);
   }
   if (ctx->backend == Z_BUILD_BACKEND_ELF_AARCH64) {
-    if (fun->return_type != IR_TYPE_VOID && fun->return_type != IR_TYPE_U8 && fun->return_type != IR_TYPE_I32 && fun->return_type != IR_TYPE_U32 && fun->return_type != IR_TYPE_USIZE) {
-      return build_diag(ctx, diag, "direct AArch64 ELF backend currently supports primitive 32-bit-or-smaller integer returns", fun->line, fun->column, build_type_name(fun->return_type));
-    }
-    return true;
+    return build_check_aarch64_literal_shape(ctx, fun, diag);
   }
   bool wide_scalars = ctx->backend == Z_BUILD_BACKEND_ELF64 || ctx->backend == Z_BUILD_BACKEND_MACHO64;
   bool return_ok = wide_scalars ? (fun->return_type == IR_TYPE_VOID || build_is_elf_scalar(fun->return_type))
@@ -388,6 +408,7 @@ bool z_direct_buildability_check(const IrProgram *ir, const ZTargetInfo *target,
   bool has_export = false;
   for (size_t i = 0; i < ir->function_len; i++) {
     if (ir->functions[i].is_exported) has_export = true;
+    if (ctx.backend == Z_BUILD_BACKEND_ELF_AARCH64 && !ir->functions[i].is_exported) continue;
     if (!build_check_function_shape(&ctx, &ir->functions[i], diag)) return false;
     if (!build_check_instrs(&ctx, &ir->functions[i], ir->functions[i].instrs, ir->functions[i].instr_len, diag)) return false;
   }

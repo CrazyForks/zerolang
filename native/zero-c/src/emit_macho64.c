@@ -85,6 +85,30 @@ static bool macho_type_is_scalar(IrTypeKind type) {
   return macho_type_is_scalar32(type) || macho_type_is_scalar64(type);
 }
 
+static void macho_emit_cast_normalize_reg(ZBuf *text, unsigned reg, IrTypeKind source, IrTypeKind target) {
+  switch (target) {
+    case IR_TYPE_BOOL:
+    case IR_TYPE_U8:
+      z_aarch64_emit_uxtb_w(text, reg, reg);
+      return;
+    case IR_TYPE_U16:
+      z_aarch64_emit_uxth_w(text, reg, reg);
+      return;
+    case IR_TYPE_I32:
+    case IR_TYPE_U32:
+    case IR_TYPE_USIZE:
+      z_aarch64_emit_mov_w(text, reg, reg);
+      return;
+    case IR_TYPE_I64:
+    case IR_TYPE_U64:
+      if (source == IR_TYPE_I32) z_aarch64_emit_sxtw_x(text, reg, reg);
+      else if (!macho_type_is_scalar64(source)) z_aarch64_emit_mov_w(text, reg, reg);
+      return;
+    default:
+      return;
+  }
+}
+
 static unsigned macho_slot_offset(unsigned local_index) {
   return local_index * 8;
 }
@@ -407,7 +431,7 @@ static bool macho_emit_call_to_reg(ZBuf *text, const IrFunction *fun, const IrVa
 
 static bool macho_emit_cast_value_to_reg_at(ZBuf *text, const IrFunction *fun, const IrValue *value, unsigned reg, unsigned frame_size, unsigned scratch_slot, MachOEmitContext *ctx, ZDiag *diag) {
   if (!macho_emit_value_to_reg_at(text, fun, value->left, reg, frame_size, scratch_slot, ctx, diag)) return false;
-  if (!macho_type_is_scalar64(value->type)) z_aarch64_emit_mov_w(text, reg, reg);
+  macho_emit_cast_normalize_reg(text, reg, value->left ? value->left->type : IR_TYPE_UNSUPPORTED, value->type);
   return true;
 }
 

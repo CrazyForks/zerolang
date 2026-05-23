@@ -797,6 +797,59 @@ for (const key of ["code", "path", "line", "column", "length", "expected", "actu
 }
 assert.equal(directCallExeGraphBody.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
 
+const directCallArm64ObjReadiness = await execFileAsync(zero, [
+  "check",
+  "--json",
+  "--emit",
+  "obj",
+  "--target",
+  "linux-arm64",
+  "examples/direct-call-add.0",
+]);
+const directCallArm64ObjReadinessBody = JSON.parse(directCallArm64ObjReadiness.stdout);
+assert.equal(directCallArm64ObjReadinessBody.ok, true);
+assert.equal(directCallArm64ObjReadinessBody.diagnostics.length, 0);
+assert.equal(directCallArm64ObjReadinessBody.targetReadiness.ok, false);
+assert.equal(directCallArm64ObjReadinessBody.targetReadiness.buildable, false);
+assert.equal(directCallArm64ObjReadinessBody.targetReadiness.diagnostics[0].code, "BLD004");
+assert.equal(directCallArm64ObjReadinessBody.targetReadiness.diagnostics[0].backendBlocker.backend, "zero-elf-aarch64");
+assert.equal(directCallArm64ObjReadinessBody.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
+assert.match(directCallArm64ObjReadinessBody.targetReadiness.diagnostics[0].message, /without parameters|small integer literal/);
+const directCallArm64ObjBuild = await execFileAsync(zero, [
+  "build",
+  "--json",
+  "--emit",
+  "obj",
+  "--target",
+  "linux-arm64",
+  "examples/direct-call-add.0",
+  "--out",
+  `${outDir}/direct-call-add-arm64-blocked.o`,
+]).catch((error) => error);
+assert.notEqual(directCallArm64ObjBuild.code, 0);
+const directCallArm64ObjBuildBody = JSON.parse(directCallArm64ObjBuild.stdout);
+const directCallArm64ObjReadinessDiag = directCallArm64ObjReadinessBody.targetReadiness.diagnostics[0];
+const directCallArm64ObjBuildDiag = directCallArm64ObjBuildBody.diagnostics[0];
+for (const key of ["code", "path", "line", "column", "length", "expected", "actual", "help"]) {
+  assert.equal(directCallArm64ObjBuildDiag[key], directCallArm64ObjReadinessDiag[key]);
+}
+assert.equal(directCallArm64ObjBuildDiag.backendBlocker.backend, "zero-elf-aarch64");
+assert.equal(directCallArm64ObjBuildDiag.backendBlocker.stage, "buildability");
+
+const arm64PrivateHelperObj = `${outDir}/aarch64-private-helper-ignored.o`;
+await execFileAsync(zero, [
+  "build",
+  "--json",
+  "--emit",
+  "obj",
+  "--target",
+  "linux-arm64",
+  "conformance/native/pass/aarch64-private-helper-ignored.0",
+  "--out",
+  arm64PrivateHelperObj,
+]);
+await assertElfAarch64Object(arm64PrivateHelperObj, "main");
+
 const memoryPackageMachOReadiness = await execFileAsync(zero, [
   "check",
   "--json",
@@ -2597,6 +2650,7 @@ await assertDirectRuntimeRequired("conformance/native/pass/generic-inferred-spec
 await assertDirectRuntimeRequired("conformance/native/pass/generic-nested-local-specialization.0", "generic-nested-local-specialization-required", { stdout: "generic nested local specialization ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-static-array-specialization.0", "generic-static-array-specialization-required", { stdout: "generic static array specialization ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-static-forwarded-array-specialization.0", "generic-static-forwarded-array-specialization-required", { stdout: "generic static forwarded array specialization ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/explicit-cast-narrow-direct.0", "explicit-cast-narrow-direct-required", { stdout: "explicit cast narrow direct ok\n" });
 
 const abiDump = await execFileAsync(zero, ["abi", "dump", "--json", "conformance/native/pass/const-layout.0"]);
 const abiDumpBody = JSON.parse(abiDump.stdout);

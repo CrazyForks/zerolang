@@ -41,9 +41,9 @@ const fileBudgets = {
   "native/zero-c/src/emit_macho64.c": { maxLines: 1400, maxStrcmpCalls: 2 },
   "native/zero-c/src/macho_emit_state.c": { maxLines: 210, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_emit_state.h": { maxLines: 90, maxStrcmpCalls: 0 },
-  "native/zero-c/src/emit_elf64.c": { maxLines: 2050, maxStrcmpCalls: 3 },
+  "native/zero-c/src/emit_elf64.c": { maxLines: 2075, maxStrcmpCalls: 3 },
   "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 205, maxStrcmpCalls: 1 },
-  "native/zero-c/src/emit_coff.c": { maxLines: 880, maxStrcmpCalls: 1 },
+  "native/zero-c/src/emit_coff.c": { maxLines: 905, maxStrcmpCalls: 1 },
   "native/zero-c/src/fs.c": { maxLines: 1250, maxStrcmpCalls: 32 },
   "native/zero-c/src/mir_verify.c": { maxLines: 1300, maxStrcmpCalls: 0 },
   "native/zero-c/src/mir_verify.h": { maxLines: 50, maxStrcmpCalls: 0 },
@@ -56,8 +56,8 @@ const fileBudgets = {
   "native/zero-c/src/type_core.h": { maxLines: 150, maxStrcmpCalls: 0 },
   "native/zero-c/src/unify.c": { maxLines: 500, maxStrcmpCalls: 14 },
   "native/zero-c/src/unify.h": { maxLines: 75, maxStrcmpCalls: 0 },
-  "native/zero-c/src/x64_emit.c": { maxLines: 760, maxStrcmpCalls: 0 },
-  "native/zero-c/src/x64_emit.h": { maxLines: 110, maxStrcmpCalls: 0 },
+  "native/zero-c/src/x64_emit.c": { maxLines: 765, maxStrcmpCalls: 0 },
+  "native/zero-c/src/x64_emit.h": { maxLines: 112, maxStrcmpCalls: 0 },
 };
 
 const knownLargeFunctionLimits = new Map([

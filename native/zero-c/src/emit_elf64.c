@@ -49,6 +49,30 @@ static bool elf_type_is_unsigned(IrTypeKind type) {
   return type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_USIZE || type == IR_TYPE_U32 || type == IR_TYPE_U64;
 }
 
+static void elf_emit_cast_normalize_rax(ZBuf *code, IrTypeKind source, IrTypeKind target) {
+  switch (target) {
+    case IR_TYPE_BOOL:
+    case IR_TYPE_U8:
+      z_x64_emit_and_reg_u32(code, 0, 0xff, false);
+      return;
+    case IR_TYPE_U16:
+      z_x64_emit_and_reg_u32(code, 0, 0xffff, false);
+      return;
+    case IR_TYPE_I32:
+    case IR_TYPE_U32:
+    case IR_TYPE_USIZE:
+      z_x64_emit_mov_reg_from_reg(code, 0, 0, false);
+      return;
+    case IR_TYPE_I64:
+    case IR_TYPE_U64:
+      if (source == IR_TYPE_I32) z_x64_emit_cdqe(code);
+      else if (source != IR_TYPE_I64 && source != IR_TYPE_U64) z_x64_emit_mov_reg_from_reg(code, 0, 0, false);
+      return;
+    default:
+      return;
+  }
+}
+
 static const char *elf_type_name(IrTypeKind type) {
   switch (type) {
     case IR_TYPE_VOID: return "Void";
@@ -852,7 +876,7 @@ static bool elf_emit_core_value(ZBuf *code, const IrFunction *fun, const IrValue
       return true;
     case IR_VALUE_CAST:
       if (!elf_emit_value(code, fun, value->left, ctx, diag)) return false;
-      if (!elf_type_is_i64(value->type)) z_x64_emit_mov_reg_from_reg(code, 0, 0, false);
+      elf_emit_cast_normalize_rax(code, value->left ? value->left->type : IR_TYPE_UNSUPPORTED, value->type);
       return true;
     case IR_VALUE_BINARY: {
       bool wide = elf_type_is_i64(value->type);
@@ -1247,7 +1271,7 @@ static bool elf_validate_function(const IrFunction *fun, ZDiag *diag) {
   }
   for (size_t i = 0; i < fun->local_len; i++) {
     if (fun->locals[i].is_array) {
-      if (fun->locals[i].element_type != IR_TYPE_U8 && fun->locals[i].element_type != IR_TYPE_I32 && fun->locals[i].element_type != IR_TYPE_U32 && fun->locals[i].element_type != IR_TYPE_I64 && fun->locals[i].element_type != IR_TYPE_U64) {
+      if (fun->locals[i].element_type != IR_TYPE_U8 && fun->locals[i].element_type != IR_TYPE_I32 && fun->locals[i].element_type != IR_TYPE_U32 && fun->locals[i].element_type != IR_TYPE_USIZE && fun->locals[i].element_type != IR_TYPE_I64 && fun->locals[i].element_type != IR_TYPE_U64) {
         return elf_diag(diag, "direct ELF64 object backend currently supports only primitive integer fixed-array locals", fun->locals[i].line, fun->locals[i].column, elf_type_name(fun->locals[i].element_type));
       }
       continue;
