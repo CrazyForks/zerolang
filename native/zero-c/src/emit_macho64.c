@@ -12,9 +12,6 @@ static void append_u8(ZBuf *buf, unsigned value) {
   zbuf_append_char(buf, (char)(value & 0xffu));
 }
 
-static void append_bytes(ZBuf *buf, const char *bytes, size_t len);
-static size_t macho_align(size_t value, size_t alignment);
-
 #define MACHO_SCRATCH_SLOT_COUNT 32u
 #define MACHO_SCRATCH_SLOT_BYTES 8u
 
@@ -64,9 +61,7 @@ static bool macho_is_literal_return_function(const IrFunction *fun, uint32_t *ou
 static size_t macho_align(size_t value, size_t alignment) { return z_macho_align(value, alignment); }
 static void macho_pad_to(ZBuf *buf, size_t offset) { z_macho_pad_to(buf, offset); }
 
-static bool macho_type_is_scalar32(IrTypeKind type) {
-  return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_I32 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE;
-}
+static bool macho_type_is_scalar32(IrTypeKind type) { return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_I32 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE; }
 static bool macho_type_is_scalar64(IrTypeKind type) { return type == IR_TYPE_I64 || type == IR_TYPE_U64; }
 static bool macho_type_is_unsigned(IrTypeKind type) { return type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_USIZE || type == IR_TYPE_U32 || type == IR_TYPE_U64; }
 static bool macho_type_is_scalar(IrTypeKind type) { return macho_type_is_scalar32(type) || macho_type_is_scalar64(type); }
@@ -1080,8 +1075,20 @@ static void macho_append_rodata(ZBuf *rodata, const IrProgram *program, unsigned
   }
 }
 
-bool z_emit_macho64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag) {
-  if (!program || !out) return macho_diag(diag, "direct Mach-O backend received no program");
+typedef struct {
+  ZBuf text, rodata, relocs, strings;
+  size_t *offsets;
+  uint32_t *function_string_offsets, runtime_string_offsets[MACHO_RUNTIME_HELPER_COUNT];
+  ZMachOSymbol *symbols;
+  size_t symbol_len;
+  uint32_t symbol_count, rodata_string_offset;
+  bool has_rodata;
+  unsigned rodata_base_offset;
+  MachOEmitContext ctx;
+} MachOObjectBuild;
+
+static bool macho_validate_object_program(const IrProgram *program, ZDiag *diag) {
+  if (!program) return macho_diag(diag, "direct Mach-O backend received no program");
   if (!program->mir_valid) {
     bool ok = macho_diag_at(diag, program->mir_message[0] ? program->mir_message : "direct backend lowering failed", program->mir_line, program->mir_column, program->mir_actual);
     z_diag_set_backend_blocker(diag, &program->backend_blocker);
@@ -1094,148 +1101,143 @@ bool z_emit_macho64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *d
     if (!macho_validate_function(&program->functions[i], diag)) return false;
   }
   if (!has_export) return macho_diag_at(diag, "direct AArch64 Mach-O object backend requires at least one exported function", 1, 1, "no exported function");
+  return true;
+}
 
-  ZBuf text;
-  ZBuf rodata;
-  ZBuf relocs;
-  zbuf_init(&text);
-  zbuf_init(&rodata);
-  zbuf_init(&relocs);
-  bool has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
-  unsigned rodata_base_offset = macho_rodata_base_offset(program);
-  if (has_rodata) macho_append_rodata(&rodata, program, rodata_base_offset);
-  size_t *offsets = z_checked_calloc(program->function_len, sizeof(size_t));
-  uint32_t *string_offsets = z_checked_calloc(program->function_len, sizeof(uint32_t));
-  if (!offsets) {
-    free(string_offsets);
-    zbuf_free(&relocs);
-    zbuf_free(&rodata);
-    zbuf_free(&text);
-    return macho_diag(diag, "out of memory while emitting Mach-O object");
-  }
-  if (!string_offsets) {
-    free(offsets);
-    zbuf_free(&relocs);
-    zbuf_free(&rodata);
-    zbuf_free(&text);
-    return macho_diag(diag, "out of memory while emitting Mach-O symbols");
-  }
+static void macho_object_build_free(MachOObjectBuild *build) {
+  if (!build) return;
+  free(build->symbols);
+  z_macho_emit_context_free(&build->ctx);
+  free(build->function_string_offsets);
+  free(build->offsets);
+  zbuf_free(&build->strings);
+  zbuf_free(&build->relocs);
+  zbuf_free(&build->rodata);
+  zbuf_free(&build->text);
+}
 
-  ZBuf strings;
-  zbuf_init(&strings);
-  append_u8(&strings, 0);
-  MachOEmitContext ctx = {
+static bool macho_object_build_init(MachOObjectBuild *build, const IrProgram *program, ZDiag *diag) {
+  memset(build, 0, sizeof(*build));
+  zbuf_init(&build->text);
+  zbuf_init(&build->rodata);
+  zbuf_init(&build->relocs);
+  zbuf_init(&build->strings);
+  build->has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
+  build->rodata_base_offset = macho_rodata_base_offset(program);
+  if (build->has_rodata) macho_append_rodata(&build->rodata, program, build->rodata_base_offset);
+  build->offsets = z_checked_calloc(program->function_len, sizeof(size_t));
+  build->function_string_offsets = z_checked_calloc(program->function_len, sizeof(uint32_t));
+  if (!build->offsets || !build->function_string_offsets) {
+    macho_object_build_free(build);
+    return macho_diag(diag, build->offsets ? "out of memory while emitting Mach-O symbols" : "out of memory while emitting Mach-O object");
+  }
+  append_u8(&build->strings, 0);
+  build->ctx = (MachOEmitContext){
     .program = program,
-    .function_offsets = offsets,
+    .function_offsets = build->offsets,
     .function_count = program->function_len,
-    .rodata_base_offset = rodata_base_offset,
+    .rodata_base_offset = build->rodata_base_offset,
     .pie_relative_data = true,
     .seed_main_process_args = true
   };
+  return true;
+}
+
+static bool macho_object_emit_functions(MachOObjectBuild *build, const IrProgram *program, ZDiag *diag) {
   for (size_t i = 0; i < program->function_len; i++) {
     const IrFunction *fun = &program->functions[i];
-    macho_pad_to(&text, macho_align(text.len, 4));
-    offsets[i] = text.len;
-    if (!macho_emit_function_text(&text, fun, &ctx, diag)) {
-      zbuf_free(&strings);
-      free(string_offsets);
-      free(offsets);
-      z_macho_emit_context_free(&ctx);
-      zbuf_free(&relocs);
-      zbuf_free(&rodata);
-      zbuf_free(&text);
-      return false;
-    }
-    string_offsets[i] = (uint32_t)strings.len;
-    zbuf_append_char(&strings, '_');
-    zbuf_append(&strings, fun->name ? fun->name : "zero_fn");
-    append_u8(&strings, 0);
+    macho_pad_to(&build->text, macho_align(build->text.len, 4));
+    build->offsets[i] = build->text.len;
+    if (!macho_emit_function_text(&build->text, fun, &build->ctx, diag)) return false;
+    build->function_string_offsets[i] = (uint32_t)build->strings.len;
+    zbuf_append_char(&build->strings, '_');
+    zbuf_append(&build->strings, fun->name ? fun->name : "zero_fn");
+    append_u8(&build->strings, 0);
   }
-  z_macho_append_call_relocations(&relocs, &ctx);
-  if (has_rodata) {
-    z_macho_append_data_relocations(&relocs, &ctx, (unsigned)program->function_len);
-  }
-  uint32_t next_runtime_symbol = (uint32_t)program->function_len + (has_rodata ? 1u : 0u);
-  uint32_t runtime_symbol_indices[MACHO_RUNTIME_HELPER_COUNT] = {0};
+  return true;
+}
+
+static void macho_object_append_relocations(MachOObjectBuild *build, const IrProgram *program) {
+  z_macho_append_call_relocations(&build->relocs, &build->ctx);
+  if (build->has_rodata) z_macho_append_data_relocations(&build->relocs, &build->ctx, (unsigned)program->function_len);
+  uint32_t next_symbol = (uint32_t)program->function_len + (build->has_rodata ? 1u : 0u);
   for (unsigned helper = 0; helper < MACHO_RUNTIME_HELPER_COUNT; helper++) {
     MachORuntimeHelper runtime_helper = (MachORuntimeHelper)helper;
-    if (z_macho_runtime_patch_count(&ctx, runtime_helper) == 0) continue;
-    runtime_symbol_indices[helper] = next_runtime_symbol++;
-    z_macho_append_runtime_relocations(&relocs, &ctx, runtime_helper, runtime_symbol_indices[helper]);
+    if (z_macho_runtime_patch_count(&build->ctx, runtime_helper) == 0) continue;
+    z_macho_append_runtime_relocations(&build->relocs, &build->ctx, runtime_helper, next_symbol++);
   }
+  build->symbol_count = next_symbol;
+}
 
-  const uint32_t const_addr = has_rodata ? (uint32_t)macho_align(text.len, 8) : 0;
-  const uint32_t nsyms = next_runtime_symbol;
-  uint32_t rodata_string_offset = 0;
-  if (has_rodata) {
-    rodata_string_offset = (uint32_t)strings.len;
-    zbuf_append(&strings, "l_.zero_rodata");
-    append_u8(&strings, 0);
+static void macho_object_append_symbol_strings(MachOObjectBuild *build) {
+  if (build->has_rodata) {
+    build->rodata_string_offset = (uint32_t)build->strings.len;
+    zbuf_append(&build->strings, "l_.zero_rodata");
+    append_u8(&build->strings, 0);
   }
-  uint32_t runtime_string_offsets[MACHO_RUNTIME_HELPER_COUNT] = {0};
   for (unsigned helper = 0; helper < MACHO_RUNTIME_HELPER_COUNT; helper++) {
     MachORuntimeHelper runtime_helper = (MachORuntimeHelper)helper;
-    if (z_macho_runtime_patch_count(&ctx, runtime_helper) == 0) continue;
-    runtime_string_offsets[helper] = (uint32_t)strings.len;
-    zbuf_append(&strings, z_macho_runtime_helper_symbol(runtime_helper));
-    append_u8(&strings, 0);
+    if (z_macho_runtime_patch_count(&build->ctx, runtime_helper) == 0) continue;
+    build->runtime_string_offsets[helper] = (uint32_t)build->strings.len;
+    zbuf_append(&build->strings, z_macho_runtime_helper_symbol(runtime_helper));
+    append_u8(&build->strings, 0);
   }
+}
 
-  ZMachOSymbol *symbols = z_checked_calloc(nsyms, sizeof(ZMachOSymbol));
-  if (!symbols) {
-    zbuf_free(&strings);
-    free(string_offsets);
-    free(offsets);
-    z_macho_emit_context_free(&ctx);
-    zbuf_free(&relocs);
-    zbuf_free(&rodata);
-    zbuf_free(&text);
-    return macho_diag(diag, "out of memory while emitting Mach-O symbols");
-  }
-  size_t symbol_len = 0;
+static bool macho_object_build_symbols(MachOObjectBuild *build, const IrProgram *program, ZDiag *diag) {
+  build->symbols = z_checked_calloc(build->symbol_count, sizeof(ZMachOSymbol));
+  if (!build->symbols) return macho_diag(diag, "out of memory while emitting Mach-O symbols");
   for (size_t i = 0; i < program->function_len; i++) {
-    symbols[symbol_len++] = (ZMachOSymbol){
-      .string_offset = string_offsets[i],
+    build->symbols[build->symbol_len++] = (ZMachOSymbol){
+      .string_offset = build->function_string_offsets[i],
       .type = program->functions[i].is_exported ? 0x0f : 0x0e,
       .section = 1,
-      .value = offsets[i]
+      .value = build->offsets[i]
     };
   }
-  if (has_rodata) {
-    symbols[symbol_len++] = (ZMachOSymbol){
-      .string_offset = rodata_string_offset,
+  if (build->has_rodata) {
+    build->symbols[build->symbol_len++] = (ZMachOSymbol){
+      .string_offset = build->rodata_string_offset,
       .type = 0x0e,
       .section = 2,
-      .value = const_addr
+      .value = (uint32_t)macho_align(build->text.len, 8)
     };
   }
   for (unsigned helper = 0; helper < MACHO_RUNTIME_HELPER_COUNT; helper++) {
     MachORuntimeHelper runtime_helper = (MachORuntimeHelper)helper;
-    if (z_macho_runtime_patch_count(&ctx, runtime_helper) == 0) continue;
-    symbols[symbol_len++] = (ZMachOSymbol){ .string_offset = runtime_string_offsets[helper], .type = 0x01 };
+    if (z_macho_runtime_patch_count(&build->ctx, runtime_helper) == 0) continue;
+    build->symbols[build->symbol_len++] = (ZMachOSymbol){ .string_offset = build->runtime_string_offsets[helper], .type = 0x01 };
   }
+  return true;
+}
 
-  const uint32_t text_reloc_count = (uint32_t)z_macho_text_relocation_count(&ctx);
+static void macho_object_write(const MachOObjectBuild *build, ZBuf *out) {
   ZMachOObjectImage image = {
-    .text = &text,
-    .rodata = has_rodata ? &rodata : NULL,
-    .relocs = &relocs,
-    .strings = &strings,
-    .symbols = symbols,
-    .symbol_len = symbol_len,
-    .text_reloc_count = text_reloc_count
+    .text = &build->text,
+    .rodata = build->has_rodata ? &build->rodata : NULL,
+    .relocs = &build->relocs,
+    .strings = &build->strings,
+    .symbols = build->symbols,
+    .symbol_len = build->symbol_len,
+    .text_reloc_count = (uint32_t)z_macho_text_relocation_count(&build->ctx)
   };
   z_macho_write_object64(out, &image);
-  free(symbols);
+}
 
-  z_macho_emit_context_free(&ctx);
-  free(string_offsets);
-  free(offsets);
-  zbuf_free(&strings);
-  zbuf_free(&relocs);
-  zbuf_free(&rodata);
-  zbuf_free(&text);
-  return true;
+bool z_emit_macho64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag) {
+  if (!out) return macho_diag(diag, "direct Mach-O backend received no output buffer");
+  if (!macho_validate_object_program(program, diag)) return false;
+  MachOObjectBuild build;
+  if (!macho_object_build_init(&build, program, diag)) return false;
+  bool ok = macho_object_emit_functions(&build, program, diag);
+  if (ok) {
+    macho_object_append_relocations(&build, program);
+    macho_object_append_symbol_strings(&build);
+    ok = macho_object_build_symbols(&build, program, diag);
+  }
+  if (ok) macho_object_write(&build, out);
+  macho_object_build_free(&build);
+  return ok;
 }
 
 static const IrFunction *macho_find_executable_main(const IrProgram *program, ZDiag *diag, unsigned *out_index) {
@@ -1283,112 +1285,115 @@ static size_t macho_emit_exe_world_write(ZBuf *text) {
   return offset;
 }
 
-bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag) {
-  if (!program || !out) return macho_diag(diag, "direct Mach-O executable backend received no program");
+typedef struct {
+  ZBuf text, rodata, rebase;
+  size_t *offsets, start_call_patch;
+  ZMachOExecutableLayout layout;
+  MachOEmitContext ctx;
+  unsigned main_index, rodata_base_offset;
+  bool has_rodata;
+} MachOExeBuild;
+
+static bool macho_validate_exe_program(const IrProgram *program, unsigned *main_index, ZDiag *diag) {
   if (!program->mir_valid) {
     bool ok = macho_diag_at(diag, program->mir_message[0] ? program->mir_message : "direct backend lowering failed", program->mir_line, program->mir_column, program->mir_actual);
     z_diag_set_backend_blocker(diag, &program->backend_blocker);
     return ok;
   }
-  unsigned main_index = 0;
-  if (!macho_find_executable_main(program, diag, &main_index)) return false;
-  for (size_t i = 0; i < program->function_len; i++) {
-    if (!macho_validate_function(&program->functions[i], diag)) return false;
-  }
+  if (!macho_find_executable_main(program, diag, main_index)) return false;
+  for (size_t i = 0; i < program->function_len; i++) if (!macho_validate_function(&program->functions[i], diag)) return false;
+  return true;
+}
 
-  ZBuf text;
-  ZBuf rodata;
-  zbuf_init(&text);
-  zbuf_init(&rodata);
-  bool has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
-  unsigned rodata_base_offset = macho_rodata_base_offset(program);
-  if (has_rodata) macho_append_rodata(&rodata, program, rodata_base_offset);
+static void macho_exe_build_free(MachOExeBuild *build) {
+  if (!build) return;
+  z_macho_emit_context_free(&build->ctx);
+  free(build->offsets);
+  zbuf_free(&build->rebase); zbuf_free(&build->rodata); zbuf_free(&build->text);
+}
 
-  size_t *offsets = z_checked_calloc(program->function_len, sizeof(size_t));
-  if (!offsets) {
-    zbuf_free(&rodata);
-    zbuf_free(&text);
+static bool macho_exe_build_init(MachOExeBuild *build, const IrProgram *program, unsigned main_index, ZDiag *diag) {
+  memset(build, 0, sizeof(*build));
+  zbuf_init(&build->text); zbuf_init(&build->rodata); zbuf_init(&build->rebase);
+  build->main_index = main_index;
+  build->has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
+  build->rodata_base_offset = macho_rodata_base_offset(program);
+  if (build->has_rodata) macho_append_rodata(&build->rodata, program, build->rodata_base_offset);
+  build->offsets = z_checked_calloc(program->function_len, sizeof(size_t));
+  if (!build->offsets) {
+    macho_exe_build_free(build);
     return macho_diag(diag, "out of memory while emitting Mach-O executable");
   }
-
-  MachOEmitContext ctx = {
+  build->ctx = (MachOEmitContext){
     .program = program,
-    .function_offsets = offsets,
+    .function_offsets = build->offsets,
     .function_count = program->function_len,
-    .rodata_base_offset = rodata_base_offset,
+    .rodata_base_offset = build->rodata_base_offset,
     .pie_relative_data = true
   };
-  size_t start_call_patch = macho_emit_exe_start_stub(&text);
-  macho_pad_to(&text, macho_align(text.len, 16));
-  for (size_t i = 0; i < program->function_len; i++) {
-    macho_pad_to(&text, macho_align(text.len, 4));
-    offsets[i] = text.len;
-    if (!macho_emit_function_text(&text, &program->functions[i], &ctx, diag)) {
-      z_macho_emit_context_free(&ctx);
-      free(offsets);
-      zbuf_free(&rodata);
-      zbuf_free(&text);
-      return false;
-    }
-  }
-
-  if (z_macho_has_unsupported_exe_runtime_patches(&ctx)) {
-    z_macho_emit_context_free(&ctx);
-    free(offsets);
-    zbuf_free(&rodata);
-    zbuf_free(&text);
-    return macho_diag_at(diag, "direct AArch64 Mach-O executable runtime helpers require object emission and an explicit runtime link step", 1, 1, "use --emit obj and link zero_runtime.c");
-  }
-
-  size_t world_write_offset = 0;
-  if (z_macho_runtime_patch_count(&ctx, MACHO_RUNTIME_WORLD_WRITE) > 0) {
-    macho_pad_to(&text, macho_align(text.len, 4));
-    world_write_offset = macho_emit_exe_world_write(&text);
-  }
-  z_aarch64_patch_branch26(&text, start_call_patch, offsets[main_index]);
-  for (size_t i = 0; i < ctx.call_patch_len; i++) {
-    const MachOCallPatch *patch = &ctx.call_patches[i];
-    z_aarch64_patch_branch26(&text, patch->patch_offset, offsets[patch->callee_index]);
-  }
-  const MachOPatchList *world_write_patches = z_macho_runtime_patch_list(&ctx, MACHO_RUNTIME_WORLD_WRITE);
-  for (size_t i = 0; world_write_patches && i < world_write_patches->len; i++) {
-    z_aarch64_patch_branch26(&text, world_write_patches->items[i].patch_offset, world_write_offset);
-  }
-
-  const char *code_signature_id = "zero-direct";
-  ZBuf rebase;
-  zbuf_init(&rebase);
-  ZMachOExecutableLayout layout;
-  z_macho_compute_executable64_layout(&layout, &text, has_rodata ? &rodata : NULL, &rebase, code_signature_id);
-  for (size_t i = 0; i < ctx.data_patch_len; i++) {
-    const MachODataPatch *patch = &ctx.data_patches[i];
-    uint64_t addr = layout.base_addr + layout.rodata_offset + (patch->data_offset - rodata_base_offset);
-    if (ctx.pie_relative_data) z_aarch64_patch_adrp_add(&text, patch->patch_offset, layout.base_addr + layout.text_offset + patch->patch_offset, addr);
-    else z_macho_patch_u64(&text, patch->patch_offset, addr);
-  }
-  if (ctx.data_patch_len > 0 && !ctx.pie_relative_data) {
-    append_u8(&rebase, 0x11); // REBASE_OPCODE_SET_TYPE_IMM | REBASE_TYPE_POINTER
-    for (size_t i = 0; i < ctx.data_patch_len; i++) {
-      append_u8(&rebase, 0x21); // REBASE_OPCODE_SET_SEGMENT_AND_OFFSET_ULEB, __TEXT segment
-      z_macho_append_uleb128(&rebase, layout.text_offset + ctx.data_patches[i].patch_offset);
-      append_u8(&rebase, 0x51); // REBASE_OPCODE_DO_REBASE_IMM_TIMES, once
-    }
-    append_u8(&rebase, 0x00);
-  }
-  z_macho_compute_executable64_layout(&layout, &text, has_rodata ? &rodata : NULL, &rebase, code_signature_id);
-  ZMachOExecutableImage image = {
-    .text = &text,
-    .rodata = has_rodata ? &rodata : NULL,
-    .rebase = &rebase,
-    .layout = layout,
-    .code_signature_id = code_signature_id
-  };
-  z_macho_write_executable64(out, &image);
-
-  z_macho_emit_context_free(&ctx);
-  free(offsets);
-  zbuf_free(&rebase);
-  zbuf_free(&rodata);
-  zbuf_free(&text);
+  build->start_call_patch = macho_emit_exe_start_stub(&build->text);
+  macho_pad_to(&build->text, macho_align(build->text.len, 16));
   return true;
+}
+
+static bool macho_exe_emit_functions(MachOExeBuild *build, const IrProgram *program, ZDiag *diag) {
+  for (size_t i = 0; i < program->function_len; i++) {
+    macho_pad_to(&build->text, macho_align(build->text.len, 4));
+    build->offsets[i] = build->text.len;
+    if (!macho_emit_function_text(&build->text, &program->functions[i], &build->ctx, diag)) return false;
+  }
+  return true;
+}
+
+static bool macho_exe_validate_runtime(const MachOExeBuild *build, ZDiag *diag) {
+  return !z_macho_has_unsupported_exe_runtime_patches(&build->ctx) || macho_diag_at(diag, "direct AArch64 Mach-O executable runtime helpers require object emission and an explicit runtime link step", 1, 1, "use --emit obj and link zero_runtime.c");
+}
+
+static void macho_exe_patch_branches(MachOExeBuild *build) {
+  size_t world_write_offset = 0;
+  if (z_macho_runtime_patch_count(&build->ctx, MACHO_RUNTIME_WORLD_WRITE) > 0) {
+    macho_pad_to(&build->text, macho_align(build->text.len, 4));
+    world_write_offset = macho_emit_exe_world_write(&build->text);
+  }
+  z_aarch64_patch_branch26(&build->text, build->start_call_patch, build->offsets[build->main_index]);
+  for (size_t i = 0; i < build->ctx.call_patch_len; i++) {
+    const MachOCallPatch *patch = &build->ctx.call_patches[i];
+    z_aarch64_patch_branch26(&build->text, patch->patch_offset, build->offsets[patch->callee_index]);
+  }
+  const MachOPatchList *world_write_patches = z_macho_runtime_patch_list(&build->ctx, MACHO_RUNTIME_WORLD_WRITE);
+  for (size_t i = 0; world_write_patches && i < world_write_patches->len; i++) {
+    z_aarch64_patch_branch26(&build->text, world_write_patches->items[i].patch_offset, world_write_offset);
+  }
+}
+
+static void macho_exe_patch_data(MachOExeBuild *build, const char *code_signature_id) {
+  z_macho_compute_executable64_layout(&build->layout, &build->text, build->has_rodata ? &build->rodata : NULL, &build->rebase, code_signature_id);
+  for (size_t i = 0; i < build->ctx.data_patch_len; i++) {
+    const MachODataPatch *patch = &build->ctx.data_patches[i];
+    uint64_t addr = build->layout.base_addr + build->layout.rodata_offset + (patch->data_offset - build->rodata_base_offset);
+    z_aarch64_patch_adrp_add(&build->text, patch->patch_offset, build->layout.base_addr + build->layout.text_offset + patch->patch_offset, addr);
+  }
+  z_macho_compute_executable64_layout(&build->layout, &build->text, build->has_rodata ? &build->rodata : NULL, &build->rebase, code_signature_id);
+}
+
+static void macho_exe_write(const MachOExeBuild *build, ZBuf *out, const char *code_signature_id) {
+  ZMachOExecutableImage image = { .text = &build->text, .rodata = build->has_rodata ? &build->rodata : NULL, .rebase = &build->rebase, .layout = build->layout, .code_signature_id = code_signature_id };
+  z_macho_write_executable64(out, &image);
+}
+
+bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag) {
+  if (!program || !out) return macho_diag(diag, "direct Mach-O executable backend received no program");
+  unsigned main_index = 0;
+  if (!macho_validate_exe_program(program, &main_index, diag)) return false;
+  MachOExeBuild build;
+  if (!macho_exe_build_init(&build, program, main_index, diag)) return false;
+  bool ok = macho_exe_emit_functions(&build, program, diag) && macho_exe_validate_runtime(&build, diag);
+  if (ok) {
+    const char *code_signature_id = "zero-direct";
+    macho_exe_patch_branches(&build);
+    macho_exe_patch_data(&build, code_signature_id);
+    macho_exe_write(&build, out, code_signature_id);
+  }
+  macho_exe_build_free(&build);
+  return ok;
 }
