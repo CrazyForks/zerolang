@@ -1426,6 +1426,37 @@ for (const key of ["code", "path", "line", "column", "length", "expected", "actu
 }
 assert.equal(coffDynamicSliceBuild.body.diagnostics[0].backendBlocker.backend, "zero-coff-x64");
 assert.equal(coffDynamicSliceBuild.body.diagnostics[0].backendBlocker.stage, "buildability");
+function assertMachOObjectBuildabilityBlocked(fixture: string, outName: string, expectedMessage: RegExp) {
+  const readiness = json(["check", "--json", "--emit", "obj", "--target", "darwin-arm64", fixture]).body;
+  assert.equal(readiness.ok, true);
+  assert.equal(readiness.diagnostics.length, 0);
+  assert.equal(readiness.targetReadiness.ok, false);
+  assert.equal(readiness.targetReadiness.buildable, false);
+  assert.equal(readiness.targetReadiness.languageOk, true);
+  assert.equal(readiness.targetReadiness.emit, "obj");
+  assert.equal(readiness.targetReadiness.target, "darwin-arm64");
+  assert.equal(readiness.targetReadiness.diagnostics[0].code, "BLD004");
+  assert.equal(readiness.targetReadiness.diagnostics[0].backendBlocker.backend, "zero-macho64");
+  assert.equal(readiness.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
+  assert.match(readiness.targetReadiness.diagnostics[0].message, expectedMessage);
+  const build = json(["build", "--json", "--emit", "obj", "--target", "darwin-arm64", fixture, "--out", join(outDir, outName)], { allowFailure: true });
+  assert.notEqual(build.code, 0);
+  for (const key of ["code", "path", "line", "column", "length", "expected", "actual", "help"]) {
+    assert.equal(build.body.diagnostics[0][key], readiness.targetReadiness.diagnostics[0][key]);
+  }
+  assert.equal(build.body.diagnostics[0].backendBlocker.backend, "zero-macho64");
+  assert.equal(build.body.diagnostics[0].backendBlocker.stage, "buildability");
+}
+assertMachOObjectBuildabilityBlocked(
+  "conformance/native/pass/macho-large-byte-slice-blocked.0",
+  "macho-large-byte-slice.o",
+  /constant start/,
+);
+assertMachOObjectBuildabilityBlocked(
+  "conformance/native/pass/macho-nested-call-scratch-blocked.0",
+  "macho-nested-call-scratch.o",
+  /scratch spill capacity/,
+);
 const machOObjectBlockedReadiness = json(["check", "--json", "--emit", "obj", "--target", "darwin-arm64", "examples/memory-package"]).body;
 assert.equal(machOObjectBlockedReadiness.ok, true);
 assert.equal(machOObjectBlockedReadiness.diagnostics.length, 0);

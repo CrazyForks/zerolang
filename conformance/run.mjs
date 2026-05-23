@@ -343,6 +343,8 @@ for (const fixture of [
   "conformance/native/pass/open-ended-slices.0",
   "conformance/native/pass/string-slices.0",
   "conformance/native/pass/coff-dynamic-byte-slice-blocked.0",
+  "conformance/native/pass/macho-large-byte-slice-blocked.0",
+  "conformance/native/pass/macho-nested-call-scratch-blocked.0",
   "conformance/native/pass/string-byte-ergonomics.0",
   "conformance/native/pass/indexed-mutation.0",
   "conformance/native/pass/nested-lvalues.0",
@@ -866,6 +868,61 @@ for (const key of ["code", "path", "line", "column", "length", "expected", "actu
 }
 assert.equal(coffDynamicSliceBuildDiag.backendBlocker.backend, "zero-coff-x64");
 assert.equal(coffDynamicSliceBuildDiag.backendBlocker.stage, "buildability");
+
+async function assertMachOObjectBuildabilityBlocked(fixture, outName, expectedMessage) {
+  const readiness = await execFileAsync(zero, [
+    "check",
+    "--json",
+    "--emit",
+    "obj",
+    "--target",
+    "darwin-arm64",
+    fixture,
+  ]);
+  const readinessBody = JSON.parse(readiness.stdout);
+  assert.equal(readinessBody.ok, true);
+  assert.equal(readinessBody.diagnostics.length, 0);
+  assert.equal(readinessBody.targetReadiness.ok, false);
+  assert.equal(readinessBody.targetReadiness.buildable, false);
+  assert.equal(readinessBody.targetReadiness.languageOk, true);
+  assert.equal(readinessBody.targetReadiness.emit, "obj");
+  assert.equal(readinessBody.targetReadiness.target, "darwin-arm64");
+  assert.equal(readinessBody.targetReadiness.diagnostics[0].code, "BLD004");
+  assert.equal(readinessBody.targetReadiness.diagnostics[0].backendBlocker.backend, "zero-macho64");
+  assert.equal(readinessBody.targetReadiness.diagnostics[0].backendBlocker.stage, "buildability");
+  assert.match(readinessBody.targetReadiness.diagnostics[0].message, expectedMessage);
+  const build = await execFileAsync(zero, [
+    "build",
+    "--json",
+    "--emit",
+    "obj",
+    "--target",
+    "darwin-arm64",
+    fixture,
+    "--out",
+    `${outDir}/${outName}`,
+  ]).catch((error) => error);
+  assert.notEqual(build.code, 0);
+  const buildBody = JSON.parse(build.stdout);
+  const readinessDiag = readinessBody.targetReadiness.diagnostics[0];
+  const buildDiag = buildBody.diagnostics[0];
+  for (const key of ["code", "path", "line", "column", "length", "expected", "actual", "help"]) {
+    assert.equal(buildDiag[key], readinessDiag[key]);
+  }
+  assert.equal(buildDiag.backendBlocker.backend, "zero-macho64");
+  assert.equal(buildDiag.backendBlocker.stage, "buildability");
+}
+
+await assertMachOObjectBuildabilityBlocked(
+  "conformance/native/pass/macho-large-byte-slice-blocked.0",
+  "macho-large-byte-slice.o",
+  /constant start/,
+);
+await assertMachOObjectBuildabilityBlocked(
+  "conformance/native/pass/macho-nested-call-scratch-blocked.0",
+  "macho-nested-call-scratch.o",
+  /scratch spill capacity/,
+);
 
 const directCallArm64ObjReadiness = await execFileAsync(zero, [
   "check",

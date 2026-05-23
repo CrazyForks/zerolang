@@ -21,6 +21,11 @@ typedef struct {
   ZBuildBackend backend;
 } ZBuildability;
 
+enum {
+  BUILD_AARCH64_IMM12_MAX = 4095u,
+  BUILD_MACHO_SCRATCH_SLOT_COUNT = 32u
+};
+
 static const char *build_type_name(IrTypeKind type) {
   switch (type) {
     case IR_TYPE_VOID: return "Void";
@@ -265,6 +270,30 @@ static bool build_check_coff_byte_view_len(const ZBuildability *ctx, const IrFun
 static bool build_check_coff_byte_view(const ZBuildability *ctx, const IrFunction *fun, const IrValue *view, ZDiag *diag) {
   return build_check_coff_byte_view_ptr(ctx, fun, view, diag) && build_check_coff_byte_view_len(ctx, fun, view, diag);
 }
+
+static bool build_check_macho_byte_view_ptr(const ZBuildability *ctx, const IrFunction *fun, const IrValue *view, ZDiag *diag) {
+  if (!view) return build_diag(ctx, diag, "direct AArch64 Mach-O byte view is missing", 1, 1, "missing byte view");
+  if (view->kind == IR_VALUE_LOCAL && fun && view->local_index < fun->local_len && fun->locals[view->local_index].type == IR_TYPE_BYTE_VIEW) return true;
+  if (view->kind == IR_VALUE_MAYBE_VALUE && fun && view->local_index < fun->local_len && fun->locals[view->local_index].type == IR_TYPE_MAYBE_BYTE_VIEW) return true;
+  if (view->kind == IR_VALUE_ARRAY_BYTE_VIEW && fun && view->array_index < fun->local_len) {
+    const IrLocal *local = &fun->locals[view->array_index];
+    if (!local->is_array || local->element_type != IR_TYPE_U8) {
+      return build_diag(ctx, diag, "direct AArch64 Mach-O byte-view array requires [N]u8", view->line, view->column, "unsupported array view");
+    }
+    return true;
+  }
+  if (view->kind == IR_VALUE_STRING_LITERAL) return true;
+  if (view->kind == IR_VALUE_BYTE_SLICE) {
+    unsigned start = 0;
+    if (!build_check_macho_byte_view_ptr(ctx, fun, view->left, diag)) return false;
+    if (build_const_u32_value(view->index, &start) && start > BUILD_AARCH64_IMM12_MAX) {
+      return build_diag(ctx, diag, "direct AArch64 Mach-O byte slice constant start is too large", view->line, view->column, "unsupported byte slice");
+    }
+    return true;
+  }
+  return build_diag(ctx, diag, "direct AArch64 Mach-O value is not a supported byte view", view->line, view->column, "unsupported byte view");
+}
+
 static bool build_value_supported(const ZBuildability *ctx, const IrValue *value, bool local_set_value) {
   if (!ctx || !value) return false;
   if (ctx->backend == Z_BUILD_BACKEND_ELF_AARCH64) return true;
@@ -309,7 +338,7 @@ static bool build_value_supported(const ZBuildability *ctx, const IrValue *value
   return false;
 }
 
-static bool build_check_value(const ZBuildability *ctx, const IrFunction *fun, const IrValue *value, bool local_set_value, ZDiag *diag) {
+static bool build_check_value(const ZBuildability *ctx, const IrFunction *fun, const IrValue *value, bool local_set_value, unsigned macho_scratch_slot, ZDiag *diag) {
   if (!value) return build_diag(ctx, diag, "direct backend buildability found a missing expression", 1, 1, "missing expression");
   if (!build_value_supported(ctx, value, local_set_value)) {
     return build_diag(ctx, diag, "direct backend buildability does not support this MIR value", value->line, value->column, build_value_kind_name(value->kind));
@@ -321,11 +350,22 @@ static bool build_check_value(const ZBuildability *ctx, const IrFunction *fun, c
     if ((value->kind == IR_VALUE_FIXED_BUF_ALLOC || value->kind == IR_VALUE_VEC_INIT) && !build_check_coff_byte_view(ctx, fun, value->left, diag)) return false;
     skip_left = value->kind == IR_VALUE_BYTE_VIEW_LEN || value->kind == IR_VALUE_BYTE_VIEW_INDEX_LOAD || value->kind == IR_VALUE_FIXED_BUF_ALLOC || value->kind == IR_VALUE_VEC_INIT;
   }
+  if (ctx->backend == Z_BUILD_BACKEND_MACHO64) {
+    if (value->kind == IR_VALUE_BYTE_VIEW_INDEX_LOAD && !build_check_macho_byte_view_ptr(ctx, fun, value->left, diag)) return false;
+    if ((value->kind == IR_VALUE_FIXED_BUF_ALLOC || value->kind == IR_VALUE_VEC_INIT) && !build_check_macho_byte_view_ptr(ctx, fun, value->left, diag)) return false;
+  }
   if (value->kind == IR_VALUE_BINARY) {
     bool supported = true;
     if (ctx->backend == Z_BUILD_BACKEND_COFF_X64) supported = value->binary_op == IR_BIN_ADD || value->binary_op == IR_BIN_SUB || value->binary_op == IR_BIN_MUL;
     if (ctx->backend == Z_BUILD_BACKEND_MACHO64) supported = value->binary_op == IR_BIN_ADD || value->binary_op == IR_BIN_SUB || value->binary_op == IR_BIN_MUL || value->binary_op == IR_BIN_DIV || value->binary_op == IR_BIN_MOD || value->binary_op == IR_BIN_AND || value->binary_op == IR_BIN_OR;
     if (!supported) return build_diag(ctx, diag, "direct backend buildability does not support this binary operator", value->line, value->column, "unsupported operator");
+    if (ctx->backend == Z_BUILD_BACKEND_MACHO64 && value->binary_op != IR_BIN_AND && value->binary_op != IR_BIN_OR &&
+        macho_scratch_slot >= BUILD_MACHO_SCRATCH_SLOT_COUNT) {
+      return build_diag(ctx, diag, "direct AArch64 Mach-O expression nesting exceeds scratch register spill capacity", value->line, value->column, "expression too deep");
+    }
+  }
+  if (ctx->backend == Z_BUILD_BACKEND_MACHO64 && value->kind == IR_VALUE_COMPARE && macho_scratch_slot >= BUILD_MACHO_SCRATCH_SLOT_COUNT) {
+    return build_diag(ctx, diag, "direct AArch64 Mach-O expression nesting exceeds scratch register spill capacity", value->line, value->column, "expression too deep");
   }
   if (value->kind == IR_VALUE_CALL) {
     size_t max_args = ctx->backend == Z_BUILD_BACKEND_COFF_X64 ? 4 : (ctx->backend == Z_BUILD_BACKEND_ELF64 ? 6 : 8);
@@ -334,15 +374,27 @@ static bool build_check_value(const ZBuildability *ctx, const IrFunction *fun, c
       snprintf(actual, sizeof(actual), "%zu argument(s)", value->arg_len);
       return build_diag(ctx, diag, "direct backend buildability found a call with too many arguments", value->line, value->column, actual);
     }
+    if (ctx->backend == Z_BUILD_BACKEND_MACHO64 && macho_scratch_slot + value->arg_len >= BUILD_MACHO_SCRATCH_SLOT_COUNT) {
+      return build_diag(ctx, diag, "direct AArch64 Mach-O call argument nesting exceeds scratch spill capacity", value->line, value->column, "too many nested call arguments");
+    }
   }
   if (value->kind == IR_VALUE_LOCAL && fun && value->local_index < fun->local_len && fun->locals[value->local_index].is_array) {
     return build_diag(ctx, diag, "direct backend buildability cannot use fixed array locals as scalar values", value->line, value->column, "array local");
   }
-  if (value->index && !build_check_value(ctx, fun, value->index, false, diag)) return false;
-  if (value->left && !skip_left && !build_check_value(ctx, fun, value->left, false, diag)) return false;
-  if (value->right && !build_check_value(ctx, fun, value->right, false, diag)) return false;
+  unsigned right_slot = macho_scratch_slot;
+  if (ctx->backend == Z_BUILD_BACKEND_MACHO64 &&
+      ((value->kind == IR_VALUE_BINARY && value->binary_op != IR_BIN_AND && value->binary_op != IR_BIN_OR) ||
+       value->kind == IR_VALUE_COMPARE)) {
+    right_slot = macho_scratch_slot + 1;
+  }
+  if (value->index && !build_check_value(ctx, fun, value->index, false, macho_scratch_slot, diag)) return false;
+  if (value->left && !skip_left && !build_check_value(ctx, fun, value->left, false, macho_scratch_slot, diag)) return false;
+  if (value->right && !build_check_value(ctx, fun, value->right, false, right_slot, diag)) return false;
   for (size_t i = 0; i < value->arg_len; i++) {
-    if (!build_check_value(ctx, fun, value->args[i], false, diag)) return false;
+    unsigned arg_slot = ctx->backend == Z_BUILD_BACKEND_MACHO64 && value->kind == IR_VALUE_CALL
+                      ? macho_scratch_slot + (unsigned)value->arg_len
+                      : macho_scratch_slot;
+    if (!build_check_value(ctx, fun, value->args[i], false, arg_slot, diag)) return false;
   }
   return true;
 }
@@ -380,26 +432,30 @@ static bool build_check_instr(const ZBuildability *ctx, const IrFunction *fun, c
       if (ctx->backend == Z_BUILD_BACKEND_COFF_X64 && fun && instr->local_index < fun->local_len && fun->locals[instr->local_index].type == IR_TYPE_BYTE_VIEW) {
         return !instr->value || build_check_coff_byte_view(ctx, fun, instr->value, diag);
       }
-      if (instr->value && !build_check_value(ctx, fun, instr->value, true, diag)) return false;
+      if (ctx->backend == Z_BUILD_BACKEND_MACHO64 && fun && instr->local_index < fun->local_len && fun->locals[instr->local_index].type == IR_TYPE_BYTE_VIEW) {
+        if (instr->value && !build_check_macho_byte_view_ptr(ctx, fun, instr->value, diag)) return false;
+      }
+      if (instr->value && !build_check_value(ctx, fun, instr->value, true, 0, diag)) return false;
       return true;
     case IR_INSTR_INDEX_STORE:
     case IR_INSTR_FIELD_STORE:
-      if (instr->value && !build_check_value(ctx, fun, instr->value, false, diag)) return false;
-      if (instr->index && !build_check_value(ctx, fun, instr->index, false, diag)) return false;
+      if (instr->value && !build_check_value(ctx, fun, instr->value, false, 0, diag)) return false;
+      if (instr->index && !build_check_value(ctx, fun, instr->index, false, 0, diag)) return false;
       return true;
     case IR_INSTR_WORLD_WRITE:
       if (ctx->backend == Z_BUILD_BACKEND_COFF_X64 && instr->value && !build_check_coff_byte_view(ctx, fun, instr->value, diag)) return false;
-      if (ctx->backend != Z_BUILD_BACKEND_COFF_X64 && instr->value && !build_check_value(ctx, fun, instr->value, false, diag)) return false;
-      if (instr->index && !build_check_value(ctx, fun, instr->index, false, diag)) return false;
+      if (ctx->backend == Z_BUILD_BACKEND_MACHO64 && instr->value && !build_check_macho_byte_view_ptr(ctx, fun, instr->value, diag)) return false;
+      if (ctx->backend != Z_BUILD_BACKEND_COFF_X64 && instr->value && !build_check_value(ctx, fun, instr->value, false, 0, diag)) return false;
+      if (instr->index && !build_check_value(ctx, fun, instr->index, false, 0, diag)) return false;
       return true;
     case IR_INSTR_EXPR:
     case IR_INSTR_RETURN:
-      if (instr->value && !build_check_value(ctx, fun, instr->value, false, diag)) return false;
-      if (instr->index && !build_check_value(ctx, fun, instr->index, false, diag)) return false;
+      if (instr->value && !build_check_value(ctx, fun, instr->value, false, 0, diag)) return false;
+      if (instr->index && !build_check_value(ctx, fun, instr->index, false, 0, diag)) return false;
       return true;
     case IR_INSTR_IF:
     case IR_INSTR_WHILE:
-      if (instr->value && !build_check_value(ctx, fun, instr->value, false, diag)) return false;
+      if (instr->value && !build_check_value(ctx, fun, instr->value, false, 0, diag)) return false;
       if (!build_check_instrs(ctx, fun, instr->then_instrs, instr->then_len, diag)) return false;
       return build_check_instrs(ctx, fun, instr->else_instrs, instr->else_len, diag);
     case IR_INSTR_RAISE:
