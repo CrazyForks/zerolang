@@ -129,7 +129,5 @@ void z_program_graph_init(ZProgramGraph *graph);
 void z_program_graph_free(ZProgramGraph *graph);
 bool z_program_graph_from_program(const SourceInput *input, const Program *program, ZProgramGraph *graph);
 bool z_program_graph_validate(const ZProgramGraph *graph, ZProgramGraphValidation *validation);
-void z_program_graph_append_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphValidation *validation);
-void z_append_program_graph_json(ZBuf *buf, const SourceInput *input, const Program *program);
 
 #endif

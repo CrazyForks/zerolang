@@ -258,6 +258,19 @@ for (const [command, expected] of [
   assert.match(zero(command).stdout, expected);
 }
 
+const graphDump = zero(["graph", "dump", "examples/hello.0"]).stdout;
+const graphDumpAgain = zero(["graph", "dump", "examples/hello.0"]).stdout;
+assert.equal(graphDumpAgain, graphDump);
+assert.match(graphDump, /^zero-program-graph v1\n/);
+assert.match(graphDump, /graphHash "graph:[0-9a-f]{16}"/);
+assert.match(graphDump, /validation "shape-valid" ok/);
+assert.match(graphDump, /node id="node:000001" kind="Module"/);
+assert.match(graphDump, /edge from="node:000001" to="node:000002" kind="function" target="node" order=0/);
+const graphDumpJson = json(["graph", "dump", "--json", "examples/hello.0"]).body;
+assert.equal(graphDumpJson.schemaVersion, 1);
+assert.equal(graphDumpJson.validation.ok, true);
+assert.match(graphDumpJson.graphHash, /^graph:[0-9a-f]{16}$/);
+
 const skillsList = json(["skills", "list", "--json"]).body;
 assert.equal(skillsList.success, true);
 assert(skillsList.data.some((skill) => skill.name === "zero" && /Zero/.test(skill.description)));

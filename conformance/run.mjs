@@ -2590,9 +2590,19 @@ assert(callResolutionEdgeFacts.calls.some((item) => item.kind === "stdlib" && it
 
 const programGraphBody = JSON.parse((await execFileAsync(zero, ["graph", "--json", "examples/hello.0"])).stdout).programGraph;
 const programGraphBodyAgain = JSON.parse((await execFileAsync(zero, ["graph", "--json", "examples/hello.0"])).stdout).programGraph;
+const programGraphDump = (await execFileAsync(zero, ["graph", "dump", "examples/hello.0"])).stdout;
+const programGraphDumpAgain = (await execFileAsync(zero, ["graph", "dump", "examples/hello.0"])).stdout;
+const programGraphDumpJson = JSON.parse((await execFileAsync(zero, ["graph", "dump", "--json", "examples/hello.0"])).stdout);
 assert.equal(programGraphBody.schemaVersion, 1);
 assert.equal(programGraphBody.canonicalSource, false);
 assert.deepEqual(programGraphBodyAgain, programGraphBody);
+assert.equal(programGraphDumpAgain, programGraphDump);
+assert.deepEqual(programGraphDumpJson, programGraphBody);
+assert.match(programGraphDump, /^zero-program-graph v1\n/);
+assert.match(programGraphDump, /graphHash "graph:[0-9a-f]{16}"/);
+assert.match(programGraphDump, /validation "shape-valid" ok/);
+assert.match(programGraphDump, /node id="node:000001" kind="Module"/);
+assert.match(programGraphDump, /edge from="node:000001" to="node:000002" kind="function" target="node" order=0/);
 assert.match(programGraphBody.graphHash, /^graph:[0-9a-f]{16}$/);
 assert.equal(programGraphBody.validation.ok, true);
 assert.equal(programGraphBody.validation.state, "shape-valid");
