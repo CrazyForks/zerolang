@@ -286,6 +286,11 @@ assert.equal(languageSkill.success, true);
 assert.match(languageSkill.data[0].content, /# zerolang Language/);
 assert.match(languageSkill.data[0].content, /pub fn main/);
 
+const stdlibSkill = json(["skills", "get", "stdlib", "--json"]).body;
+assert.equal(stdlibSkill.success, true);
+assert.match(stdlibSkill.data[0].content, /std\.str/);
+assert.match(stdlibSkill.data[0].content, /non-overlapping reverse/);
+
 const diagnosticSkill = json(["skills", "get", "diagnostics", "--json"]).body;
 assert.equal(diagnosticSkill.success, true);
 assert.match(diagnosticSkill.data[0].content, /fixSafety/);
@@ -1451,6 +1456,52 @@ for (const { target, compiler, emissionPath, magic } of directByteCopyFillTarget
   assert.equal(directStdPathReport.objectBackend.objectEmission.path, emissionPath);
   assert(directStdPathBytes.subarray(0, magic.length).equals(magic));
   assert(directStdPathBytes.includes(Buffer.from("src/main.0")));
+}
+const directStdStrSource = join(outDir, "direct-std-str-matrix.0");
+writeFileSync(directStdStrSource, `export c fn main u8
+  mut reversed_buf [6]u8 [0_u8;6]
+  let reversed std.str.reverse reversed_buf "drawer"
+  let trimmed std.str.trimAscii "  zero row  "
+  mut small [3]u8 [0_u8;3]
+  let overflow std.str.reverse small "drawer"
+  mut ok Bool true
+  if == reversed.has false
+    set ok false
+  if reversed.has
+    if == (std.mem.eql reversed.value "reward") false
+      set ok false
+  if overflow.has
+    set ok false
+  if != (std.str.countByte "banana" 97_u8) 3
+    set ok false
+  if == (std.str.startsWith "zero row syntax" "zero") false
+    set ok false
+  if == (std.str.endsWith "zero row syntax" "syntax") false
+    set ok false
+  if == (std.str.contains "zero row syntax" "row") false
+    set ok false
+  if std.str.contains "zero row syntax" "column"
+    set ok false
+  if == (std.str.contains "zero" "") false
+    set ok false
+  if == (std.mem.eql trimmed "zero row") false
+    set ok false
+  if != (std.str.wordCountAscii "zero row syntax") 3
+    set ok false
+  if ok
+    ret 1_u8
+  ret 0_u8
+`);
+for (const { target, compiler, emissionPath, magic } of directByteCopyFillTargets) {
+  const directStdStrPath = join(outDir, `direct-std-str-${target.replace(/[^a-z0-9]+/gi, "-")}.o`);
+  rmSync(directStdStrPath, { force: true });
+  const directStdStrReport = json(["build", "--json", "--emit", "obj", "--target", target, directStdStrSource, "--out", directStdStrPath]).body;
+  const directStdStrBytes = readFileSync(directStdStrPath);
+  assert.equal(directStdStrReport.compiler, compiler);
+  assert.equal(directStdStrReport.generatedCBytes, 0);
+  assert.equal(directStdStrReport.objectBackend.objectEmission.path, emissionPath);
+  assert(directStdStrBytes.subarray(0, magic.length).equals(magic));
+  assert(directStdStrBytes.includes(Buffer.from("zero row syntax")));
 }
 const directMachOPath = join(outDir, "direct-darwin-arm64.o");
 rmSync(directMachOPath, { force: true });

@@ -68,6 +68,7 @@ Core examples:
 - `examples/compile-time-v1.0`: bounded `meta`, target/type reflection facts, Bool and enum static values, and compile-time JSON metadata.
 - `examples/ownership-cleanup.0`: `owned<T>` cleanup, canonical `drop`, and `defer` at lexical scope exit.
 - `examples/std-path-io.0`: fixed-buffer `std.path` helpers and caller-owned `std.io` buffers.
+- `examples/std-str.0`: allocation-free byte-string helpers over spans and caller-owned storage.
 - `examples/std-data-formats.0`: `std.codec` encoders and basic explicit-allocator `std.json` helpers.
 - `examples/std-json-bytes.0`: byte-span JSON validation, parsing, and token streaming.
 - `examples/std-http-json.0`: hosted HTTP request envelope into caller-owned storage followed by byte-span JSON parsing.

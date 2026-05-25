@@ -13,6 +13,7 @@ typedef struct {
 
 static const ZStdSourceModule std_source_modules[] = {
   {"std.path", "std/path.0", zero_embedded_stdlib_std_path_0_chunks},
+  {"std.str", "std/str.0", zero_embedded_stdlib_std_str_0_chunks},
 };
 
 static const ZStdSourceCall std_source_calls[] = {
@@ -22,7 +23,22 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.path.join", "__zero_std_path_join", "std.path"},
   {"std.path.normalize", "__zero_std_path_normalize", "std.path"},
   {"std.path.relative", "__zero_std_path_relative", "std.path"},
+  {"std.str.contains", "__zero_std_str_contains", "std.str"},
+  {"std.str.countByte", "__zero_std_str_count_byte", "std.str"},
+  {"std.str.endsWith", "__zero_std_str_ends_with", "std.str"},
+  {"std.str.reverse", "__zero_std_str_reverse", "std.str"},
+  {"std.str.startsWith", "__zero_std_str_starts_with", "std.str"},
+  {"std.str.trimAscii", "__zero_std_str_trim_ascii", "std.str"},
+  {"std.str.wordCountAscii", "__zero_std_str_word_count_ascii", "std.str"},
 };
+
+size_t z_std_source_module_count(void) {
+  return sizeof(std_source_modules) / sizeof(std_source_modules[0]);
+}
+
+const ZStdSourceModule *z_std_source_module_at(size_t index) {
+  return index < z_std_source_module_count() ? &std_source_modules[index] : NULL;
+}
 
 const ZStdSourceModule *z_std_source_module_for_name(const char *module) {
   for (size_t i = 0; i < sizeof(std_source_modules) / sizeof(std_source_modules[0]); i++) {

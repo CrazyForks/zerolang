@@ -3653,12 +3653,15 @@ static bool direct_row_path_has_module_suffix(const char *path, const char *modu
 }
 
 static bool direct_row_is_embedded_std_source_file(const char *path, const char *source) {
-  const ZStdSourceModule *module = z_std_source_module_for_name("std.path");
-  if (!module || !direct_row_path_has_module_suffix(path, module->path)) return false;
-  char *embedded = z_std_source_module_copy_source(module);
-  bool ok = embedded && strcmp(source ? source : "", embedded) == 0;
-  free(embedded);
-  return ok;
+  for (size_t i = 0; i < z_std_source_module_count(); i++) {
+    const ZStdSourceModule *module = z_std_source_module_at(i);
+    if (!module || !direct_row_path_has_module_suffix(path, module->path)) continue;
+    char *embedded = z_std_source_module_copy_source(module);
+    bool ok = embedded && strcmp(source ? source : "", embedded) == 0;
+    free(embedded);
+    if (ok) return true;
+  }
+  return false;
 }
 
 static bool direct_input_add_row_symbols(SourceInput *input, const ZRowTokenVec *tokens, const ZRowTree *tree, const char *module, bool allow_internal_names, ZDiag *diag) {
@@ -3939,6 +3942,16 @@ static bool direct_row_references_std_module(const ZRowTokenVec *tokens, const c
   return false;
 }
 
+static bool direct_row_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const ZRowTokenVec *tokens, ZDiag *diag) {
+  for (size_t i = 0; i < z_std_source_module_count(); i++) {
+    const ZStdSourceModule *module = z_std_source_module_at(i);
+    if (!module || strncmp(module->module, "std.", strlen("std.")) != 0) continue;
+    const char *name = module->module + strlen("std.");
+    if (direct_row_references_std_module(tokens, name) && !direct_row_append_std_source(input, combined, module, diag)) return false;
+  }
+  return !diag || diag->code == 0;
+}
+
 static bool direct_row_resolve_file(const char *path, const char *root, SourceInput *input, ZBuf *combined, ZDiag *diag, char ***stack, size_t *stack_len) {
   if (direct_input_has_file(input, path)) return true;
   if (direct_row_stack_contains(*stack, *stack_len, path)) {
@@ -3965,10 +3978,8 @@ static bool direct_row_resolve_file(const char *path, const char *root, SourceIn
     return false;
   }
 
-  if (direct_row_references_std_module(&tokens, "path")) {
-    if (!direct_row_append_std_source(input, combined, z_std_source_module_for_name("std.path"), diag)) {
-      if (!diag->path) diag->path = z_strdup(path);
-    }
+  if (!direct_row_append_referenced_std_sources(input, combined, &tokens, diag)) {
+    if (!diag->path) diag->path = z_strdup(path);
   }
 
   for (size_t i = 0; i < tree.len && diag->code == 0; i++) {
@@ -6802,6 +6813,7 @@ static const char *helper_module_name(const ZStdHelperInfo *helper) {
   if (strncmp(name, "std.args.", strlen("std.args.")) == 0) return "std.args";
   if (strncmp(name, "std.env.", strlen("std.env.")) == 0) return "std.env";
   if (strncmp(name, "std.path.", strlen("std.path.")) == 0) return "std.path";
+  if (strncmp(name, "std.str.", strlen("std.str.")) == 0) return "std.str";
   if (strncmp(name, "std.io.", strlen("std.io.")) == 0) return "std.io";
   if (strncmp(name, "std.codec.", strlen("std.codec.")) == 0) return "std.codec";
   if (strncmp(name, "std.mem.", strlen("std.mem.")) == 0) return "std.mem";
@@ -6842,6 +6854,7 @@ static const char *helper_ownership_notes(const ZStdHelperInfo *helper) {
 static const char *helper_example_path(const ZStdHelperInfo *helper) {
   const char *module = helper_module_name(helper);
   if (strcmp(module, "std.mem") == 0) return "examples/memory-primitives.0";
+  if (helper && helper->name && strncmp(helper->name, "std.str.", strlen("std.str.")) == 0) return "examples/std-str.0";
   if (strcmp(module, "std.io") == 0 || strcmp(module, "std.path") == 0) return "examples/std-path-io.0";
   if (strcmp(module, "std.args") == 0 || strcmp(module, "std.env") == 0) return "examples/cli-file.0";
   if (strcmp(module, "std.fs") == 0) return "examples/zero-hash/";

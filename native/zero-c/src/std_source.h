@@ -9,6 +9,8 @@ typedef struct {
   const char *const *chunks;
 } ZStdSourceModule;
 
+size_t z_std_source_module_count(void);
+const ZStdSourceModule *z_std_source_module_at(size_t index);
 const ZStdSourceModule *z_std_source_module_for_name(const char *module);
 const ZStdSourceModule *z_std_source_module_for_public_call(const char *qualified_name);
 const char *z_std_source_target_for_public_call(const char *qualified_name);

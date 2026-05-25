@@ -74,6 +74,7 @@ Build JSON reports `profileSemantics` and `profileBudget`. Size JSON adds `sizeB
 | `codec-varint.0` | `use std.codec`, varint length, CRC-32 | `bin/zero check examples/codec-varint.0` |
 | `parse-cursor.0` | `use std.parse`, scanner predicates | `bin/zero check examples/parse-cursor.0` |
 | `std-path-io.0` | `std.path` fixed-buffer path helpers and `std.io` caller-owned buffers | `bin/zero check examples/std-path-io.0` |
+| `std-str.0` | allocation-free byte-string helpers over spans and caller-owned storage | `bin/zero check examples/std-str.0` |
 | `std-data-formats.0` | `std.codec` encoders and basic explicit-allocator `std.json` helpers | `bin/zero check examples/std-data-formats.0` |
 | `std-json-bytes.0` | byte-span JSON validation, parsing, and token streaming | `bin/zero run --out /tmp/zero-json-bytes examples/std-json-bytes.0` |
 | `std-http-json.0` | hosted HTTP request envelope into caller storage, then byte-span JSON parsing | `bin/zero check examples/std-http-json.0` |

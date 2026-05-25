@@ -1,11 +1,6 @@
 pub fn main Void world World !
-  let source std.mem.span "drawer"
   mut out [6]u8 [0_u8;6]
-  mut i usize 0
-  while < i (std.mem.len source)
-    let from - (std.mem.len source) (+ i 1)
-    set out[i] source[from]
-    set i + i 1
-  let actual Span<u8> out
-  if std.mem.eqlBytes actual "reward"[0..6]
-    check world.out.write "reverse string ok\n"
+  let actual std.str.reverse out "drawer"
+  if actual.has
+    if std.mem.eql actual.value "reward"
+      check world.out.write "reverse string ok\n"

@@ -178,6 +178,14 @@ export const docs: Doc[] = [
     section: "Modules",
   },
   {
+    slug: "module-str",
+    title: "std.str",
+    description: "Allocation-free byte-string helpers over spans and caller-owned storage.",
+    path: "/modules/str",
+    sourcePath: "/articles/modules/str.md",
+    section: "Modules",
+  },
+  {
     slug: "module-io",
     title: "std.io",
     description: "Buffered reader/writer helpers over caller-owned storage.",

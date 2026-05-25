@@ -685,6 +685,9 @@ Current native helpers include:
   `join(buffer, left, right) -> Maybe<String>`,
   `normalize(buffer, path) -> Maybe<String>`, and
   `relative(buffer, base, target) -> Maybe<String>`
+- `std.str`: byte-span string helpers such as
+  `reverse(buffer, text) -> Maybe<Span<u8>>`, `contains(text, needle) -> Bool`,
+  `trimAscii(text) -> Span<u8>`, and `wordCountAscii(text) -> usize`
 - `std.fs`: hosted path helpers, explicit `Fs` handles, owned file handles,
   fallible reads/writes, and `readAll` helpers backed by an explicit allocator
   and size limit
