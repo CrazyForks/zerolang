@@ -2555,6 +2555,8 @@ assert(callFacts.calls.some((item) => item.kind === "constrained_interface" && i
 assert(callFacts.calls.some((item) => item.kind === "concrete_constrained_shape" && item.calleeName === "read" && item.shape === "Counter" && item.instantiatedBy === "main"));
 assert(callFacts.calls.some((item) => item.calleeName === "add" && item.path === "conformance/check/pass/call-resolution-inspection.0"));
 assert(callFacts.calls.some((item) => item.kind === "function" && item.calleeName === "defaultCount" && item.owner === "Counter.value" && item.returnType === "i32"));
+assert(callFacts.calls.some((item) => item.kind === "function" && item.calleeName === "risky" && item.fallible === true && item.errors.includes("BadInput")));
+assert(callFacts.calls.some((item) => item.kind === "receiver" && item.calleeName === "checkedRead" && item.fallible === true && item.errors.includes("EmptyCounter")));
 
 const callResolutionMemGetGraph = await execFileAsync(zero, ["graph", "--json", "conformance/native/pass/checked-bounds-get.0"]);
 const callResolutionMemGetFacts = JSON.parse(callResolutionMemGetGraph.stdout).callResolution;

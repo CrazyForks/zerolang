@@ -1513,6 +1513,13 @@ static const TypeArgVec *call_type_args(const Expr *call) {
   return &call->type_args;
 }
 
+static void call_resolution_record_function_errors(ZCallResolution *out, const Function *callee) {
+  if (!out || !callee || !callee->has_error_set) return;
+  for (size_t i = 0; i < callee->errors.len; i++) {
+    if (callee->errors.items[i].name) z_call_resolution_add_error(out, callee->errors.items[i].name);
+  }
+}
+
 static bool resolve_named_function_call(const Program *program, const Expr *call, ZCallResolution *out) {
   if (!program || !call || call->kind != EXPR_CALL || !call->left || call->left->kind != EXPR_IDENT || !out) return false;
   const Function *callee = find_function(program, call->left->text);
@@ -1527,6 +1534,7 @@ static bool resolve_named_function_call(const Program *program, const Expr *call
   out->fallible = callee->raises || callee->has_error_set;
   z_call_resolution_set_callee_name(out, callee->name);
   z_call_resolution_set_return_type(out, callee->return_type ? callee->return_type : "Void");
+  call_resolution_record_function_errors(out, callee);
   return true;
 }
 
@@ -4302,6 +4310,7 @@ static void call_resolution_init_callee(ZCallResolution *out, ZCallKind kind, co
   out->fallible = callee && (callee->raises || callee->has_error_set);
   z_call_resolution_set_callee_name(out, callee ? callee->name : NULL);
   z_call_resolution_set_return_type(out, callee && callee->return_type ? callee->return_type : "Void");
+  call_resolution_record_function_errors(out, callee);
 }
 
 static bool resolve_shape_namespace_call(const Program *program, const Expr *call, ZCallResolution *out) {
