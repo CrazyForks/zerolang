@@ -45,7 +45,7 @@ fn __zero_std_math_pow_u32 u32 base u32 exponent u32
 fn __zero_std_math_mod_pow_u32 u32 base u32 exponent u32 modulus u32
   if == modulus 0
     ret 0
-  mut result u32 1
+  mut result u32 % 1 modulus
   mut current % base modulus
   mut exp exponent
   while > exp 0

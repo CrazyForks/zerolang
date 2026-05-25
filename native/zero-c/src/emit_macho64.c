@@ -212,14 +212,14 @@ static bool macho_const_u32_value(const IrValue *value, unsigned *out) {
   return true;
 }
 
-static unsigned macho_cond_for_compare(IrCompareOp op) {
+static unsigned macho_cond_for_compare(IrCompareOp op, bool uns) {
   switch (op) {
     case IR_CMP_EQ: return 0;
     case IR_CMP_NE: return 1;
-    case IR_CMP_LT: return 11;
-    case IR_CMP_LE: return 13;
-    case IR_CMP_GT: return 12;
-    case IR_CMP_GE: return 10;
+    case IR_CMP_LT: return uns ? 3 : 11;
+    case IR_CMP_LE: return uns ? 9 : 13;
+    case IR_CMP_GT: return uns ? 8 : 12;
+    case IR_CMP_GE: return uns ? 2 : 10;
   }
   return 0;
 }
@@ -583,7 +583,7 @@ static bool macho_emit_compare_to_reg_at(ZBuf *text, const IrFunction *fun, cons
   if (!macho_emit_load_scratch(text, 8, value->left->type, scratch_slot, value->left, diag)) return false;
   z_aarch64_emit_cmp_w(text, 8, 9);
   z_aarch64_emit_movz_w(text, reg, 0);
-  size_t false_patch = z_aarch64_emit_b_cond_placeholder(text, macho_invert_cond(macho_cond_for_compare(value->compare_op)));
+  size_t false_patch = z_aarch64_emit_b_cond_placeholder(text, macho_invert_cond(macho_cond_for_compare(value->compare_op, macho_type_is_unsigned(value->left->type))));
   z_aarch64_emit_movz_w(text, reg, 1);
   z_aarch64_patch_cond19(text, false_patch, text->len);
   return true;

@@ -111,14 +111,14 @@ static void coff_emit_u8_array_bounds_check(ZBuf *text, const IrLocal *local) {
 
 static void coff_emit_epilogue(ZBuf *text) { z_x64_emit_epilogue(text); }
 
-static unsigned coff_setcc_opcode(IrCompareOp op) {
+static unsigned coff_setcc_opcode(IrCompareOp op, bool uns) {
   switch (op) {
     case IR_CMP_EQ: return 0x94;
     case IR_CMP_NE: return 0x95;
-    case IR_CMP_LT: return 0x9c;
-    case IR_CMP_LE: return 0x9e;
-    case IR_CMP_GT: return 0x9f;
-    case IR_CMP_GE: return 0x9d;
+    case IR_CMP_LT: return uns ? 0x92 : 0x9c;
+    case IR_CMP_LE: return uns ? 0x96 : 0x9e;
+    case IR_CMP_GT: return uns ? 0x97 : 0x9f;
+    case IR_CMP_GE: return uns ? 0x93 : 0x9d;
   }
   return 0x94;
 }
@@ -401,7 +401,7 @@ static bool coff_emit_compare_value(ZBuf *text, const IrFunction *fun, const IrV
   if (!coff_emit_value(text, fun, value->right, ctx, diag)) return false;
   z_x64_emit_mov_rcx_from_rax(text, false);
   z_x64_emit_pop_rax(text);
-  z_x64_emit_cmp_rax_rcx_to_bool(text, coff_setcc_opcode(value->compare_op), false);
+  z_x64_emit_cmp_rax_rcx_to_bool(text, coff_setcc_opcode(value->compare_op, coff_type_is_unsigned(value->left ? value->left->type : value->type)), false);
   return true;
 }
 

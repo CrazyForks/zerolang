@@ -2,7 +2,11 @@ pub fn main Void world World !
   mut ok Bool true
   if != (std.math.minU32 8 3) 3
     set ok false
+  if != (std.math.minU32 4000000000_u32 3) 3
+    set ok false
   if != (std.math.maxU32 8 3) 8
+    set ok false
+  if != (std.math.maxU32 4000000000_u32 3) 4000000000_u32
     set ok false
   if != (std.math.clampU32 10 2 7) 7
     set ok false
@@ -15,6 +19,8 @@ pub fn main Void world World !
   if != (std.math.powU32 3 4) 81
     set ok false
   if != (std.math.modPowU32 4 13 497) 445
+    set ok false
+  if != (std.math.modPowU32 9 0 1) 0
     set ok false
   if == (std.math.isPrimeU32 31) false
     set ok false

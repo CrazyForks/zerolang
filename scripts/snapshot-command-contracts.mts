@@ -1508,9 +1508,15 @@ writeFileSync(directStdMathSource, `export c fn main u8
   mut ok Bool true
   if != (std.math.minU32 8 3) 3
     set ok false
+  if != (std.math.minU32 4000000000_u32 3) 3
+    set ok false
   if != (std.math.maxU32 8 3) 8
     set ok false
+  if != (std.math.maxU32 4000000000_u32 3) 4000000000_u32
+    set ok false
   if != (std.math.clampU32 10 2 7) 7
+    set ok false
+  if != (std.math.clampU32 4000000000_u32 2 7) 7
     set ok false
   if != (std.math.clampU32 1 7 2) 2
     set ok false
@@ -1521,6 +1527,8 @@ writeFileSync(directStdMathSource, `export c fn main u8
   if != (std.math.powU32 3 4) 81
     set ok false
   if != (std.math.modPowU32 4 13 497) 445
+    set ok false
+  if != (std.math.modPowU32 9 0 1) 0
     set ok false
   if == (std.math.isPrimeU32 31) false
     set ok false
@@ -1543,6 +1551,12 @@ for (const { target, compiler, emissionPath, magic } of directByteCopyFillTarget
   assert.equal(directStdMathReport.generatedCBytes, 0);
   assert.equal(directStdMathReport.objectBackend.objectEmission.path, emissionPath);
   assert(directStdMathBytes.subarray(0, magic.length).equals(magic));
+  if (compiler === "zero-coff-x64") {
+    assert(directStdMathBytes.includes(Buffer.from([0x0f, 0x92, 0xc0])));
+    assert(directStdMathBytes.includes(Buffer.from([0x0f, 0x97, 0xc0])));
+    assert.equal(directStdMathBytes.includes(Buffer.from([0x0f, 0x9c, 0xc0])), false);
+    assert.equal(directStdMathBytes.includes(Buffer.from([0x0f, 0x9f, 0xc0])), false);
+  }
 }
 const directMachOPath = join(outDir, "direct-darwin-arm64.o");
 rmSync(directMachOPath, { force: true });
