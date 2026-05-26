@@ -9613,6 +9613,9 @@ static bool graph_check_generated_view_for_diag(const Command *command, const ZT
   zbuf_init(&temp_path);
   if (!graph_temp_path("check", "graph-check.0", &temp_dir, &temp_path, diag) ||
       !z_write_file(temp_path.data, view ? view : "", diag)) {
+    if (diag && (diag->path == temp_dir.data || diag->path == temp_path.data)) {
+      diag->path = graph_check_diagnostic_path(command);
+    }
     graph_roundtrip_cleanup(temp_path.data, temp_dir.data);
     zbuf_free(&temp_dir);
     zbuf_free(&temp_path);
