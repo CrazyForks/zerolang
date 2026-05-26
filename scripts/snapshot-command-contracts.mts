@@ -366,6 +366,9 @@ const graphPatchReservedParamPath = join(outDir, "hello.reserved-param.program-g
 const graphReservedParamPath = join(outDir, "hello.reserved-param.program-graph");
 const graphPatchInternalFunctionPath = join(outDir, "hello.internal-function.program-graph.patch");
 const graphInternalFunctionPath = join(outDir, "hello.internal-function.program-graph");
+const graphPayloadDumpPath = join(outDir, "payload-match.program-graph");
+const graphPatchInvalidMatchReplacePath = join(outDir, "payload-match.invalid-replace.program-graph.patch");
+const graphPatchInvalidMatchInsertPath = join(outDir, "payload-match.invalid-insert.program-graph.patch");
 const graphPackageDumpPath = join(outDir, "systems-package.program-graph");
 const graphPatchInvalidImportAliasPath = join(outDir, "systems-package.invalid-import-alias.program-graph.patch");
 const graphPatchInvalidImportNamePath = join(outDir, "systems-package.invalid-import-name.program-graph.patch");
@@ -417,6 +420,9 @@ rmSync(graphPatchReservedParamPath, { force: true });
 rmSync(graphReservedParamPath, { force: true });
 rmSync(graphPatchInternalFunctionPath, { force: true });
 rmSync(graphInternalFunctionPath, { force: true });
+rmSync(graphPayloadDumpPath, { force: true });
+rmSync(graphPatchInvalidMatchReplacePath, { force: true });
+rmSync(graphPatchInvalidMatchInsertPath, { force: true });
 rmSync(graphPackageDumpPath, { force: true });
 rmSync(graphPatchInvalidImportAliasPath, { force: true });
 rmSync(graphPatchInvalidImportNamePath, { force: true });
@@ -797,6 +803,40 @@ assert.equal(graphPatchInvalidType.body.ok, false);
 assert.equal(graphPatchInvalidType.body.diagnostic.code, "GPH003");
 assert.equal(graphPatchInvalidType.body.operations[0].field, "type");
 assert.equal(graphPatchInvalidType.body.operations[0].value, "Void\npub fn injected Void");
+assert.equal(zero(["graph", "dump", "--out", graphPayloadDumpPath, "conformance/check/pass/payload-match.0"]).stdout, "");
+const graphPayloadDumpJson = json(["graph", "dump", "--json", "conformance/check/pass/payload-match.0"]).body;
+const graphMatchNode = graphPayloadDumpJson.nodes.find((node) => node.kind === "Match");
+const graphMatchArmNode = graphPayloadDumpJson.nodes.find((node) => node.kind === "MatchArm" && node.name === "ok");
+assert(graphMatchNode);
+assert(graphMatchArmNode);
+writeFileSync(graphPatchInvalidMatchReplacePath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${graphPayloadDumpJson.graphHash}"`,
+  `replace node="${graphMatchArmNode.id}" expect="${graphMatchArmNode.nodeHash}" kind="MatchArm" value="payload\\nname"`,
+  "",
+].join("\n"));
+const graphPatchInvalidMatchReplace = json(["graph", "patch", "--json", graphPayloadDumpPath, graphPatchInvalidMatchReplacePath], { allowFailure: true });
+assert.notEqual(graphPatchInvalidMatchReplace.code, 0);
+assert.equal(graphPatchInvalidMatchReplace.body.ok, false);
+assert.equal(graphPatchInvalidMatchReplace.body.diagnostic.code, "GPH003");
+assert.equal(graphPatchInvalidMatchReplace.body.diagnostic.message, "patch match payload value must be a Zero identifier path or operator");
+assert.equal(graphPatchInvalidMatchReplace.body.operations[0].op, "replace");
+assert.equal(graphPatchInvalidMatchReplace.body.operations[0].value, "payload\nname");
+assert.equal(graphPatchInvalidMatchReplace.body.saved, null);
+writeFileSync(graphPatchInvalidMatchInsertPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${graphPayloadDumpJson.graphHash}"`,
+  `insert node="node:patch_bad_match_arm" kind="MatchArm" parent="${graphMatchNode.id}" edge="arm" order="2" name="ok" value="payload\\nname"`,
+  "",
+].join("\n"));
+const graphPatchInvalidMatchInsert = json(["graph", "patch", "--json", graphPayloadDumpPath, graphPatchInvalidMatchInsertPath], { allowFailure: true });
+assert.notEqual(graphPatchInvalidMatchInsert.code, 0);
+assert.equal(graphPatchInvalidMatchInsert.body.ok, false);
+assert.equal(graphPatchInvalidMatchInsert.body.diagnostic.code, "GPH003");
+assert.equal(graphPatchInvalidMatchInsert.body.diagnostic.message, "patch match payload value must be a Zero identifier path or operator");
+assert.equal(graphPatchInvalidMatchInsert.body.operations[0].op, "insert");
+assert.equal(graphPatchInvalidMatchInsert.body.operations[0].value, "payload\nname");
+assert.equal(graphPatchInvalidMatchInsert.body.saved, null);
 const graphWorldParamNode = graphDumpJson.nodes.find((node) => node.kind === "Param" && node.name === "world");
 assert(graphWorldParamNode);
 writeFileSync(graphPatchReservedParamPath, [

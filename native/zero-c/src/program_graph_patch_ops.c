@@ -283,7 +283,7 @@ static bool patch_validate_node_payload(const ZProgramGraphNode *node, ZProgramG
   if (node->type) {
     if (!patch_validate_text_field(node, result, op, "type", node->type)) return false;
   }
-  if (node->kind == Z_PROGRAM_GRAPH_NODE_IMPORT && node->value) {
+  if (node->value) {
     if (!patch_validate_text_field(node, result, op, "value", node->value)) return false;
   }
   return true;
