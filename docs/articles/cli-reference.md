@@ -38,6 +38,7 @@ zero graph dump examples/hello.0
 zero graph dump --out .zero/out/hello.graph examples/hello.0
 zero graph validate .zero/out/hello.graph
 zero graph view .zero/out/hello.graph
+zero graph patch --out .zero/out/hello.patched.graph .zero/out/hello.graph .zero/out/hello.patch
 zero graph roundtrip examples/hello.0
 zero size --json examples/point.0
 zero ship --json --target linux-musl-x64 examples/hello.0 --out .zero/ship/hello
@@ -66,6 +67,7 @@ Use `--json` when another tool will read the result. Text output is for people.
 | `zero graph dump --json` | The bare deterministic ProgramGraph with `moduleIdentity`, `graphHash`, validation, counts, nodes, and edges. Use `--out <file>` to write the dump artifact. |
 | `zero graph validate --json` | A ProgramGraph artifact readback check with `moduleIdentity`, `graphHash`, counts, validation state, and optional canonical output path. |
 | `zero graph view --json` | A generated Zero-shaped view for a ProgramGraph artifact with `moduleIdentity`, `graphHash`, `canonicalSource: false`, and optional output path. |
+| `zero graph patch --json` | Checked ProgramGraph artifact edits with graph-hash preconditions, per-operation node/field results, the changed graph hash, and optional canonical output path. |
 | `zero graph roundtrip --json` | Source-to-graph-to-view stability with `semanticStable`, original and reparsed graph hashes, raw counts, normalized semantic counts, and optional generated view output. |
 | `zero dev --json` | A watch plan for changed source, manifest, package-lock, and generated-binding inputs. |
 | `zero dev --json --trace` | Adds phase timing, cache hit/miss facts, diagnostics passthrough, and `interfaceFingerprints`. |
@@ -92,6 +94,30 @@ linking facts such as retained runtime objects, provider libraries, and
 `httpRuntime` TLS/provider metadata.
 `zero ship --json` nests the same contract under
 `releasePreview.targetContract`.
+
+## ProgramGraph Patches
+
+`zero graph patch` applies checked edits to a saved ProgramGraph artifact and
+prints or writes the canonical patched artifact. Patch files are line-oriented
+text:
+
+```text
+zero-program-graph-patch v1
+expect graphHash "graph:f76987e99677f1b3"
+set node="node:000013" field="value" expect="hello from zero\n" value="hello patched\n"
+```
+
+The header is required. `expect graphHash` is optional but recommended; it
+rejects edits against a different artifact. `set` requires `node`, `field`, and
+`value`; `expect` is optional and rejects the operation when the current field
+value differs.
+
+Editable fields are `name`, `type`, `value`, `public`, `mutable`, `static`,
+`fallible`, and `exportC`. Boolean fields accept only `true` or `false`.
+`name` values must be identifier paths or supported operator tokens. `type`
+values must be valid Zero type syntax. Strings support `\\`, `\"`, `\n`,
+`\r`, `\t`, and `\u00XX` escapes for non-NUL bytes. NUL bytes are not valid
+ProgramGraph patch text.
 
 ## Build Outputs
 
@@ -154,7 +180,7 @@ zero build [--emit exe|obj] [--target <target>] [--profile dev|release] [--out <
 zero ship [--json] [--target <target>] [--profile release-small|tiny|audit] [--out <file>] <input>
 zero test [--json] [--filter <name>] [--target <target>] [--cc <path>] [--out <file>] <input>
 zero fmt [--check] <input>
-zero graph [dump|validate|view] [--json] [--target <target>] [--out <file>] <input>
+zero graph [dump|validate|view|patch|roundtrip] [--json] [--target <target>] [--out <file>] <input> [patch-file]
 zero doc [--json] [--target <target>] <input>
 zero size [--json] [--target <target>] [--out <artifact>] <input>
 zero explain [--json] <diagnostic-code>
