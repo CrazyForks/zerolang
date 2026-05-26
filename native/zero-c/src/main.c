@@ -7991,7 +7991,8 @@ static void append_runtime_shims_json(ZBuf *buf, const char *emitted_symbol_text
 typedef struct { const ZProgramGraph *graph; const char *artifact; const char *lowering; } GraphSizeSource;
 
 static bool write_size_metadata_artifact(const Command *command, SourceInput *input, const ZTargetInfo *target, char **artifact_path, long long *artifact_bytes, ZDiag *diag) {
-  if (artifact_path) *artifact_path = NULL; if (artifact_bytes) *artifact_bytes = -1;
+  if (artifact_path) *artifact_path = NULL;
+  if (artifact_bytes) *artifact_bytes = -1;
   if (!command || !command->out) return true;
 
   char *base_artifact_path = z_strdup(command->out); char *path = apply_target_suffix(base_artifact_path, target);
@@ -8009,7 +8010,11 @@ static bool write_size_metadata_artifact(const Command *command, SourceInput *in
   if (wrote && artifact_bytes) *artifact_bytes = file_size_or_negative(path);
   zbuf_free(&artifact);
 
-  if (!wrote) { free(path); return false; }
+  if (!wrote) {
+    if (artifact_path) *artifact_path = path;
+    else free(path);
+    return false;
+  }
   if (artifact_path) *artifact_path = path;
   else free(path);
   return true;
@@ -9948,7 +9953,7 @@ static int run_graph_size_command(const Command *command, const ZTargetInfo *tar
   input.lower_ms = now_ms() - phase_started;
   apply_ir_metrics_to_input(&input, &ir, target);
   GraphSizeSource graph_source = {.graph = &graph, .artifact = command->input, .lowering = "direct-program-graph"};
-  z_program_graph_seed_size_source_metadata(&input, &graph);
+  z_program_graph_seed_size_source_metadata(&input, &graph, &program);
   input.parse_cache_hit = compiler_cache_touch("parse-tree", compile_cache_key(&input, NULL, NULL, "parse-tree"));
   input.interface_cache_hit = compiler_cache_touch("interface", graph_interface_cache_key(&input, graph.graph_hash));
   input.check_cache_hit = compiler_cache_touch("checked-body", compile_cache_key(&input, target, NULL, "checked-body"));

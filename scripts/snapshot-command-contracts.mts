@@ -330,6 +330,8 @@ const graphCanonicalPath = join(outDir, "hello.canonical.program-graph");
 const graphViewPath = join(outDir, "hello.program-graph.0");
 const graphCheckViewPath = join(outDir, "hello.checked.program-graph.0");
 const graphSizePath = join(outDir, "hello.program-graph.size.json");
+const graphSizeNoisePatchPath = join(outDir, "hello.program-graph.size-noise.patch");
+const graphSizeNoisePath = join(outDir, "hello.program-graph.size-noise.program-graph");
 const graphRoundtripViewPath = join(outDir, "hello.roundtrip.0");
 const graphArtifactRoundtripPath = join(outDir, "hello.roundtrip.program-graph");
 const graphPatchPath = join(outDir, "hello.program-graph.patch");
@@ -389,6 +391,8 @@ rmSync(graphCanonicalPath, { force: true });
 rmSync(graphViewPath, { force: true });
 rmSync(graphCheckViewPath, { force: true });
 rmSync(graphSizePath, { force: true });
+rmSync(graphSizeNoisePatchPath, { force: true });
+rmSync(graphSizeNoisePath, { force: true });
 rmSync(graphRoundtripViewPath, { force: true });
 rmSync(graphArtifactRoundtripPath, { force: true });
 rmSync(graphPatchPath, { force: true });
@@ -529,6 +533,19 @@ assert.equal(graphSizeOutJson.graph.graphHash, graphDumpJson.graphHash);
 assert.equal(graphSizeOutJson.artifactPath, graphSizePath);
 assert.equal(graphSizeOutJson.artifactBytes, statSync(graphSizePath).size);
 assert.match(readFileSync(graphSizePath, "utf8"), /"kind": "zero-size-metadata"/);
+writeFileSync(graphSizeNoisePatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${graphDumpJson.graphHash}"`,
+  `insert node="node:patch_size_noise" kind="Function" parent="node:000001" edge="backlink" order="0" name="ghost" type="Void" public="true" path="examples/hello.0" line="1" column="1"`,
+  "",
+].join("\n"));
+const graphSizeNoisePatchJson = json(["graph", "patch", "--json", "--out", graphSizeNoisePath, graphDumpPath, graphSizeNoisePatchPath]).body;
+assert.equal(graphSizeNoisePatchJson.ok, true);
+assert.equal(zero(["graph", "check", graphSizeNoisePath]).stdout, "program graph check ok\n");
+const graphSizeNoiseJson = json(["graph", "size", "--json", "--target", "linux-musl-x64", graphSizeNoisePath]).body;
+const graphSizeNoiseInterface = graphSizeNoiseJson.incrementalInvalidation.interfaceFingerprints.modules.find((item) => item.name === "hello");
+assert(graphSizeNoiseInterface);
+assert.deepEqual(graphSizeNoiseInterface.publicSymbols, [{ name: "main", kind: "function" }]);
 writeFileSync(graphPatchPath, [
   "zero-program-graph-patch v1",
   `expect graphHash "${graphDumpJson.graphHash}"`,
@@ -2957,6 +2974,13 @@ const sizeWithArtifact = json(["size", "--json", "--out", sizedArtifact, "exampl
 assert.equal(sizeWithArtifact.artifactPath, sizedArtifact);
 assert(sizeWithArtifact.artifactBytes > 0);
 assert(existsSync(sizedArtifact));
+const sizeBlockedParent = join(outDir, "size-output-not-dir");
+const sizeBlockedOut = join(sizeBlockedParent, "report.json");
+rmSync(sizeBlockedParent, { force: true, recursive: true });
+writeFileSync(sizeBlockedParent, "not a directory\n");
+const sizeBlocked = json(["size", "--json", "--out", sizeBlockedOut, "examples/hello.0"], { allowFailure: true });
+assert.notEqual(sizeBlocked.code, 0);
+assert.equal(sizeBlocked.body.diagnostics[0].path, sizeBlockedOut);
 assert.equal(diagnostics.find((item) => item.code === "ERR001").repair.id, "add-fallible-marker-or-rescue");
 assert.equal(diagnostics.find((item) => item.code === "ERR003").repair.id, "check-or-rescue-fallible-call");
 assert.equal(diagnostics.find((item) => item.code === "TYP025").repair.id, "add-explicit-generic-type-arguments");
