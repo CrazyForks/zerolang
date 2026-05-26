@@ -4,26 +4,7 @@
 #include <string.h>
 
 static void graph_size_push_string(char ***items, size_t *len, const char *value) {
-  *items = z_checked_reallocarray(*items, *len + 1, sizeof(char *));
-  (*items)[(*len)++] = z_strdup(value ? value : "");
-}
-
-static const char *graph_size_source_path_for_line(const SourceInput *input, int line) {
-  if (input && line > 0 && (size_t)line <= input->source_line_count && input->source_line_paths[line - 1]) return input->source_line_paths[line - 1];
-  return input && input->source_file ? input->source_file : "";
-}
-
-static int graph_size_original_line_for_line(const SourceInput *input, int line) {
-  if (input && line > 0 && (size_t)line <= input->source_line_count) return input->source_line_numbers[line - 1] > 0 ? input->source_line_numbers[line - 1] : 1;
-  return line > 0 ? line : 1;
-}
-
-static const char *graph_size_module_for_line(const SourceInput *input, int line) {
-  const char *path = graph_size_source_path_for_line(input, line);
-  for (size_t i = 0; input && i < input->module_count; i++) {
-    if (input->module_paths[i] && strcmp(input->module_paths[i], path) == 0) return input->module_names[i];
-  }
-  return input && input->module_count == 1 ? input->module_names[0] : "";
+  *items = z_checked_reallocarray(*items, *len + 1, sizeof(char *)); (*items)[(*len)++] = z_strdup(value ? value : "");
 }
 
 static const char *graph_size_module_path_for_name(const SourceInput *input, const char *name) {
@@ -64,36 +45,61 @@ static void graph_size_record_symbol(SourceInput *input, const char *module, con
   input->symbol_public[input->symbol_count++] = is_public;
 }
 
-static void graph_size_seed_imports(SourceInput *input, const Program *program) {
-  for (size_t i = 0; program && i < program->use_imports.len; i++) {
-    const UseImport *item = &program->use_imports.items[i];
-    const char *name = item->module ? item->module : "";
-    if (strncmp(name, "std.", 4) == 0) continue;
-    graph_size_record_import(input,
-                             graph_size_module_for_line(input, item->line),
-                             name,
-                             graph_size_module_path_for_name(input, name),
-                             graph_size_source_path_for_line(input, item->line),
-                             graph_size_original_line_for_line(input, item->line),
-                             item->column,
-                             item->end_column > item->column ? item->end_column - item->column : (int)strlen(name));
+static bool graph_size_text_eq(const char *left, const char *right) { return strcmp(left ? left : "", right ? right : "") == 0; }
+
+static const ZProgramGraphNode *graph_size_find_node(const ZProgramGraph *graph, const char *id) {
+  for (size_t i = 0; graph && id && i < graph->node_len; i++) {
+    if (graph_size_text_eq(graph->nodes[i].id, id)) return &graph->nodes[i];
+  }
+  return NULL;
+}
+
+static const char *graph_size_owned_symbol_kind(const ZProgramGraphEdge *edge, const ZProgramGraphNode *node) {
+  if (!edge || !node) return NULL;
+  switch (node->kind) {
+    case Z_PROGRAM_GRAPH_NODE_CONST: return graph_size_text_eq(edge->kind, "const") ? "const" : NULL;
+    case Z_PROGRAM_GRAPH_NODE_TYPE_ALIAS: return graph_size_text_eq(edge->kind, "alias") ? "type-alias" : NULL;
+    case Z_PROGRAM_GRAPH_NODE_SHAPE: return graph_size_text_eq(edge->kind, "shape") ? "shape" : NULL;
+    case Z_PROGRAM_GRAPH_NODE_INTERFACE: return graph_size_text_eq(edge->kind, "interface") ? "interface" : NULL;
+    case Z_PROGRAM_GRAPH_NODE_ENUM: return graph_size_text_eq(edge->kind, "enum") ? "enum" : NULL;
+    case Z_PROGRAM_GRAPH_NODE_CHOICE: return graph_size_text_eq(edge->kind, "choice") ? "choice" : NULL;
+    case Z_PROGRAM_GRAPH_NODE_FUNCTION: return graph_size_text_eq(edge->kind, "function") ? "function" : NULL;
+    default: return NULL;
   }
 }
 
-static void graph_size_seed_symbols(SourceInput *input, const Program *program) {
-  for (size_t i = 0; program && i < program->consts.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->consts.items[i].line), "const", program->consts.items[i].name, program->consts.items[i].is_public);
-  for (size_t i = 0; program && i < program->aliases.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->aliases.items[i].line), "type-alias", program->aliases.items[i].name, program->aliases.items[i].is_public);
-  for (size_t i = 0; program && i < program->shapes.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->shapes.items[i].line), "shape", program->shapes.items[i].name, program->shapes.items[i].is_public);
-  for (size_t i = 0; program && i < program->interfaces.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->interfaces.items[i].line), "interface", program->interfaces.items[i].name, program->interfaces.items[i].is_public);
-  for (size_t i = 0; program && i < program->enums.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->enums.items[i].line), "enum", program->enums.items[i].name, false);
-  for (size_t i = 0; program && i < program->choices.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->choices.items[i].line), "choice", program->choices.items[i].name, false);
-  for (size_t i = 0; program && i < program->functions.len; i++) graph_size_record_symbol(input, graph_size_module_for_line(input, program->functions.items[i].line), "function", program->functions.items[i].name, program->functions.items[i].is_public);
+static void graph_size_seed_from_graph(SourceInput *input, const ZProgramGraph *graph) {
+  for (size_t i = 0; graph && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    const ZProgramGraphNode *module = graph_size_find_node(graph, edge->from);
+    if (!module || module->kind != Z_PROGRAM_GRAPH_NODE_MODULE) continue;
+    const ZProgramGraphNode *node = graph_size_find_node(graph, edge->to);
+    if (!node) continue;
+    const char *module_name = module->name && module->name[0] ? module->name : "main";
+
+    if (node->kind == Z_PROGRAM_GRAPH_NODE_IMPORT && graph_size_text_eq(edge->kind, "import")) {
+      const char *name = node->name ? node->name : "";
+      if (strncmp(name, "std.", 4) == 0) continue;
+      int line = node->line > 0 ? node->line : 1;
+      graph_size_record_import(input,
+                               module_name,
+                               name,
+                               graph_size_module_path_for_name(input, name),
+                               node->path,
+                               line,
+                               node->column,
+                               (int)strlen(name));
+      continue;
+    }
+
+    const char *kind = graph_size_owned_symbol_kind(edge, node);
+    if (kind) graph_size_record_symbol(input, module_name, kind, node->name, node->is_public);
+  }
 }
 
-void z_program_graph_seed_size_source_metadata(SourceInput *input, const ZProgramGraph *graph, const Program *program) {
+void z_program_graph_seed_size_source_metadata(SourceInput *input, const ZProgramGraph *graph) {
   if (!input || !graph) return;
   free(input->source);
   input->source = z_strdup(graph->graph_hash ? graph->graph_hash : "");
-  graph_size_seed_imports(input, program);
-  graph_size_seed_symbols(input, program);
+  graph_size_seed_from_graph(input, graph);
 }

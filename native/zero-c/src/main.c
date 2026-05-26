@@ -9953,7 +9953,7 @@ static int run_graph_size_command(const Command *command, const ZTargetInfo *tar
   input.lower_ms = now_ms() - phase_started;
   apply_ir_metrics_to_input(&input, &ir, target);
   GraphSizeSource graph_source = {.graph = &graph, .artifact = command->input, .lowering = "direct-program-graph"};
-  z_program_graph_seed_size_source_metadata(&input, &graph, &program);
+  z_program_graph_seed_size_source_metadata(&input, &graph);
   input.parse_cache_hit = compiler_cache_touch("parse-tree", compile_cache_key(&input, NULL, NULL, "parse-tree"));
   input.interface_cache_hit = compiler_cache_touch("interface", graph_interface_cache_key(&input, graph.graph_hash));
   input.check_cache_hit = compiler_cache_touch("checked-body", compile_cache_key(&input, target, NULL, "checked-body"));

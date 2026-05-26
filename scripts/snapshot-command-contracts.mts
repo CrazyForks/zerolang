@@ -377,6 +377,8 @@ const graphPayloadDumpPath = join(outDir, "payload-match.program-graph");
 const graphPatchInvalidMatchReplacePath = join(outDir, "payload-match.invalid-replace.program-graph.patch");
 const graphPatchInvalidMatchInsertPath = join(outDir, "payload-match.invalid-insert.program-graph.patch");
 const graphPackageDumpPath = join(outDir, "systems-package.program-graph");
+const graphPackagePathMismatchPatchPath = join(outDir, "systems-package.path-mismatch.program-graph.patch");
+const graphPackagePathMismatchPath = join(outDir, "systems-package.path-mismatch.program-graph");
 const graphPatchInvalidImportAliasPath = join(outDir, "systems-package.invalid-import-alias.program-graph.patch");
 const graphPatchInvalidImportNamePath = join(outDir, "systems-package.invalid-import-name.program-graph.patch");
 const graphInvalidImportNamePath = join(outDir, "systems-package.invalid-import-name.program-graph");
@@ -438,6 +440,8 @@ rmSync(graphPayloadDumpPath, { force: true });
 rmSync(graphPatchInvalidMatchReplacePath, { force: true });
 rmSync(graphPatchInvalidMatchInsertPath, { force: true });
 rmSync(graphPackageDumpPath, { force: true });
+rmSync(graphPackagePathMismatchPatchPath, { force: true });
+rmSync(graphPackagePathMismatchPath, { force: true });
 rmSync(graphPatchInvalidImportAliasPath, { force: true });
 rmSync(graphPatchInvalidImportNamePath, { force: true });
 rmSync(graphInvalidImportNamePath, { force: true });
@@ -980,6 +984,23 @@ assert.equal(graphInternalFunction.body.check.lowering, "direct-program-graph");
 assert.equal(graphInternalFunction.body.diagnostics[0].message, "program graph declaration uses a reserved compiler-internal symbol name");
 assert.equal(zero(["graph", "dump", "--out", graphPackageDumpPath, "examples/systems-package"]).stdout, "");
 const graphPackageDumpJson = json(["graph", "dump", "--json", "examples/systems-package"]).body;
+const graphStatusFunctionNode = graphPackageDumpJson.nodes.find((node) => node.kind === "Function" && node.name === "status");
+assert(graphStatusFunctionNode);
+writeFileSync(graphPackagePathMismatchPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${graphPackageDumpJson.graphHash}"`,
+  `replace node="${graphStatusFunctionNode.id}" expect="${graphStatusFunctionNode.nodeHash}" path="examples/systems-package/src/main.0" public="true"`,
+  "",
+].join("\n"));
+assert.equal(zero(["graph", "patch", "--out", graphPackagePathMismatchPath, graphPackageDumpPath, graphPackagePathMismatchPatchPath]).stdout, "program graph patch ok\n");
+assert.equal(zero(["graph", "check", graphPackagePathMismatchPath]).stdout, "program graph check ok\n");
+const graphPackagePathMismatchSize = json(["graph", "size", "--json", "--target", "linux-musl-x64", graphPackagePathMismatchPath]).body;
+const graphHelpersInterface = graphPackagePathMismatchSize.incrementalInvalidation.interfaceFingerprints.modules.find((item) => item.name === "helpers");
+assert(graphHelpersInterface);
+assert(graphHelpersInterface.publicSymbols.some((item) => item.name === "status" && item.kind === "function"));
+const graphMainInterface = graphPackagePathMismatchSize.incrementalInvalidation.interfaceFingerprints.modules.find((item) => item.name === "main");
+assert(graphMainInterface);
+assert(!graphMainInterface.publicSymbols.some((item) => item.name === "status"));
 const graphImportNode = graphPackageDumpJson.nodes.find((node) => node.kind === "Import");
 assert(graphImportNode);
 writeFileSync(graphPatchInvalidImportAliasPath, [
