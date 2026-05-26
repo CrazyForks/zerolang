@@ -346,6 +346,8 @@ const graphPatchNullEscapePath = join(outDir, "hello.null-escape.program-graph.p
 const graphPatchRawNullPath = join(outDir, "hello.raw-null.program-graph.patch");
 const graphPatchInvalidNamePath = join(outDir, "hello.invalid-name.program-graph.patch");
 const graphPatchInvalidTypePath = join(outDir, "hello.invalid-type.program-graph.patch");
+const graphPatchReservedParamPath = join(outDir, "hello.reserved-param.program-graph.patch");
+const graphReservedParamPath = join(outDir, "hello.reserved-param.program-graph");
 const graphPackageDumpPath = join(outDir, "systems-package.program-graph");
 const graphPatchInvalidImportAliasPath = join(outDir, "systems-package.invalid-import-alias.program-graph.patch");
 const graphPatchInvalidImportNamePath = join(outDir, "systems-package.invalid-import-name.program-graph.patch");
@@ -377,6 +379,8 @@ rmSync(graphPatchNullEscapePath, { force: true });
 rmSync(graphPatchRawNullPath, { force: true });
 rmSync(graphPatchInvalidNamePath, { force: true });
 rmSync(graphPatchInvalidTypePath, { force: true });
+rmSync(graphPatchReservedParamPath, { force: true });
+rmSync(graphReservedParamPath, { force: true });
 rmSync(graphPackageDumpPath, { force: true });
 rmSync(graphPatchInvalidImportAliasPath, { force: true });
 rmSync(graphPatchInvalidImportNamePath, { force: true });
@@ -612,6 +616,21 @@ assert.equal(graphPatchInvalidType.body.ok, false);
 assert.equal(graphPatchInvalidType.body.diagnostic.code, "GPH003");
 assert.equal(graphPatchInvalidType.body.operations[0].field, "type");
 assert.equal(graphPatchInvalidType.body.operations[0].value, "Void\npub fn injected Void");
+const graphWorldParamNode = graphDumpJson.nodes.find((node) => node.kind === "Param" && node.name === "world");
+assert(graphWorldParamNode);
+writeFileSync(graphPatchReservedParamPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${graphDumpJson.graphHash}"`,
+  `set node="${graphWorldParamNode.id}" field="name" expect="world" value="pub"`,
+  "",
+].join("\n"));
+assert.equal(zero(["graph", "patch", "--out", graphReservedParamPath, graphDumpPath, graphPatchReservedParamPath]).stdout, "program graph patch ok\n");
+const graphReservedParam = json(["graph", "check", "--json", graphReservedParamPath], { allowFailure: true });
+assert.notEqual(graphReservedParam.code, 0);
+assert.equal(graphReservedParam.body.ok, false);
+assert.equal(graphReservedParam.body.check.phase, "lower");
+assert.equal(graphReservedParam.body.check.lowering, "direct-program-graph");
+assert.equal(graphReservedParam.body.diagnostics[0].message, "program graph parameter name is not valid Zero identifier syntax");
 assert.equal(zero(["graph", "dump", "--out", graphPackageDumpPath, "examples/systems-package"]).stdout, "");
 const graphPackageDumpJson = json(["graph", "dump", "--json", "examples/systems-package"]).body;
 const graphImportNode = graphPackageDumpJson.nodes.find((node) => node.kind === "Import");
