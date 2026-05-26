@@ -196,7 +196,7 @@ zero build [--emit exe|obj] [--target <target>] [--profile dev|release] [--out <
 zero ship [--json] [--target <target>] [--profile release-small|tiny|audit] [--out <file>] <input>
 zero test [--json] [--filter <name>] [--target <target>] [--cc <path>] [--out <file>] <input>
 zero fmt [--check] <input>
-zero graph [dump|validate|view|check|size|patch|roundtrip] [--json] [--target <target>] [--out <file>] <input> [patch-file]
+zero graph [dump|validate|view|check|size|build|patch|roundtrip] [--json] [--target <target>] [--out <file>] <input> [patch-file]
 zero doc [--json] [--target <target>] <input>
 zero size [--json] [--target <target>] [--out <artifact>] <input>
 zero explain [--json] <diagnostic-code>
