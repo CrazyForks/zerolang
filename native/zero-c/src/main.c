@@ -3327,6 +3327,8 @@ static void print_help(void) {
   printf("  zero parse --json <file.0|file.row|project|zero.json>\n");
   printf("  zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <file.0|file.row|project|zero.json|graph-artifact> [patch-file]\n");
   printf("  zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <file.0|file.row|project|zero.json|graph-artifact>\n");
+  printf("  zero graph size [--json] [--target <target>] --out <artifact> <graph-artifact-or-package>\n");
+  printf("  zero graph patch [--json] --out <file> <graph-artifact-or-package> <patch-file>\n");
   printf("  zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact>\n  zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact> [-- args...]\n  zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact>\n");
   printf("  zero doc [--json] <file.0|file.row|project|zero.json>\n");
   printf("  zero size [--json] [--out <artifact>] <file.0|file.row|project|zero.json>\n");
@@ -3406,7 +3408,9 @@ static void print_command_help(const char *command) {
     printf("Check ABI-safe declarations or dump target-aware source layout facts.\n");
   } else if (strcmp(command, "graph") == 0) {
     printf("Usage: zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <file.0|file.row|project|zero.json|graph-artifact> [patch-file]\n\n");
-    printf("Output usage: zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <input>\n\n");
+    printf("Output usage: zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <input>\n");
+    printf("Size output usage: zero graph size [--json] [--target <target>] --out <artifact> <input>\n");
+    printf("Patch output usage: zero graph patch [--json] --out <file> <input> <patch-file>\n\n");
     printf("Build usage: zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact>\n\nRun usage: zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact> [-- args...]\n\nTest usage: zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact>\n\n");
     printf("Inspect modules, symbols, capabilities, static metadata, stdlib helpers, or deterministic ProgramGraph artifacts.\n\n");
     printf("Subcommands:\n");

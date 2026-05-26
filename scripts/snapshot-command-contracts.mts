@@ -310,6 +310,13 @@ for (const [command, expected] of [
 ] as Array<[string[], RegExp]>) {
   assert.match(zero(command).stdout, expected);
 }
+const graphHelp = zero(["graph", "--help"]).stdout;
+assert.match(graphHelp, /zero graph size \[--json\] \[--target <target>\] --out <artifact> <input>/);
+assert.match(graphHelp, /zero graph patch \[--json\] --out <file> <input> <patch-file>/);
+assert.doesNotMatch(graphHelp, /zero graph check[^\n]*--out/);
+const rootHelp = zero(["--help"]).stdout;
+assert.match(rootHelp, /zero graph size \[--json\] \[--target <target>\] --out <artifact> <graph-artifact-or-package>/);
+assert.match(rootHelp, /zero graph patch \[--json\] --out <file> <graph-artifact-or-package> <patch-file>/);
 
 const graphDump = zero(["graph", "dump", "examples/hello.0"]).stdout;
 const graphDumpAgain = zero(["graph", "dump", "examples/hello.0"]).stdout;

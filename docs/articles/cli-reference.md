@@ -213,6 +213,8 @@ zero test [--json] [--filter <name>] [--target <target>] [--cc <path>] [--out <f
 zero fmt [--check] <input>
 zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <input> [patch-file]
 zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <input>
+zero graph size [--json] [--target <target>] --out <artifact> <graph-artifact-or-package>
+zero graph patch [--json] --out <file> <graph-artifact-or-package> <patch-file>
 zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package>
 zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package> [-- args...]
 zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact-or-package>
