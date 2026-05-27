@@ -242,7 +242,7 @@ static bool canon_parse_until(CanonParser *parser, const char *stop_a, const cha
       if ((stop_a && canon_is_symbol_text(token, stop_a)) || (stop_b && canon_is_symbol_text(token, stop_b))) break;
       if ((stop_a && canon_is_word_text(token, stop_a)) || (stop_b && canon_is_word_text(token, stop_b))) break;
       if ((stop_a || stop_b) && canon_is_symbol_text(token, "!")) break;
-      if (token->kind == Z_CANON_TOKEN_NEWLINE && !stop_a && !stop_b) break;
+      if (token->kind == Z_CANON_TOKEN_NEWLINE) break;
     }
     if (balance_angles && canon_is_symbol_text(token, "<")) angle++;
     else if (balance_angles && canon_is_symbol_text(token, ">")) {
@@ -272,6 +272,10 @@ static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
   size_t compare_count = 0;
   for (size_t i = start; i < end; i++) {
     const ZCanonicalToken *token = &parser->tokens->items[i];
+    if (canon_is_symbol_text(token, "&&") || canon_is_symbol_text(token, "||") || canon_is_symbol_text(token, ",")) {
+      compare_count = 0;
+      continue;
+    }
     if (canon_is_symbol_text(token, "<")) {
       int depth = 1;
       bool generic_call = false;
@@ -283,10 +287,14 @@ static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
           break;
         }
       }
-      if (!generic_call) compare_count++;
+      if (!generic_call && ++compare_count > 1) {
+        return canon_fail(parser->diag, token, "chained comparisons are not canonical text", "separate comparisons", "chained comparison");
+      }
       continue;
     }
-    if (canon_is_symbol_text(token, "<=") || canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ">=")) compare_count++;
+    if ((canon_is_symbol_text(token, "<=") || canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ">=")) && ++compare_count > 1) {
+      return canon_fail(parser->diag, token, "chained comparisons are not canonical text", "separate comparisons", "chained comparison");
+    }
     if (i + 1 < end && token->kind == Z_CANON_TOKEN_WORD) {
       const ZCanonicalToken *previous = i > start ? &parser->tokens->items[i - 1] : NULL;
       const ZCanonicalToken *next = &parser->tokens->items[i + 1];
@@ -298,7 +306,6 @@ static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
       }
     }
   }
-  if (compare_count > 1) return canon_fail(parser->diag, &parser->tokens->items[start], "chained comparisons are not canonical text", "separate comparisons", "chained comparison");
   return true;
 }
 
@@ -357,6 +364,11 @@ static bool canon_parse_raises(CanonParser *parser) {
 
 static bool canon_parse_block(CanonParser *parser, size_t depth);
 static bool canon_parse_statement(CanonParser *parser, size_t depth);
+
+static bool canon_expect_statement_end(CanonParser *parser, const char *message) {
+  const ZCanonicalToken *token = canon_peek(parser);
+  return (!token || token->kind == Z_CANON_TOKEN_EOF || token->kind == Z_CANON_TOKEN_NEWLINE || token->kind == Z_CANON_TOKEN_COMMENT || canon_is_symbol_text(token, "}")) ? true : canon_fail(parser->diag, token, message, "line end", token->text);
+}
 
 static bool canon_parse_signature(CanonParser *parser, bool body, size_t depth) {
   if (!canon_expect_word_token(parser, "expected function name")) return false;
@@ -435,7 +447,7 @@ static bool canon_parse_statement(CanonParser *parser, size_t depth) {
   if (canon_accept_word(parser, "mut")) return canon_fail(parser->diag, start, "mutable locals use var", "var", "mut");
   if (canon_accept_word(parser, "let") || canon_accept_word(parser, "var")) return canon_parse_let_or_var(parser);
   if (canon_accept_word(parser, "return") || canon_accept_word(parser, "check") || canon_accept_word(parser, "expect")) return canon_parse_expr_line(parser, true);
-  if (canon_accept_word(parser, "raise")) return canon_expect_word_token(parser, "expected error name");
+  if (canon_accept_word(parser, "raise")) return canon_expect_word_token(parser, "expected error name") && canon_expect_statement_end(parser, "unexpected tokens after raise statement");
   if (canon_accept_word(parser, "if")) return canon_parse_if(parser, depth);
   if (canon_accept_word(parser, "while")) {
     size_t expr_start = parser->pos;
@@ -450,7 +462,7 @@ static bool canon_parse_statement(CanonParser *parser, size_t depth) {
     return canon_parse_block(parser, depth);
   }
   if (canon_accept_word(parser, "match")) return canon_parse_match(parser, depth);
-  if (canon_accept_word(parser, "break") || canon_accept_word(parser, "continue")) return true;
+  if (canon_accept_word(parser, "break") || canon_accept_word(parser, "continue")) return canon_expect_statement_end(parser, "unexpected tokens after control statement");
   if (canon_accept_word(parser, "defer")) {
     if (canon_is_symbol_text(canon_peek(parser), "{")) return canon_parse_block(parser, depth);
     return canon_parse_expr_line(parser, false);

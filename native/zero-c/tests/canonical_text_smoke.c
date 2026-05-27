@@ -154,6 +154,16 @@ static void parses_nested_generic_type_commas(void) {
   expect_accepts(source, "nested generic type commas");
 }
 
+static void parses_separate_boolean_comparisons(void) {
+  const char *source =
+    "fn compare(a: i32, b: i32, c: i32, d: i32) -> Void {\n"
+    "    if a < b && c < d {\n"
+    "        return\n"
+    "    }\n"
+    "}\n";
+  expect_accepts(source, "separate boolean comparisons");
+}
+
 static void rejects_noncanonical_spellings(void) {
   expect_rejects("fun main() -> Void {}\n", "fun keyword");
   expect_rejects("shape Point {\n    x: i32,\n}\n", "shape keyword");
@@ -165,6 +175,11 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("pub fn main(world: World) -> Void raises {\n    check world.out.write \"bad\\n\"\n}\n", "space call");
   expect_rejects("pub fn main(world: World) -> Void raises {\n    let ok: Bool = 1 < 2 < 3\n}\n", "chained comparison");
   expect_rejects("fn missing_initializer() -> Void {\n    let value: i32 = // missing\n}\n", "comment-only initializer");
+  expect_rejects("type Point {\n    x: i32\n    y: i32,\n}\n", "missing field comma before later comma");
+  expect_rejects("fn bad(a: i32\n    b: i32) -> Void {\n    return\n}\n", "missing parameter comma before close");
+  expect_rejects("fn bad() -> Void {\n    break extra\n}\n", "trailing break tokens");
+  expect_rejects("fn bad() -> Void {\n    continue extra\n}\n", "trailing continue tokens");
+  expect_rejects("fn bad() -> Void raises {\n    raise InvalidInput extra\n}\n", "trailing raise tokens");
 }
 
 static void parse_file_arg(const char *mode, const char *path) {
@@ -179,6 +194,7 @@ int main(int argc, char **argv) {
   parses_declarations_and_blocks();
   parses_fallibility_choices_and_interfaces();
   parses_nested_generic_type_commas();
+  parses_separate_boolean_comparisons();
   rejects_noncanonical_spellings();
   for (int i = 1; i + 1 < argc; i += 2) parse_file_arg(argv[i], argv[i + 1]);
   printf("canonical text smoke ok\n");
