@@ -79,17 +79,17 @@ static bool graph_id_is_used(char **ids, size_t len, const char *id) {
 
 static char *graph_stable_node_id(const ZProgramGraphNode *node, char **ids, size_t id_len) {
   uint64_t hash = graph_id_node_hash(node);
-  ZBuf base;
-  zbuf_init(&base);
-  zbuf_appendf(&base, "#%08llx", (unsigned long long)(hash & 0xffffffffull));
+  ZBuf base; zbuf_init(&base); zbuf_appendf(&base, "#%08llx", (unsigned long long)(hash & 0xffffffffull));
   if (!graph_id_is_used(ids, id_len, base.data)) return base.data ? base.data : z_strdup("#00000000");
   uint64_t collision = graph_id_hash_text(hash, node->id);
-  ZBuf unique;
-  zbuf_init(&unique);
-  zbuf_append(&unique, base.data);
-  zbuf_appendf(&unique, "-%04llx", (unsigned long long)(collision & 0xffffull));
-  zbuf_free(&base);
-  return unique.data ? unique.data : z_strdup("#00000000");
+  for (size_t attempt = 0;; attempt++) {
+    ZBuf unique; zbuf_init(&unique); zbuf_append(&unique, base.data);
+    if (attempt == 0) zbuf_appendf(&unique, "-%04llx", (unsigned long long)(collision & 0xffffull));
+    else zbuf_appendf(&unique, "-%04llx-%zu", (unsigned long long)(collision & 0xffffull), attempt);
+    if (graph_id_is_used(ids, id_len, unique.data)) { zbuf_free(&unique); continue; }
+    zbuf_free(&base);
+    return unique.data ? unique.data : z_strdup("#00000000");
+  }
 }
 
 static const char *graph_remapped_id(const char *old_id, char **old_ids, char **new_ids, size_t len) {

@@ -2773,7 +2773,7 @@ assert.equal(programGraphBody.validation.ok, true);
 assert.equal(programGraphBody.validation.state, "shape-valid");
 assert(programGraphBody.counts.nodes > 0);
 assert(programGraphBody.counts.edges > 0);
-assert(programGraphBody.nodes.every((item) => /^#[0-9a-f]{8}(-[0-9a-f]{4})?$/.test(item.id) && /^nodehash:[0-9a-f]{16}$/.test(item.nodeHash)));
+assert(programGraphBody.nodes.every((item) => /^#[0-9a-f]{8}(-[0-9a-f]{4}(-[0-9]+)?)?$/.test(item.id) && /^nodehash:[0-9a-f]{16}$/.test(item.nodeHash)));
 assert(programGraphBody.edges.every((item) => item.target === "node"));
 assert(programGraphBody.nodes.some((item) => item.kind === "Module" && item.name === "hello" && item.symbolId === "symbol:hello::module"));
 assert(programGraphBody.nodes.some((item) => item.kind === "Function" && item.name === "main" && item.public === true && item.fallible === true && item.symbolId === "symbol:hello::value.main" && /^type:[0-9a-f]{16}$/.test(item.typeId)));
@@ -2806,6 +2806,21 @@ const programGraphTrailingArtifact = await execFileAsync(zero, ["graph", "valida
 assert(programGraphTrailingArtifact.code);
 assert.equal(JSON.parse(programGraphTrailingArtifact.stdout).diagnostics[0].message, "unexpected content after graph header");
 assert(programGraphBody.edges.some((item) => item.kind === "statement" && item.order === 0));
+
+const programGraphDuplicateIdFixture = `${outDir}/program-graph-duplicate-id-stress.0`;
+const programGraphDuplicateIdPath = `${outDir}/program-graph-duplicate-id-stress.program-graph`;
+await writeFile(programGraphDuplicateIdFixture, [
+  "pub fn main Void",
+  ...Array.from({ length: 700 }, (_, index) => `  let x${index} i32 1`),
+  "",
+].join("\n"));
+const programGraphDuplicateIdDump = await execFileAsync(zero, ["graph", "dump", "--out", programGraphDuplicateIdPath, programGraphDuplicateIdFixture]);
+assert.equal(programGraphDuplicateIdDump.stdout, "");
+assert.equal((await execFileAsync(zero, ["graph", "validate", programGraphDuplicateIdPath])).stdout, "program graph ok\n");
+const programGraphDuplicateIdText = await readFile(programGraphDuplicateIdPath, "utf8");
+const programGraphDuplicateIds = [...programGraphDuplicateIdText.matchAll(/^node (#[^ ]+)/gm)].map((match) => match[1]);
+assert.equal(new Set(programGraphDuplicateIds).size, programGraphDuplicateIds.length);
+assert(programGraphDuplicateIds.some((id) => /^#[0-9a-f]{8}-[0-9a-f]{4}-[0-9]+$/.test(id)));
 
 const programGraphControlFixture = `${outDir}/program-graph-control.0`;
 await writeFile(programGraphControlFixture, "pub fn main Void world World !\n  check world.out.write \"\\x01 ok\\n\"\n");
