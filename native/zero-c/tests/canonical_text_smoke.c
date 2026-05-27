@@ -164,6 +164,40 @@ static void parses_separate_boolean_comparisons(void) {
   expect_accepts(source, "separate boolean comparisons");
 }
 
+static void parses_parenthesized_comparisons(void) {
+  const char *source =
+    "fn compare(a: i32, b: i32, expected: Bool) -> Void {\n"
+    "    let same: Bool = (a < b) == expected\n"
+    "}\n";
+  expect_accepts(source, "parenthesized comparison");
+}
+
+static void records_block_open_locations(void) {
+  const char *source =
+    "fn main() -> Void {\n"
+    "    return\n"
+    "}\n";
+  ZDiag diag = {0};
+  ZCanonicalFacts facts = {0};
+  ZCanonicalTokenVec tokens = z_canonical_text_tokenize(source, &diag);
+  expect(diag.code == 0, diag.message);
+  ZCanonicalTree tree = {0};
+  expect(z_canonical_text_parse(&tokens, &tree, &facts, &diag), diag.message);
+  bool found = false;
+  for (size_t i = 0; i < tree.len; i++) {
+    if (tree.items[i].kind != Z_CANON_NODE_BLOCK) continue;
+    found = true;
+    expect(tree.items[i].line == 1, "expected block node at opening brace line");
+    expect(tree.items[i].column == 19, "expected block node at opening brace column");
+    expect(tokens.items[tree.items[i].first_token].line == tree.items[i].line, "expected block token line to match node");
+    expect(tokens.items[tree.items[i].first_token].column == tree.items[i].column, "expected block token column to match node");
+    break;
+  }
+  expect(found, "expected block node");
+  z_free_canonical_text_tree(&tree);
+  z_free_canonical_text_tokens(&tokens);
+}
+
 static void parses_public_declarations_and_extern_types(void) {
   const char *source =
     "pub extern type CPoint\n"
@@ -210,6 +244,10 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("fn missing_initializer() -> Void {\n    let value: i32 = // missing\n}\n", "comment-only initializer");
   expect_rejects("type Point {\n    x: i32\n    y: i32,\n}\n", "missing field comma before later comma");
   expect_rejects("fn bad(a: i32\n    b: i32) -> Void {\n    return\n}\n", "missing parameter comma before close");
+  expect_rejects("fn bad(a: i32 b: i32) -> Void {\n    return\n}\n", "missing same-line parameter comma");
+  expect_rejects("type Point {\n    x: i32 y: i32,\n}\n", "missing same-line field comma");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 label = 1\n}\n", "extra local type token");
+  expect_rejects("fn bad() -> Void Label {\n    return\n}\n", "extra return type token");
   expect_rejects("fn bad() -> Void {\n    break extra\n}\n", "trailing break tokens");
   expect_rejects("fn bad() -> Void {\n    continue extra\n}\n", "trailing continue tokens");
   expect_rejects("fn bad() -> Void raises {\n    raise InvalidInput extra\n}\n", "trailing raise tokens");
@@ -228,6 +266,8 @@ int main(int argc, char **argv) {
   parses_fallibility_choices_and_interfaces();
   parses_nested_generic_type_commas();
   parses_separate_boolean_comparisons();
+  parses_parenthesized_comparisons();
+  records_block_open_locations();
   parses_public_declarations_and_extern_types();
   parses_empty_return_but_not_empty_checks();
   rejects_noncanonical_spellings();

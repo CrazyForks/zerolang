@@ -269,11 +269,22 @@ static bool canon_parse_until(CanonParser *parser, const char *stop_a, const cha
 }
 
 static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
-  size_t compare_count = 0;
+  size_t compare_counts[128] = {0};
+  size_t compare_depth = 0;
   for (size_t i = start; i < end; i++) {
     const ZCanonicalToken *token = &parser->tokens->items[i];
+    if (canon_is_symbol_text(token, "(") || canon_is_symbol_text(token, "[") || canon_is_symbol_text(token, "{")) {
+      if (compare_depth + 1 < sizeof(compare_counts) / sizeof(compare_counts[0])) compare_depth++;
+      compare_counts[compare_depth] = 0;
+      continue;
+    }
+    if (canon_is_symbol_text(token, ")") || canon_is_symbol_text(token, "]") || canon_is_symbol_text(token, "}")) {
+      compare_counts[compare_depth] = 0;
+      if (compare_depth > 0) compare_depth--;
+      continue;
+    }
     if (canon_is_symbol_text(token, "&&") || canon_is_symbol_text(token, "||") || canon_is_symbol_text(token, ",")) {
-      compare_count = 0;
+      compare_counts[compare_depth] = 0;
       continue;
     }
     if (canon_is_symbol_text(token, "<")) {
@@ -287,12 +298,12 @@ static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
           break;
         }
       }
-      if (!generic_call && ++compare_count > 1) {
+      if (!generic_call && ++compare_counts[compare_depth] > 1) {
         return canon_fail(parser->diag, token, "chained comparisons are not canonical text", "separate comparisons", "chained comparison");
       }
       continue;
     }
-    if ((canon_is_symbol_text(token, "==") || canon_is_symbol_text(token, "!=") || canon_is_symbol_text(token, "<=") || canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ">=")) && ++compare_count > 1) {
+    if ((canon_is_symbol_text(token, "==") || canon_is_symbol_text(token, "!=") || canon_is_symbol_text(token, "<=") || canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ">=")) && ++compare_counts[compare_depth] > 1) {
       return canon_fail(parser->diag, token, "chained comparisons are not canonical text", "separate comparisons", "chained comparison");
     }
     if (i + 1 < end && token->kind == Z_CANON_TOKEN_WORD) {
@@ -315,8 +326,66 @@ static bool canon_parse_expr_line(CanonParser *parser, bool allow_empty) {
   return canon_validate_expr(parser, start, parser->pos);
 }
 
+static bool canon_type_atom(const ZCanonicalToken *token) {
+  return token && (token->kind == Z_CANON_TOKEN_WORD || token->kind == Z_CANON_TOKEN_NUMBER || token->kind == Z_CANON_TOKEN_STRING || token->kind == Z_CANON_TOKEN_CHAR);
+}
+
+static bool canon_validate_type_span(CanonParser *parser, size_t start, size_t end) {
+  bool bracket_prefix[64] = {0};
+  size_t bracket_depth = 0;
+  bool expect_atom = true;
+  for (size_t i = start; i < end; i++) {
+    const ZCanonicalToken *token = &parser->tokens->items[i];
+    if (canon_type_atom(token)) {
+      if (!expect_atom) return canon_fail(parser->diag, token, "missing separator in type", "comma or delimiter", token->text);
+      expect_atom = false;
+      continue;
+    }
+    if (canon_is_symbol_text(token, "[")) {
+      if (bracket_depth < sizeof(bracket_prefix) / sizeof(bracket_prefix[0])) bracket_prefix[bracket_depth++] = expect_atom;
+      expect_atom = true;
+      continue;
+    }
+    if (canon_is_symbol_text(token, "<") || canon_is_symbol_text(token, "(")) {
+      if (expect_atom) return canon_fail(parser->diag, token, "unexpected type delimiter", "type", token->text);
+      expect_atom = true;
+      continue;
+    }
+    if (canon_is_symbol_text(token, "]")) {
+      if (expect_atom) return canon_fail(parser->diag, token, "expected type before delimiter", "type", token->text);
+      bool prefix = bracket_depth > 0 && bracket_prefix[--bracket_depth];
+      expect_atom = prefix;
+      continue;
+    }
+    if (canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ")")) {
+      if (expect_atom) return canon_fail(parser->diag, token, "expected type before delimiter", "type", token->text);
+      expect_atom = false;
+      continue;
+    }
+    if (canon_is_symbol_text(token, ",")) {
+      if (expect_atom) return canon_fail(parser->diag, token, "expected type before comma", "type", ",");
+      expect_atom = true;
+      continue;
+    }
+    if (canon_is_symbol_text(token, ".") || canon_is_symbol_text(token, "->")) {
+      if (expect_atom) return canon_fail(parser->diag, token, "expected type before separator", "type", token->text);
+      expect_atom = true;
+      continue;
+    }
+    if (canon_is_symbol_text(token, "&") || canon_is_symbol_text(token, "*") || canon_is_symbol_text(token, "?")) {
+      if (!expect_atom) return canon_fail(parser->diag, token, "unexpected type prefix", "type separator", token->text);
+      continue;
+    }
+    return canon_fail(parser->diag, token, "unexpected token in type", "type", token->text);
+  }
+  if (expect_atom) return canon_fail(parser->diag, end > start ? &parser->tokens->items[end - 1] : canon_peek(parser), "incomplete type", "type", "delimiter");
+  return true;
+}
+
 static bool canon_parse_type_until(CanonParser *parser, const char *stop_a, const char *stop_b) {
-  return canon_parse_until(parser, stop_a, stop_b, false, true);
+  size_t start = parser->pos;
+  if (!canon_parse_until(parser, stop_a, stop_b, false, true)) return false;
+  return canon_validate_type_span(parser, start, parser->pos);
 }
 
 static bool canon_parse_type_params(CanonParser *parser) {
@@ -392,8 +461,9 @@ static bool canon_parse_signature(CanonParser *parser, bool body, size_t depth) 
 }
 
 static bool canon_parse_block(CanonParser *parser, size_t depth) {
+  const ZCanonicalToken *open = canon_peek(parser);
   if (!canon_expect_symbol(parser, "{", "expected block")) return false;
-  canon_push_node(parser->tree, (ZCanonicalNode){Z_CANON_NODE_BLOCK, parser->pos - 1, 1, depth, canon_peek(parser)->line, canon_peek(parser)->column});
+  canon_push_node(parser->tree, (ZCanonicalNode){Z_CANON_NODE_BLOCK, parser->pos - 1, 1, depth, open->line, open->column});
   if (parser->facts) {
     parser->facts->block_count++;
     if (depth > parser->facts->max_block_depth) parser->facts->max_block_depth = depth;
@@ -428,8 +498,9 @@ static bool canon_parse_match(CanonParser *parser, size_t depth) {
   size_t expr_start = parser->pos;
   if (!canon_parse_until(parser, "{", NULL, false, false)) return false;
   if (!canon_validate_expr(parser, expr_start, parser->pos)) return false;
+  const ZCanonicalToken *open = canon_peek(parser);
   if (!canon_expect_symbol(parser, "{", "expected match body")) return false;
-  canon_push_node(parser->tree, (ZCanonicalNode){Z_CANON_NODE_BLOCK, parser->pos - 1, 1, depth, canon_peek(parser)->line, canon_peek(parser)->column});
+  canon_push_node(parser->tree, (ZCanonicalNode){Z_CANON_NODE_BLOCK, parser->pos - 1, 1, depth, open->line, open->column});
   if (parser->facts) {
     parser->facts->block_count++;
     if (depth > parser->facts->max_block_depth) parser->facts->max_block_depth = depth;
