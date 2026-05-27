@@ -172,6 +172,20 @@ static void parses_parenthesized_comparisons(void) {
   expect_accepts(source, "parenthesized comparison");
 }
 
+static void parses_else_if_chains(void) {
+  const char *source =
+    "fn branch(a: Bool, b: Bool) -> Void {\n"
+    "    if a {\n"
+    "        return\n"
+    "    } else if b {\n"
+    "        return\n"
+    "    } else {\n"
+    "        return\n"
+    "    }\n"
+    "}\n";
+  expect_accepts(source, "else-if chain");
+}
+
 static void records_block_open_locations(void) {
   const char *source =
     "fn main() -> Void {\n"
@@ -267,6 +281,12 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("fn bad() -> Void {\n    let value: char = ''\n}\n", "empty character literal");
   expect_rejects("fn bad() -> Void {\n    let value: char = 'ab'\n}\n", "wide character literal");
   expect_rejects("fn bad() -> Void {\n    let value: char = '\\q'\n}\n", "invalid character escape");
+  expect_rejects("alias Bad = 1 + 2\n", "alias expression target");
+  expect_rejects("pub alias Bad = 1 + 2\n", "public alias expression target");
+  expect_rejects("fn first() -> Void {} fn second() -> Void {}\n", "same-line declarations");
+  expect_rejects("fn bad(ok: Bool) -> Void {\n    if ok {\n        return\n    } return\n}\n", "same-line statement after if block");
+  expect_rejects("fn bad() -> Void {\n    defer {\n        return\n    } return\n}\n", "same-line statement after defer block");
+  expect_rejects("fn bad() -> Void {\n    let ok: Bool = 1 < 2 > (3)\n}\n", "numeric comparison mistaken for generic call");
 }
 
 static void parse_file_arg(const char *mode, const char *path) {
@@ -283,6 +303,7 @@ int main(int argc, char **argv) {
   parses_nested_generic_type_commas();
   parses_separate_boolean_comparisons();
   parses_parenthesized_comparisons();
+  parses_else_if_chains();
   records_block_open_locations();
   parses_public_declarations_and_extern_types();
   parses_character_literals();
