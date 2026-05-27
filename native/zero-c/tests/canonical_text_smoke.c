@@ -367,6 +367,39 @@ static void parses_use_declarations_and_zero_arg_calls(void) {
   expect_accepts(source, "use declarations and zero-arg calls");
 }
 
+static void parses_assignment_statements(void) {
+  const char *source =
+    "type Point {\n"
+    "    x: i32,\n"
+    "}\n"
+    "\n"
+    "fn mutate(items: MutSpan<i32>, point: Point) -> Void {\n"
+    "    var count: i32 = 0\n"
+    "    set count = count + 1\n"
+    "    set point.x = count\n"
+    "    set items[0] = point.x\n"
+    "    set items[count + 1] = items[0]\n"
+    "}\n";
+  expect_accepts(source, "assignment statements");
+}
+
+static void parses_effectful_expression_forms(void) {
+  const char *source =
+    "const pointer_width: usize = meta target.pointerWidth\n"
+    "\n"
+    "fn maybe_value(bytes: Bytes, index: usize) -> u8 raises [Missing] {\n"
+    "    raise Missing\n"
+    "}\n"
+    "\n"
+    "fn effect(bytes: Bytes) -> Void raises [Missing] {\n"
+    "    let found: u8 = check maybe_value(bytes, 0)\n"
+    "    let fallback: u8 = rescue maybe_value(bytes, 1) err 9_u8\n"
+    "    let nested: u8 = rescue (rescue maybe_value(bytes, 2) err 1_u8) err 2_u8\n"
+    "    check found == fallback || meta target.hasCapability(\"fs\")\n"
+    "}\n";
+  expect_accepts(source, "effectful expression forms");
+}
+
 static void rejects_noncanonical_spellings(void) {
   expect_rejects("fun main() -> Void {}\n", "fun keyword");
   expect_rejects("shape Point {\n    x: i32,\n}\n", "shape keyword");
@@ -439,6 +472,14 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("use \"not-module\"\n", "string use import");
   expect_rejects("use std.mem()\n", "call use import");
   expect_rejects("use std.\n", "trailing use import separator");
+  expect_rejects("fn bad() -> Void {\n    set value value + 1\n}\n", "assignment missing equals");
+  expect_rejects("fn bad() -> Void {\n    set 1 = value\n}\n", "numeric assignment target");
+  expect_rejects("fn bad() -> Void {\n    set items [] = value\n}\n", "spaced assignment index");
+  expect_rejects("fn bad() -> Void {\n    set items[] = value\n}\n", "empty assignment index");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 = check\n}\n", "empty check expression");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 = meta\n}\n", "empty meta expression");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 = rescue maybe_value()\n}\n", "rescue missing err fallback");
+  expect_rejects("fn bad() -> Void {\n    let value: i32 = maybe_value() err 1\n}\n", "err without rescue");
 }
 
 static void parse_file_arg(const char *mode, const char *path) {
@@ -466,6 +507,8 @@ int main(int argc, char **argv) {
   parses_choice_payload_match_patterns();
   parses_empty_return_but_not_empty_checks();
   parses_use_declarations_and_zero_arg_calls();
+  parses_assignment_statements();
+  parses_effectful_expression_forms();
   rejects_noncanonical_spellings();
   for (int i = 1; i + 1 < argc; i += 2) parse_file_arg(argv[i], argv[i + 1]);
   printf("canonical text smoke ok\n");
