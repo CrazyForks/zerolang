@@ -3327,10 +3327,11 @@ static void print_help(void) {
   printf("  zero tokens --json <file.0|file.row|project|zero.json>\n");
   printf("  zero parse --json <file.0|file.row|project|zero.json>\n");
   printf("  zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <file.0|file.row|project|zero.json|graph-artifact> [patch-file]\n");
-  printf("  zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <file.0|file.row|project|zero.json|graph-artifact>\n");
+  printf("  zero graph [dump|import|validate|roundtrip] [--json] --out <program-graph> <file.0|file.row|project|zero.json|graph-artifact>\n");
+  printf("  zero graph view [--json] --out <file.0> <graph-artifact-or-package>\n");
   printf("  zero graph size [--json] [--target <target>] --out <artifact> <graph-artifact-or-package>\n");
   printf("  zero graph patch [--json] --out <file> <graph-artifact-or-package> <patch-file>\n");
-  printf("  zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact>\n  zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact> [-- args...]\n  zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact>\n");
+  printf("  zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package>\n  zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package> [-- args...]\n  zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact-or-package>\n");
   printf("  zero doc [--json] <file.0|file.row|project|zero.json>\n");
   printf("  zero size [--json] [--out <artifact>] <file.0|file.row|project|zero.json>\n");
   printf("  zero mem [--json] [--target <target>] <file.0|file.row|project|zero.json>\n");
@@ -3409,10 +3410,11 @@ static void print_command_help(const char *command) {
     printf("Check ABI-safe declarations or dump target-aware source layout facts.\n");
   } else if (strcmp(command, "graph") == 0) {
     printf("Usage: zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <file.0|file.row|project|zero.json|graph-artifact> [patch-file]\n\n");
-    printf("Output usage: zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <input>\n");
+    printf("Output usage: zero graph [dump|import|validate|roundtrip] [--json] --out <program-graph> <input>\n");
+    printf("View output usage: zero graph view [--json] --out <file.0> <graph-artifact-or-package>\n");
     printf("Size output usage: zero graph size [--json] [--target <target>] --out <artifact> <input>\n");
     printf("Patch output usage: zero graph patch [--json] --out <file> <input> <patch-file>\n\n");
-    printf("Build usage: zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact>\n\nRun usage: zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact> [-- args...]\n\nTest usage: zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact>\n\n");
+    printf("Build usage: zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package>\n\nRun usage: zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package> [-- args...]\n\nTest usage: zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact-or-package>\n\n");
     printf("Inspect modules, symbols, capabilities, static metadata, stdlib helpers, or deterministic ProgramGraph artifacts.\n\n");
     printf("Subcommands:\n");
     printf("  dump      print or write only the deterministic ProgramGraph\n");
@@ -10146,18 +10148,19 @@ static int run_graph_roundtrip_command(const Command *command, SourceInput *inpu
     return 1;
   }
 
-  z_program_graph_append_view(&view, &original);
-  if (command->out && !z_write_file(command->out, view.data ? view.data : "", diag)) {
-    if (command->json) print_diag_json(diag->path ? diag->path : command->out, diag);
-    else print_diag(diag->path ? diag->path : command->out, diag);
+  if (!z_program_graph_direct_roundtrip_graph(&original, input && input->source_file ? input->source_file : command->input, &roundtrip, &comparison, diag)) {
+    if (command->json) print_diag_json(diag->path ? diag->path : command->input, diag);
+    else print_diag(diag->path ? diag->path : command->input, diag);
+    z_program_graph_free(&roundtrip);
     z_program_graph_free(&original);
     zbuf_free(&view);
     return 1;
   }
 
-  if (!z_program_graph_direct_roundtrip_graph(&original, input && input->source_file ? input->source_file : command->input, &roundtrip, &comparison, diag)) {
-    if (command->json) print_diag_json(diag->path ? diag->path : command->input, diag);
-    else print_diag(diag->path ? diag->path : command->input, diag);
+  if (command->json && !command->out) z_program_graph_append_view(&view, &original);
+  if (command->out && !z_program_graph_save(command->out, &roundtrip, diag)) {
+    if (command->json) print_diag_json(diag->path ? diag->path : command->out, diag);
+    else print_diag(diag->path ? diag->path : command->out, diag);
     z_program_graph_free(&roundtrip);
     z_program_graph_free(&original);
     zbuf_free(&view);
@@ -10176,7 +10179,7 @@ static int run_graph_roundtrip_command(const Command *command, SourceInput *inpu
                                 &comparison,
                                 "direct-program-graph",
                                 view.data ? view.data : "",
-                                "source-view");
+                                "program-graph");
     fputs(json.data, stdout);
     zbuf_free(&json);
   } else if (comparison.ok) {

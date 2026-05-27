@@ -73,15 +73,15 @@ Use `--json` when another tool will read the result. Text output is for people.
 | --- | --- |
 | `zero check --json` | Diagnostics with code, span, expected/actual details, help, repair metadata, and `targetReadiness` for the selected target/emit kind. |
 | `zero graph --json` | Modules, public symbols, capabilities, static facts, helper use, and nested `programGraph`. |
-| `zero graph dump --json` | The bare deterministic ProgramGraph with `moduleIdentity`, `graphHash`, validation, counts, nodes, and edges. Use `--out <file>` to write the dump artifact. |
-| `zero graph import --json` | Source-to-ProgramGraph import with graph identity and validation. With `--out <file>`, writes a loadable ProgramGraph artifact and reports `saved.path`. |
+| `zero graph dump --json` | The bare deterministic ProgramGraph with `moduleIdentity`, `graphHash`, validation, counts, nodes, and edges. Use `--out <program-graph>` to write the dump artifact. |
+| `zero graph import --json` | Source-to-ProgramGraph import with graph identity and validation. With `--out <program-graph>`, writes a loadable ProgramGraph artifact and reports `saved.path`. |
 | `zero graph validate --json` | A ProgramGraph artifact readback check with `moduleIdentity`, `graphHash`, counts, validation state, and optional canonical output path. |
 | `zero graph view --json` | A generated Zero-shaped view for a ProgramGraph artifact with `moduleIdentity`, `graphHash`, `canonicalSource: false`, and optional output path. |
 | `zero graph check --json` | Typecheck a ProgramGraph artifact through direct graph lowering with artifact identity, target, `check.lowering: "direct-program-graph"`, target readiness, and graph-source-mapped diagnostics. |
 | `zero graph size --json` | Size, helper, runtime, profile, and backend facts for a ProgramGraph artifact lowered through `direct-program-graph`, with graph identity and `canonicalSource: false`. |
 | `zero graph build --json` | Build a ProgramGraph artifact through direct graph lowering, including graph identity, selected `emit` kind, target, artifact path and size, compiler cache facts, and graph-aware incremental invalidation. |
 | `zero graph patch --json` | Checked ProgramGraph artifact edits with graph-hash preconditions, per-operation node/field results, the changed graph hash, and optional canonical output path. |
-| `zero graph roundtrip --json` | Source or artifact ProgramGraph stability through direct graph lowering with `semanticStable`, lowering mode, original and roundtripped graph hashes, raw counts, normalized semantic counts, and optional output. |
+| `zero graph roundtrip --json` | Source or artifact ProgramGraph stability through direct graph lowering with `semanticStable`, lowering mode, original and roundtripped graph hashes, raw counts, normalized semantic counts, and optional ProgramGraph artifact output. |
 | `zero dev --json` | A watch plan for changed source, manifest, package-lock, and generated-binding inputs. |
 | `zero dev --json --trace` | Adds phase timing, cache hit/miss facts, diagnostics passthrough, and `interfaceFingerprints`. |
 | `zero time --json` | Compiler phase timing plus `interfaceFingerprints` and incremental invalidation facts. |
@@ -212,7 +212,8 @@ zero ship [--json] [--target <target>] [--profile release-small|tiny|audit] [--o
 zero test [--json] [--filter <name>] [--target <target>] [--cc <path>] [--out <file>] <input>
 zero fmt [--check] <input>
 zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <input> [patch-file]
-zero graph [dump|import|validate|view|roundtrip] [--json] --out <file> <input>
+zero graph [dump|import|validate|roundtrip] [--json] --out <program-graph> <input>
+zero graph view [--json] --out <file.0> <graph-artifact-or-package>
 zero graph size [--json] [--target <target>] --out <artifact> <graph-artifact-or-package>
 zero graph patch [--json] --out <file> <graph-artifact-or-package> <patch-file>
 zero graph build [--json] [--emit exe|obj] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <graph-artifact-or-package>

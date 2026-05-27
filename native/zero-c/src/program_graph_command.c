@@ -32,7 +32,7 @@ static const ZProgramGraphCommandKind z_graph_command_kinds[] = {
     "check",
     true,
     "graph check does not write generated source views",
-    "zero graph view --out <file.0> <graph-artifact>",
+    "zero graph view --out <file.0> <graph-artifact-or-package>",
     "zero graph check --out",
     "run zero graph view to render a generated source view, or run zero graph check without --out to typecheck the artifact"
   ),
@@ -43,7 +43,7 @@ static const ZProgramGraphCommandKind z_graph_command_kinds[] = {
     "test",
     true,
     "graph test does not support --out",
-    "zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact>",
+    "zero graph test [--json] [--filter <name>] [--target <target>] <graph-artifact-or-package>",
     "zero graph test --out",
     "test results are reported on stdout; remove --out"
   ),
@@ -79,9 +79,9 @@ ZProgramGraphOutputContract z_program_graph_command_output_contract(const char *
   static const ZProgramGraphOutputContract fallback = {
     false,
     "graph requires an output-capable subcommand for --out",
-    "zero graph dump|import|validate|view|size|build|run|patch|roundtrip --out <file> <input>",
+    "zero graph dump|import|validate|roundtrip --out <program-graph> <input>; zero graph view --out <file.0> <graph-artifact-or-package>",
     "zero graph --out",
-    "choose the graph subcommand that owns the artifact or view you want to write",
+    "choose the graph subcommand that owns the artifact, generated source view, or executable output you want to write",
   };
   const ZProgramGraphCommandKind *item = graph_kind(kind);
   return item ? item->out_contract : fallback;
