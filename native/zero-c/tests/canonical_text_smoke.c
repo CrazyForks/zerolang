@@ -174,6 +174,11 @@ static void rejects_noncanonical_spellings(void) {
   expect_rejects("fn load() -> Void raises { IoError } {}\n", "brace errors");
   expect_rejects("pub fn main(world: World) -> Void raises {\n    check world.out.write \"bad\\n\"\n}\n", "space call");
   expect_rejects("pub fn main(world: World) -> Void raises {\n    let ok: Bool = 1 < 2 < 3\n}\n", "chained comparison");
+  expect_rejects("pub fn main(world: World) -> Void raises {\n    let ok: Bool = a == b == c\n}\n", "chained equality comparison");
+  expect_rejects("fn bad(items: Items) -> Void {\n    for item in items all {\n        return\n    }\n}\n", "space call in for range");
+  expect_rejects("fn bad(items: Items) -> Void {\n    for item in 1 < 2 < 3 {\n        return\n    }\n}\n", "chained comparison in for range");
+  expect_rejects("type Pair<T U> {\n    left: T,\n    right: U,\n}\n", "missing type parameter comma");
+  expect_rejects("fn id<T U>(value: T) -> T {\n    return value\n}\n", "missing function type parameter comma");
   expect_rejects("fn missing_initializer() -> Void {\n    let value: i32 = // missing\n}\n", "comment-only initializer");
   expect_rejects("type Point {\n    x: i32\n    y: i32,\n}\n", "missing field comma before later comma");
   expect_rejects("fn bad(a: i32\n    b: i32) -> Void {\n    return\n}\n", "missing parameter comma before close");

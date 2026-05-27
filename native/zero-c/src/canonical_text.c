@@ -292,7 +292,7 @@ static bool canon_validate_expr(CanonParser *parser, size_t start, size_t end) {
       }
       continue;
     }
-    if ((canon_is_symbol_text(token, "<=") || canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ">=")) && ++compare_count > 1) {
+    if ((canon_is_symbol_text(token, "==") || canon_is_symbol_text(token, "!=") || canon_is_symbol_text(token, "<=") || canon_is_symbol_text(token, ">") || canon_is_symbol_text(token, ">=")) && ++compare_count > 1) {
       return canon_fail(parser->diag, token, "chained comparisons are not canonical text", "separate comparisons", "chained comparison");
     }
     if (i + 1 < end && token->kind == Z_CANON_TOKEN_WORD) {
@@ -321,12 +321,19 @@ static bool canon_parse_type_until(CanonParser *parser, const char *stop_a, cons
 
 static bool canon_parse_type_params(CanonParser *parser) {
   if (!canon_accept_symbol(parser, "<")) return true;
-  int depth = 1;
+  if (canon_accept_symbol(parser, ">")) return canon_fail(parser->diag, canon_peek(parser), "expected type parameter", "type parameter", ">");
   while (canon_peek(parser) && canon_peek(parser)->kind != Z_CANON_TOKEN_EOF) {
-    if (canon_accept_symbol(parser, "<")) depth++;
-    else if (canon_accept_symbol(parser, ">")) {
-      if (--depth == 0) return true;
-    } else parser->pos++;
+    if (canon_accept_word(parser, "static")) {
+      if (!canon_expect_word_token(parser, "expected static type parameter name")) return false;
+      if (!canon_expect_symbol(parser, ":", "expected ':' after static type parameter")) return false;
+      if (!canon_parse_type_until(parser, ",", ">")) return false;
+    } else {
+      if (!canon_expect_word_token(parser, "expected type parameter name")) return false;
+      if (canon_accept_symbol(parser, ":") && !canon_parse_type_until(parser, ",", ">")) return false;
+    }
+    if (canon_accept_symbol(parser, ">")) return true;
+    if (!canon_expect_symbol(parser, ",", "expected comma between type parameters")) return false;
+    if (canon_is_symbol_text(canon_peek(parser), ">")) return canon_fail(parser->diag, canon_peek(parser), "expected type parameter after comma", "type parameter", ">");
   }
   return canon_fail(parser->diag, canon_peek(parser), "unterminated type parameter list", ">", "end of file");
 }
@@ -458,7 +465,9 @@ static bool canon_parse_statement(CanonParser *parser, size_t depth) {
   if (canon_accept_word(parser, "for")) {
     if (!canon_expect_word_token(parser, "expected loop binding")) return false;
     if (!canon_accept_word(parser, "in")) return canon_fail(parser->diag, canon_peek(parser), "expected for range", "in", canon_peek(parser)->text);
+    size_t expr_start = parser->pos;
     if (!canon_parse_until(parser, "{", NULL, false, false)) return false;
+    if (!canon_validate_expr(parser, expr_start, parser->pos)) return false;
     return canon_parse_block(parser, depth);
   }
   if (canon_accept_word(parser, "match")) return canon_parse_match(parser, depth);
