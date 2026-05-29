@@ -3668,6 +3668,7 @@ for (const fixture of [
   "owned-aggregate-copy-use-after-move.0",
   "owned-aggregate-array-repeat.0",
   "owned-aggregate-root-use-after-move.0",
+  "owned-aggregate-partial-root-use-after-move.0",
 ]) {
   const result = await execFileAsync(zero, ["check", `conformance/native/fail/${fixture}`]).catch((error) => error);
   assert.notEqual(result.code, 0);
@@ -4002,6 +4003,7 @@ for (const [fixture, code] of [
   ["span-shape-literal-return-local-array.0", /BOR002/],
   ["span-choice-return-local-array.0", /BOR002/],
   ["string-return-local-array.0", /BOR002/],
+  ["stdlib-span-return-local-buffer.0", /BOR002/],
   ["check-array-reference-origin.0", /BOR001/],
   ["check-maybe-reference-origin.0", /BOR001/],
   ["rescue-reference-origin.0", /BOR001/],

@@ -6679,17 +6679,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
         return set_diag_detail(diag, 3005, message, expr->line, expr->column, "runtime value", "builtin namespace", "use a supported member call such as std.fs.host()");
       }
       {
-        const char *actual = scope_type(scope, expr->text);
-        if (actual && strcmp(actual, "Type") == 0) {
-          char message[256];
-          snprintf(message, sizeof(message), "type name '%s' cannot be used as a runtime value", expr->text);
-          return set_diag_detail(diag, 3005, message, expr->line, expr->column, "runtime value", "type name", "use the type name in an annotation or constructor context");
-        }
-        if (actual && type_contains_owned(program, actual, 0) && scope_is_moved(scope, expr->text)) {
-          char actual_detail[160];
-          snprintf(actual_detail, sizeof(actual_detail), "%s was moved", expr->text);
-          return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
-        }
+        if (scope_has(scope, expr->text) && !check_place_available(expr, scope, expr->text, NULL, diag)) return false;
         if (!check_read_not_mutably_borrowed(expr, scope, diag)) return false;
       }
       if (expected && type_is_named_generic(expected, "MutSpan")) {
@@ -8168,6 +8158,66 @@ done:
   return added;
 }
 
+static bool stdlib_return_type_is_borrowed_view(const char *return_type, const char **value_prefix) {
+  if (value_prefix) *value_prefix = NULL;
+  if (!return_type) return false;
+  char element_type[128];
+  const char *inner = NULL;
+  size_t inner_len = 0;
+  if (type_has_generic_arg(return_type, "Maybe", &inner, &inner_len)) {
+    char inner_type[160];
+    snprintf(inner_type, sizeof(inner_type), "%.*s", (int)inner_len, inner);
+    if (!readable_view_element_text(inner_type, element_type, sizeof(element_type))) return false;
+    if (value_prefix) *value_prefix = "value";
+    return true;
+  }
+  return readable_view_element_text(return_type, element_type, sizeof(element_type));
+}
+
+static bool stdlib_borrowed_result_arg_index(const ZStdHelperInfo *helper, size_t *arg_index) {
+  if (!helper || !helper->name || !arg_index) return false;
+  const char *behavior = helper->allocation_behavior ? helper->allocation_behavior : "";
+  if (strncmp(behavior, "borrows input", strlen("borrows input")) == 0 ||
+      strncmp(behavior, "borrows/static", strlen("borrows/static")) == 0 ||
+      strncmp(behavior, "borrows owned buffer", strlen("borrows owned buffer")) == 0 ||
+      strncmp(behavior, "writes caller buffer", strlen("writes caller buffer")) == 0 ||
+      strncmp(behavior, "writes non-overlapping caller buffer", strlen("writes non-overlapping caller buffer")) == 0) {
+    *arg_index = 0;
+    return true;
+  }
+  return false;
+}
+
+static bool stdlib_result_value_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins) {
+  if (!program || !expr || expr->kind != EXPR_CALL || !expr->left || !origins) return false;
+  ZCallResolution resolution = {0};
+  if (!resolve_stdlib_call(expr, &resolution)) return false;
+  bool added = false;
+  const char *value_prefix = NULL;
+  size_t arg_index = 0;
+  if (!stdlib_return_type_is_borrowed_view(resolution.return_type, &value_prefix) ||
+      !stdlib_borrowed_result_arg_index(resolution.std_helper, &arg_index) ||
+      arg_index >= expr->args.len) {
+    goto done;
+  }
+  const Expr *arg = expr->args.items[arg_index];
+  const char *arg_type = z_call_resolution_param_type(&resolution, arg_index);
+  if (!arg_type && resolution.std_helper && arg_index < Z_STD_HELPER_MAX_ARGS) arg_type = resolution.std_helper->arg_types[arg_index];
+  ValueProvenance arg_origins = {0};
+  if (expr_reference_provenance(ctx, program, arg, scope, &arg_origins) ||
+      (arg_type && span_view_expr_provenance(ctx, program, arg, scope, arg_type, &arg_origins))) {
+    if (value_prefix) {
+      if (value_provenance_add_all_with_prefix(origins, &arg_origins, value_prefix)) added = true;
+    } else if (value_provenance_add_all(origins, &arg_origins)) {
+      added = true;
+    }
+  }
+  value_provenance_free(&arg_origins);
+done:
+  z_call_resolution_free(&resolution);
+  return added;
+}
+
 static bool value_provenance_add_actual_place(ValueProvenance *origins, const Expr *actual, Scope *scope, const ProvenanceEntry *summary_entry) {
   if (!origins || !actual || !scope || !summary_entry) return false;
   char root[128];
@@ -8193,6 +8243,7 @@ static bool instantiate_call_provenance_entry(CheckContext *ctx, const Program *
 static bool call_result_value_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins) {
   if (!program || !expr || expr->kind != EXPR_CALL || !expr->left || !origins) return false;
   if (std_mem_get_value_provenance(ctx, program, expr, scope, origins)) return true;
+  if (stdlib_result_value_provenance(ctx, program, expr, scope, origins)) return true;
   const char *return_type = expr_type(ctx, program, expr, scope);
   bool return_mut = type_is_named_generic(return_type, "mutref");
 
