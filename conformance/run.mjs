@@ -3662,6 +3662,8 @@ for (const fixture of [
   "owned-array-element-use-after-move.0",
   "owned-field-use-after-move.0",
   "owned-field-copy-use-after-move.0",
+  "owned-aggregate-copy-use-after-move.0",
+  "owned-aggregate-array-repeat.0",
 ]) {
   const result = await execFileAsync(zero, ["check", `conformance/native/fail/${fixture}`]).catch((error) => error);
   assert.notEqual(result.code, 0);
@@ -3975,6 +3977,8 @@ for (const [fixture, code] of [
   ["maybe-value-nested-without-has.0", /MEM002/],
   ["maybe-value-nested-assignment-without-has.0", /MEM002/],
   ["maybe-value-guard-invalidated-by-condition-call.0", /MEM002/],
+  ["maybe-value-temporary-without-has.0", /MEM002/],
+  ["maybe-value-guard-invalidated-by-receiver-call.0", /MEM002/],
   ["read-while-mutably-borrowed.0", /BOR001/],
   ["array-reference-borrow-origin.0", /BOR001/],
   ["return-array-reference-escape.0", /BOR002/],

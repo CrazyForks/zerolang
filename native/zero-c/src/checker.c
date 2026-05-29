@@ -1576,7 +1576,9 @@ static bool type_is_named_generic(const char *type, const char *name) {
   return type_has_generic_arg(type, name, &inner, &inner_len);
 }
 
-static void scope_clear_maybe_guards_for_expr_mutations(const Expr *expr, Scope *lookup_scope, Scope *guard_scope);
+static void scope_clear_maybe_guards_for_expr_mutations(CheckContext *ctx, const Program *program, const Expr *expr, Scope *lookup_scope, Scope *guard_scope);
+static bool resolve_receiver_shape_call(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, const char *receiver_type_hint, ZCallResolution *out);
+static bool shape_method_receiver_info(const Function *method, bool *requires_mut);
 
 static bool maybe_presence_guard_place(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, char *root, size_t root_len, char *path, size_t path_len) {
   if (!expr || expr->kind != EXPR_MEMBER || !expr->left || !expr->text || strcmp(expr->text, "has") != 0) return false;
@@ -1608,7 +1610,7 @@ static void scope_add_maybe_guards_from_condition_true(CheckContext *ctx, const 
   if (!expr || !source_scope || !guard_scope) return;
   if (expr->kind == EXPR_BINARY && expr->text && strcmp(expr->text, "&&") == 0) {
     scope_add_maybe_guards_from_condition_true(ctx, program, expr->left, source_scope, guard_scope);
-    scope_clear_maybe_guards_for_expr_mutations(expr->right, source_scope, guard_scope);
+    scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, source_scope, guard_scope);
     scope_add_maybe_guards_from_condition_true(ctx, program, expr->right, source_scope, guard_scope);
     return;
   }
@@ -1635,7 +1637,9 @@ static bool check_maybe_value_present(const Expr *expr, Scope *scope, ZDiag *dia
   if (!expr || !expr->left || !expr->text || strcmp(expr->text, "value") != 0) return true;
   char root[128];
   char path[256];
-  if (!expr_binding_path(expr->left, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) return true;
+  if (!expr_binding_path(expr->left, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) {
+    return set_diag_detail(diag, 3051, "Maybe payload read requires a presence guard", expr->line, expr->column, ".has proven true, check maybe_value, or rescue maybe_value err fallback", "temporary Maybe value", "bind the Maybe to a local and guard it with `.has`, or use `check`/`rescue` to handle absence");
+  }
   if (scope_has_maybe_present(scope, root, path)) return true;
   char actual[256];
   format_origin_place(actual, sizeof(actual), root, path);
@@ -1667,7 +1671,7 @@ static void scope_clear_maybe_guards_for_mutable_borrow_args(const Expr *call, S
   }
 }
 
-static void scope_clear_maybe_guards_for_expr_mutations(const Expr *expr, Scope *lookup_scope, Scope *guard_scope) {
+static void scope_clear_maybe_guards_for_expr_mutations(CheckContext *ctx, const Program *program, const Expr *expr, Scope *lookup_scope, Scope *guard_scope) {
   if (!expr || !lookup_scope || !guard_scope) return;
   if (expr->kind == EXPR_CALL) {
     for (size_t i = 0; i < expr->args.len; i++) {
@@ -1679,11 +1683,27 @@ static void scope_clear_maybe_guards_for_expr_mutations(const Expr *expr, Scope 
         scope_clear_maybe_present_in_scope_for_place(guard_scope, lookup_scope, root, path);
       }
     }
+    if (expr->left && expr->left->kind == EXPR_MEMBER && expr->left->left) {
+      const Expr *receiver = expr->left->left;
+      const char *receiver_type = expr_type(ctx, program, receiver, lookup_scope);
+      ZCallResolution resolution = {0};
+      if (resolve_receiver_shape_call(ctx, program, expr, lookup_scope, receiver_type, &resolution)) {
+        bool receiver_requires_mut = false;
+        if (shape_method_receiver_info(resolution.callee, &receiver_requires_mut) && receiver_requires_mut) {
+          char root[128];
+          char path[256];
+          if (expr_binding_path(receiver, root, sizeof(root), path, sizeof(path)) && scope_has(lookup_scope, root)) {
+            scope_clear_maybe_present_in_scope_for_place(guard_scope, lookup_scope, root, path);
+          }
+        }
+        z_call_resolution_free(&resolution);
+      }
+    }
   }
-  scope_clear_maybe_guards_for_expr_mutations(expr->left, lookup_scope, guard_scope);
-  scope_clear_maybe_guards_for_expr_mutations(expr->right, lookup_scope, guard_scope);
-  for (size_t i = 0; i < expr->args.len; i++) scope_clear_maybe_guards_for_expr_mutations(expr->args.items[i], lookup_scope, guard_scope);
-  for (size_t i = 0; i < expr->fields.len; i++) scope_clear_maybe_guards_for_expr_mutations(expr->fields.items[i].value, lookup_scope, guard_scope);
+  scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->left, lookup_scope, guard_scope);
+  scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, lookup_scope, guard_scope);
+  for (size_t i = 0; i < expr->args.len; i++) scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->args.items[i], lookup_scope, guard_scope);
+  for (size_t i = 0; i < expr->fields.len; i++) scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->fields.items[i].value, lookup_scope, guard_scope);
 }
 
 
@@ -1800,9 +1820,10 @@ static void call_resolution_record_bindings(ZCallResolution *resolution, Generic
 static void call_resolution_record_param_facts(CheckContext *ctx, const Program *program, const Function *callee, const Expr *call, const Expr *receiver, size_t param_offset, Scope *scope, GenericBinding *bindings, size_t binding_len, ZCallResolution *resolution);
 static char *call_resolution_param_type_text(const ZCallResolution *resolution, size_t param_index);
 static bool interface_constraint_parts(const Program *program, const char *constraint, const InterfaceDecl **out_interface, char ***out_args, size_t *out_arg_len);
-static void mark_owned_move_if_needed(const Expr *expr, Scope *scope, const char *destination_type);
-static bool check_owned_array_element_transfer(const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag);
-static void mark_owned_target_live_if_needed(const Expr *target, Scope *scope, const char *target_type);
+static bool type_contains_owned(const Program *program, const char *type, size_t depth);
+static void mark_owned_move_if_needed(const Program *program, const Expr *expr, Scope *scope, const char *destination_type);
+static bool check_owned_array_element_transfer(const Program *program, const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag);
+static void mark_owned_target_live_if_needed(const Program *program, const Expr *target, Scope *scope, const char *target_type);
 static size_t type_core_static_const_binder_count(const Program *program);
 static size_t append_type_core_static_const_binders(const Program *program, Scope *shadow_scope, ZTypeBinderDecl *decls, size_t len, ZTypeBinderId first_id, bool omit_ambiguous_type_args);
 static ZUnifyBinding *checker_unify_trace_push(ZUnifyTrace *trace);
@@ -5096,6 +5117,48 @@ static bool index_element_type(const char *base_type, char *out, size_t out_len)
   return false;
 }
 
+static bool type_contains_owned(const Program *program, const char *type, size_t depth) {
+  if (!program || !type || depth > 16) return false;
+  type = type_strip_const(resolve_alias_type(program, type));
+  if (type_is_owned(type)) return true;
+
+  const char *inner = NULL;
+  size_t inner_len = 0;
+  if (type_has_generic_arg(type, "Maybe", &inner, &inner_len)) {
+    char *inner_type = z_strndup(inner, inner_len);
+    bool result = type_contains_owned(program, inner_type, depth + 1);
+    free(inner_type);
+    return result;
+  }
+
+  char element_type[160];
+  if (fixed_array_type_parts(type, NULL, 0, element_type, sizeof(element_type))) {
+    return type_contains_owned(program, element_type, depth + 1);
+  }
+
+  const Choice *choice = find_choice(program, type);
+  if (choice) {
+    for (size_t i = 0; i < choice->cases.len; i++) {
+      const Param *item_case = &choice->cases.items[i];
+      if (item_case->type && type_contains_owned(program, item_case->type, depth + 1)) return true;
+    }
+    return false;
+  }
+
+  const Shape *shape = find_shape_for_type(program, type);
+  if (shape) {
+    for (size_t i = 0; i < shape->fields.len; i++) {
+      const Param *field = &shape->fields.items[i];
+      if (!field->type) continue;
+      char *field_type = shape_field_type_for_owner(program, shape, type, field);
+      bool result = type_contains_owned(program, field_type, depth + 1);
+      free(field_type);
+      if (result) return true;
+    }
+  }
+  return false;
+}
+
 static bool resolve_expr_call_for_type(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, ZCallResolution *resolution) {
   if (!program || !call || call->kind != EXPR_CALL || !call->left || !resolution) return false;
   if (call->left->kind == EXPR_IDENT) return resolve_named_function_call(program, call, resolution);
@@ -5730,7 +5793,7 @@ static bool check_call_resolution_args_expected(CheckContext *ctx, const Program
       free(expected_type);
       return ok;
     }
-    mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
+    mark_owned_move_if_needed(program, expr->args.items[i], scope, expected_type);
     free(expected_type);
   }
   return true;
@@ -6135,7 +6198,7 @@ static bool check_choice_constructor_call_expected(CheckContext *ctx, const Prog
       z_call_resolution_free(&choice_resolution);
       return ok;
     }
-    mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
+    mark_owned_move_if_needed(program, expr->args.items[i], scope, expected_type);
     free(expected_type);
   }
   z_call_resolution_free(&choice_resolution);
@@ -6893,7 +6956,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           free(shape_bindings);
           return ok;
         }
-        mark_owned_move_if_needed(field->value, scope, field_type);
+        mark_owned_move_if_needed(program, field->value, scope, field_type);
         free(field_type);
       }
       for (size_t i = 0; i < shape->fields.len; i++) {
@@ -7003,7 +7066,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           snprintf(message, sizeof(message), "array literal element %zu has incompatible type", i + 1);
           return set_diag_detail(diag, 3006, message, expr->args.items[i]->line, expr->args.items[i]->column, inferred_element_type, actual, "annotate the array or use elements with one inferred element type");
         }
-        if (!check_owned_array_element_transfer(expr->args.items[i], scope, element_expected ? element_expected : actual, expr->array_repeat, diag)) return false;
+        if (!check_owned_array_element_transfer(program, expr->args.items[i], scope, element_expected ? element_expected : actual, expr->array_repeat, diag)) return false;
       }
       if (expected && expected[0] == '[') {
         set_expr_resolved_type(expr, expected);
@@ -7033,14 +7096,15 @@ static bool check_expr(CheckContext *ctx, const Program *program, const Expr *ex
   return check_expr_expected(ctx, program, expr, scope, diag, NULL);
 }
 
-static void mark_owned_move_if_needed(const Expr *expr, Scope *scope, const char *destination_type) {
-  if (!expr || !scope || !destination_type || !type_is_owned(destination_type)) return;
+static void mark_owned_move_if_needed(const Program *program, const Expr *expr, Scope *scope, const char *destination_type) {
+  if (!expr || !scope || !destination_type || !type_contains_owned(program, destination_type, 0)) return;
   char root[128];
   char path[256];
   if (!expr_binding_path(expr, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) return;
   if (!path[0]) {
     const char *source_type = scope_type(scope, root);
-    if (source_type && type_is_owned(source_type)) {
+    if (source_type && type_contains_owned(program, source_type, 0)) {
+      scope_add_moved_place(scope, root, NULL);
       scope_set_moved(scope, root, true);
       ((Expr *)expr)->moves_ownership = true;
     }
@@ -7050,16 +7114,16 @@ static void mark_owned_move_if_needed(const Expr *expr, Scope *scope, const char
   ((Expr *)expr)->moves_ownership = true;
 }
 
-static bool check_owned_array_element_transfer(const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag) {
-  if (array_repeat && type_is_owned(element_type)) {
+static bool check_owned_array_element_transfer(const Program *program, const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag) {
+  if (array_repeat && type_contains_owned(program, element_type, 0)) {
     return set_diag_detail(diag, 3013, "array repeat cannot duplicate owned values", expr ? expr->line : 0, expr ? expr->column : 0, "fresh owned value per element", element_type, "write each owned element explicitly so ownership is transferred once");
   }
-  mark_owned_move_if_needed(expr, scope, element_type);
+  mark_owned_move_if_needed(program, expr, scope, element_type);
   return true;
 }
 
-static void mark_owned_target_live_if_needed(const Expr *target, Scope *scope, const char *target_type) {
-  if (!target || !scope || !target_type || !type_is_owned(target_type)) return;
+static void mark_owned_target_live_if_needed(const Program *program, const Expr *target, Scope *scope, const char *target_type) {
+  if (!target || !scope || !target_type || !type_contains_owned(program, target_type, 0)) return;
   char root[128];
   char path[256];
   if (!expr_binding_path(target, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) return;
@@ -9255,7 +9319,7 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
       return set_diag_detail(diag, 3006, "let binding type does not match initializer", stmt->line, stmt->column, stmt->type, actual, "change the annotation or initializer");
     }
     const char *binding_type = stmt->type ? stmt->type : actual;
-    mark_owned_move_if_needed(stmt->expr, scope, binding_type);
+    mark_owned_move_if_needed(program, stmt->expr, scope, binding_type);
     set_stmt_resolved_type(stmt, binding_type);
     scope_add_decl(scope, stmt->name, binding_type, stmt->mutable_binding, stmt->line, stmt->column);
     register_borrow_binding(ctx, program, stmt, scope);
@@ -9277,8 +9341,8 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
     if (!types_compatible_in_scope(program, scope, expected, actual)) {
       return set_diag_detail(diag, 3006, "assignment type does not match binding", stmt->line, stmt->column, expected, actual, "assign a compatible value");
     }
-    mark_owned_move_if_needed(stmt->expr, scope, expected);
-    mark_owned_target_live_if_needed(target, scope, expected);
+    mark_owned_move_if_needed(program, stmt->expr, scope, expected);
+    mark_owned_target_live_if_needed(program, target, scope, expected);
     if (!update_borrow_assignment(ctx, program, target, stmt->expr, scope, diag)) return false;
     char assigned_root[128];
     char assigned_path[256];
@@ -9328,7 +9392,7 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
       return set_diag_detail(diag, 3007, "return type does not match function return type", stmt->line, stmt->column, fun->return_type, actual, "return a value compatible with the function signature");
     }
     if (!check_return_reference_escape(ctx, program, stmt->expr, scope, fun->return_type, diag)) return false;
-    mark_owned_move_if_needed(stmt->expr, scope, fun->return_type);
+    mark_owned_move_if_needed(program, stmt->expr, scope, fun->return_type);
     return true;
   }
   if (stmt->kind == STMT_EXPR) return check_expr(ctx, program, stmt->expr, scope, diag);
