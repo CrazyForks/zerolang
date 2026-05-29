@@ -2164,13 +2164,14 @@ static void print_check_json_success(const char *path, SourceInput *input, const
   append_json_string(&buf, path);
   if (command) append_program_graph_artifact_source_json(&buf, &command->graph_source);
   bool graph_input = command && z_program_graph_artifact_source_present(&command->graph_source);
+  const char *profile = command && command->profile ? command->profile : "release";
   CapabilitySummary caps = program_capabilities(program);
   ZMetaCacheStats meta = z_meta_cache_stats();
   char *manifest = read_optional_file("zero.json");
   zbuf_append(&buf, ",\n  \"package\": ");
   append_package_metadata_json(&buf, input, target);
   zbuf_append(&buf, ",\n  \"packageCache\": ");
-  append_package_cache_audit_json(&buf, input, target, "release");
+  append_package_cache_audit_json(&buf, input, target, profile);
   zbuf_append(&buf, ",\n  \"diagnostics\": [],\n  \"metaCache\": {");
   zbuf_appendf(&buf, "\n    \"hits\": %zu,\n    \"misses\": %zu,\n    \"entries\": %zu", meta.hits, meta.misses, meta.entries);
   append_hash_json(&buf, "sourceHash", fnv1a_text(input ? input->source : ""));
@@ -2181,18 +2182,18 @@ static void print_check_json_success(const char *path, SourceInput *input, const
   zbuf_append(&buf, ",\n  \"targetReadiness\": ");
   append_target_readiness_json(&buf, input, program, target, command);
   zbuf_append(&buf, ",\n  \"safetyFacts\": ");
-  append_safety_facts_json(&buf, command && command->profile ? command->profile : "release");
+  append_safety_facts_json(&buf, profile);
   zbuf_append(&buf, ",\n  \"compilerPhases\": ");
   append_compiler_phases_json(&buf, input);
   zbuf_append(&buf, ",\n  \"compilerCaches\": ");
-  if (graph_input) append_compiler_caches_json_ex(&buf, input, target, "release", "program-graph", command->graph_source.graph_hash);
-  else append_compiler_caches_json(&buf, input, target, "release");
+  if (graph_input) append_compiler_caches_json_ex(&buf, input, target, profile, "program-graph", command->graph_source.graph_hash);
+  else append_compiler_caches_json(&buf, input, target, profile);
   zbuf_append(&buf, ",\n  \"interfaceFingerprints\": ");
   if (graph_input) append_interface_fingerprints_json_ex(&buf, input, target, command->graph_source.graph_hash);
   else append_interface_fingerprints_json(&buf, input, target);
   zbuf_append(&buf, ",\n  \"incrementalInvalidation\": ");
-  if (graph_input) append_incremental_invalidations_json_ex(&buf, input, target, "release", command->graph_source.artifact, command->graph_source.graph_hash, command->graph_source.lowering);
-  else append_incremental_invalidations_json(&buf, input, target, "release");
+  if (graph_input) append_incremental_invalidations_json_ex(&buf, input, target, profile, command->graph_source.artifact, command->graph_source.graph_hash, command->graph_source.lowering);
+  else append_incremental_invalidations_json(&buf, input, target, profile);
   zbuf_append(&buf, ",\n  \"selfHostRouting\": ");
   append_self_host_routing_json(&buf, "check", NULL, program, &caps, target);
   zbuf_append(&buf, "\n}\n");
@@ -4549,16 +4550,12 @@ static const char *profile_canonical_name(const char *profile) {
 }
 
 static const char *profile_overflow_policy(const char *profile) {
-  const char *canonical = profile_canonical_name(profile);
-  if (strcmp(canonical, "debug") == 0 || strcmp(canonical, "dev") == 0 || strcmp(canonical, "audit") == 0) return "checked";
-  if (strcmp(canonical, "tiny") == 0) return "abort-on-trap";
-  return "profile-defined-trap";
+  (void)profile;
+  return "literal-range-checked-runtime-unchecked";
 }
 
 static const char *profile_bounds_policy(const char *profile) {
-  const char *canonical = profile_canonical_name(profile);
-  if (strcmp(canonical, "release-fast") == 0) return "checked-with-optimizer-elision";
-  if (strcmp(canonical, "tiny") == 0) return "checked-minimal-trap";
+  (void)profile;
   return "checked";
 }
 
@@ -5728,6 +5725,10 @@ static bool write_ship_artifacts(const Command *command, const SourceInput *inpu
   append_json_string(&size, input ? input->source_file : "");
   zbuf_append(&size, ",\n  \"target\": ");
   append_json_string(&size, target ? target->name : z_host_target());
+  zbuf_append(&size, ",\n  \"profile\": ");
+  append_json_string(&size, command && command->profile ? command->profile : "release");
+  zbuf_append(&size, ",\n  \"safetyFacts\": ");
+  append_safety_facts_json(&size, command && command->profile ? command->profile : "release");
   zbuf_appendf(&size, ",\n  \"artifactBytes\": %lld,\n  \"loweredIrBytes\": %zu,\n  \"generatedCBytes\": 0,\n  \"sections\": [{\"name\":\"binary\",\"bytes\":%lld},{\"name\":\"lowered-ir\",\"bytes\":%zu}],\n  \"directFacts\": {\"functionCount\":%zu,\"readonlyDataBytes\":%zu,\"stackBytes\":%zu}\n}\n",
                artifacts->binary_bytes,
                input ? input->lowered_ir_bytes : 0,
@@ -5802,6 +5803,8 @@ static void print_ship_json(const Command *command, const SourceInput *input, co
   append_json_string(&buf, z_host_target());
   zbuf_append(&buf, ",\n  \"profile\": ");
   append_json_string(&buf, command ? command->profile : "release");
+  zbuf_append(&buf, ",\n  \"safetyFacts\": ");
+  append_safety_facts_json(&buf, command && command->profile ? command->profile : "release");
   zbuf_append(&buf, ",\n  \"emit\": \"exe\",\n  \"generatedCBytes\": 0,\n  \"cBridgeFallback\": false,\n  \"artifactPath\": ");
   append_json_string(&buf, artifacts ? artifacts->binary_path : "");
   zbuf_appendf(&buf, ",\n  \"artifactBytes\": %lld,\n  \"checksum\": {\"algorithm\":\"fnv1a64\",\"value\":\"%016llx\",\"path\":",
@@ -9045,8 +9048,8 @@ static void append_graph_readiness_json(ZBuf *buf, SourceInput *input, Program *
 
 static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, const ZTargetInfo *target, const Command *command) {
   CapabilitySummary caps = program_capabilities(program);
-  size_t public_count = 0;
-  size_t private_count = 0;
+  const char *profile = command && command->profile ? command->profile : "release";
+  size_t public_count = 0, private_count = 0;
   for (size_t i = 0; i < input->symbol_count; i++) {
     if (input->symbol_public[i]) public_count++;
     else private_count++;
@@ -9058,7 +9061,7 @@ static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, c
   zbuf_append(buf, "}],\n");
   zbuf_append(buf, "  \"package\": "); append_package_metadata_json(buf, input, target); zbuf_append(buf, ",\n");
   zbuf_append(buf, "  \"packageCache\": ");
-  append_package_cache_audit_json(buf, input, target, "release");
+  append_package_cache_audit_json(buf, input, target, profile);
   zbuf_append(buf, ",\n");
   zbuf_append(buf, "  \"targetSupport\": {\"target\":");
   append_json_string(buf, target ? target->name : "host");
@@ -9417,9 +9420,9 @@ static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, c
   zbuf_append(buf, "],\n  \"compilerPhases\": ");
   append_compiler_phases_json(buf, input);
   zbuf_append(buf, ",\n  \"compilerCaches\": ");
-  append_compiler_caches_json(buf, input, target, "release");
+  append_compiler_caches_json(buf, input, target, profile);
   zbuf_append(buf, ",\n  \"incrementalInvalidation\": ");
-  append_incremental_invalidations_json(buf, input, target, "release");
+  append_incremental_invalidations_json(buf, input, target, profile);
   zbuf_append(buf, "\n}\n");
 }
 

@@ -1349,6 +1349,20 @@ const gateGraph = compileTimeGraphBody.shapes.find((item) => item.name === "Gate
 assert.ok(gateGraph.staticParams.some((item) => item.name === "enabledFlag" && item.kind === "bool"));
 assert.ok(gateGraph.staticParams.some((item) => item.name === "selectedMode" && item.kind === "enum"));
 
+const fastCheck = await execFileAsync(zero, ["check", "--json", "--profile", "fast", "examples/hello.0"]);
+const fastCheckBody = JSON.parse(fastCheck.stdout);
+assert.equal(fastCheckBody.packageCache.profile, "fast");
+assert.equal(fastCheckBody.incrementalInvalidation.profileDependency, "fast");
+assert.equal(fastCheckBody.safetyFacts.profile, "release-fast");
+assert.equal(fastCheckBody.safetyFacts.profileKey, "fast");
+
+const fastGraph = await execFileAsync(zero, ["graph", "--json", "--profile", "fast", "examples/hello.0"]);
+const fastGraphBody = JSON.parse(fastGraph.stdout);
+assert.equal(fastGraphBody.packageCache.profile, "fast");
+assert.equal(fastGraphBody.incrementalInvalidation.profileDependency, "fast");
+assert.equal(fastGraphBody.safetyFacts.profile, "release-fast");
+assert.equal(fastGraphBody.safetyFacts.profileKey, "fast");
+
 const buildJsonM6 = await execFileAsync(zero, ["build", "--json", "--emit", "exe", "--target", "linux-musl-x64", "--release", "tiny", "examples/hello.0", "--out", `${outDir}/m6-hello`]);
 const buildJsonM6Body = JSON.parse(buildJsonM6.stdout);
 assert.equal(buildJsonM6Body.legacy, false);
@@ -1359,6 +1373,8 @@ assert.equal(buildJsonM6Body.profileSemantics.panicPolicy, "abort");
 assert.equal(buildJsonM6Body.profileSemantics.runtimeMetadataPolicy, "minimum");
 assert.equal(buildJsonM6Body.profileSemantics.profileKey, "tiny");
 assert.equal(buildJsonM6Body.profileSemantics.unwindPolicy, "no-unwind-abort");
+assert.equal(buildJsonM6Body.profileSemantics.boundsPolicy, "checked");
+assert.equal(buildJsonM6Body.profileSemantics.overflowPolicy, "literal-range-checked-runtime-unchecked");
 assert.equal(buildJsonM6Body.profileSemantics.profileBudget.generatedCBytes, 0);
 assert.equal(buildJsonM6Body.safetyFacts.profile, "tiny");
 assert.equal(buildJsonM6Body.safetyFacts.bounds.policy, "checked");
@@ -1368,7 +1384,7 @@ assert.equal(buildJsonM6Body.safetyFacts.overflow.integerLiterals, "range-checke
 assert.equal(buildJsonM6Body.safetyFacts.ownership.useAfterMove, "diagnostic");
 assert.equal(buildJsonM6Body.profileBudget.helperBudgetPolicy, "pay-as-used-minimum-runtime");
 assert(buildJsonM6Body.profileCatalog.some((item) => item.canonical === "debug" && item.debugInfo === true));
-assert(buildJsonM6Body.profileCatalog.some((item) => item.canonical === "release-fast" && item.boundsPolicy.includes("optimizer")));
+assert(buildJsonM6Body.profileCatalog.some((item) => item.canonical === "release-fast" && item.boundsPolicy === "checked"));
 assert(buildJsonM6Body.profileCatalog.some((item) => item.canonical === "audit" && item.runtimeMetadataPolicy === "maximum"));
 assert.equal(buildJsonM6Body.objectBackend.internalIr.callRepresentation, "same-object direct calls for supported direct subsets");
 assert.equal(buildJsonM6Body.objectBackend.objectEmission.path, "direct-elf64-exe");
@@ -1386,6 +1402,8 @@ for (const [requestedProfile, canonicalProfile, profileKey] of [
   assert.equal(profileBody.generatedCBytes, 0);
   assert.equal(profileBody.profileSemantics.canonical, canonicalProfile);
   assert.equal(profileBody.profileSemantics.profileKey, profileKey);
+  assert.equal(profileBody.profileSemantics.boundsPolicy, "checked");
+  assert.equal(profileBody.profileSemantics.overflowPolicy, "literal-range-checked-runtime-unchecked");
   assert.equal(profileBody.profileSemantics.profileBudget.generatedCBytes, 0);
   assert.equal(profileBody.safetyFacts.profile, canonicalProfile);
   assert.equal(profileBody.safetyFacts.profileKey, profileKey);

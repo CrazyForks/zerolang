@@ -447,6 +447,10 @@ function assertShipReport(report, outPath) {
   assert.equal(report.target, "linux-musl-x64");
   assert.equal(report.generatedCBytes, 0);
   assert.equal(report.cBridgeFallback, false);
+  assert.equal(report.safetyFacts.schemaVersion, 1);
+  assert.equal(report.safetyFacts.profileKey, "small");
+  assert.equal(report.safetyFacts.bounds.policy, "checked");
+  assert.equal(report.safetyFacts.overflow.runtimeArithmetic, "unchecked-machine-wrap");
   assert.equal(report.releasePreview.deterministic, true);
   assertReleaseTargetContract(report, {
     target: "linux-musl-x64",
@@ -466,7 +470,10 @@ function assertShipReport(report, outPath) {
   for (const artifact of report.artifacts) {
     assert(existsSync(artifact.path), `${artifact.kind} should exist at ${artifact.path}`);
   }
-  assert.equal(JSON.parse(readFileSync(report.releasePreview.sizeReport, "utf8")).generatedCBytes, 0);
+  const sizeReport = JSON.parse(readFileSync(report.releasePreview.sizeReport, "utf8"));
+  assert.equal(sizeReport.generatedCBytes, 0);
+  assert.equal(sizeReport.safetyFacts.profileKey, "small");
+  assert.equal(sizeReport.safetyFacts.bounds.optimizerElision, false);
   assert.equal(JSON.parse(readFileSync(report.releasePreview.debugSymbols, "utf8")).kind, "zero-debug-symbol-metadata");
   assert.equal(JSON.parse(readFileSync(report.releasePreview.sbom, "utf8")).kind, "zero-sbom-placeholder");
   assert.match(readFileSync(report.releasePreview.archive, "utf8"), /zero archive manifest v1/);
@@ -2389,6 +2396,8 @@ for (const [requestedProfile, canonicalProfile, profileKey] of [
   assert.equal(profileReport.generatedCBytes, 0);
   assert.equal(profileReport.profileSemantics.canonical, canonicalProfile);
   assert.equal(profileReport.profileSemantics.profileKey, profileKey);
+  assert.equal(profileReport.profileSemantics.boundsPolicy, "checked");
+  assert.equal(profileReport.profileSemantics.overflowPolicy, "literal-range-checked-runtime-unchecked");
   assert.equal(profileReport.profileSemantics.profileBudget.generatedCBytes, 0);
   assert.equal(profileReport.safetyFacts.profile, canonicalProfile);
   assert.equal(profileReport.safetyFacts.profileKey, profileKey);
