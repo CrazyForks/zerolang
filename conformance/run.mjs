@@ -341,6 +341,7 @@ for (const fixture of [
   "conformance/native/pass/wrapping-saturating-arithmetic.0",
   "conformance/native/pass/maybe-error-flow.0",
   "conformance/native/pass/maybe-guard-branch-restore.0",
+  "conformance/native/pass/maybe-guard-negated-conjunction.0",
   "conformance/native/pass/maybe-guard-scalar-match.0",
   "conformance/native/pass/maybe-guard-short-circuit-match.0",
   "conformance/native/pass/match-scalar-guards.0",
@@ -3664,6 +3665,7 @@ assert.match(ownedUseAfterMove.stderr, /OWN001/);
 
 for (const fixture of [
   "owned-array-repeat.0",
+  "owned-array-dynamic-index-reassign-use-after-move.0",
   "owned-array-element-use-after-move.0",
   "owned-field-use-after-move.0",
   "owned-field-copy-use-after-move.0",

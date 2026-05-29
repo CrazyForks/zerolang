@@ -284,6 +284,12 @@ static bool origin_path_overlaps(const char *left, const char *right) {
   return origin_path_is_within(left, right) || origin_path_is_within(right, left);
 }
 
+static bool origin_path_assignment_definitely_reinitializes(const char *moved_path, const char *assigned_path) {
+  if (!origin_path_text(assigned_path)[0]) return true;
+  if (origin_path_contains_wildcard(assigned_path)) return false;
+  return origin_path_is_definitely_within(moved_path, assigned_path);
+}
+
 static void format_origin_place(char *out, size_t out_len, const char *root, const char *path) {
   if (!out || out_len == 0) return;
   const char *actual_path = origin_path_text(path);
@@ -509,7 +515,7 @@ static void place_vec_clear_for_place(PlaceVec *places, Scope *root_scope, const
   for (size_t read = 0; read < places->len; read++) {
     Place *place = &places->items[read];
     bool same_root = strcmp(place->root, root) == 0 && (!root_scope || !place->root_scope || place->root_scope == root_scope);
-    bool remove = same_root && origin_path_overlaps(place->path, path);
+    bool remove = same_root && origin_path_assignment_definitely_reinitializes(place->path, path);
     if (remove) {
       place_free(place);
       continue;
@@ -1749,43 +1755,56 @@ static bool maybe_bool_literal(const Expr *expr, bool *out) {
   return true;
 }
 
-static bool maybe_comparison_guard_place(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, bool target_bool, char *root, size_t root_len, char *path, size_t path_len) {
-  if (!expr || expr->kind != EXPR_BINARY || !expr->text || (strcmp(expr->text, "==") != 0 && strcmp(expr->text, "!=") != 0)) return false;
-  bool literal = false;
-  if (maybe_presence_guard_place(ctx, program, expr->left, scope, root, root_len, path, path_len) && maybe_bool_literal(expr->right, &literal)) {
-    bool guard_true = strcmp(expr->text, "==") == 0 ? literal : !literal;
-    return guard_true == target_bool;
-  }
-  if (maybe_presence_guard_place(ctx, program, expr->right, scope, root, root_len, path, path_len) && maybe_bool_literal(expr->left, &literal)) {
-    bool guard_true = strcmp(expr->text, "==") == 0 ? literal : !literal;
-    return guard_true == target_bool;
-  }
-  return false;
-}
+static void scope_add_maybe_guards_from_condition_value(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope, bool value);
 
 static void scope_add_maybe_guards_from_condition_true(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope) {
-  if (!expr || !source_scope || !guard_scope) return;
-  if (expr->kind == EXPR_BINARY && expr->text && strcmp(expr->text, "&&") == 0) {
-    scope_add_maybe_guards_from_condition_true(ctx, program, expr->left, source_scope, guard_scope);
-    scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, source_scope, guard_scope);
-    scope_add_maybe_guards_from_condition_true(ctx, program, expr->right, source_scope, guard_scope);
-    return;
-  }
-  char root[128];
-  char path[256];
-  if (maybe_presence_guard_place(ctx, program, expr, source_scope, root, sizeof(root), path, sizeof(path))) {
-    scope_add_maybe_present(guard_scope, source_scope, root, path);
-  }
-  if (maybe_comparison_guard_place(ctx, program, expr, source_scope, true, root, sizeof(root), path, sizeof(path))) {
-    scope_add_maybe_present(guard_scope, source_scope, root, path);
-  }
+  scope_add_maybe_guards_from_condition_value(ctx, program, expr, source_scope, guard_scope, true);
 }
 
 static void scope_add_maybe_guards_from_condition_false(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope) {
+  scope_add_maybe_guards_from_condition_value(ctx, program, expr, source_scope, guard_scope, false);
+}
+
+static void scope_add_maybe_guards_from_condition_value(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope, bool value) {
   if (!expr || !source_scope || !guard_scope) return;
+  if (expr->kind == EXPR_BINARY && expr->text) {
+    if (strcmp(expr->text, "&&") == 0) {
+      if (value) {
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->left, source_scope, guard_scope, true);
+        scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, source_scope, guard_scope);
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->right, source_scope, guard_scope, true);
+      }
+      return;
+    }
+    if (strcmp(expr->text, "||") == 0) {
+      if (!value) {
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->left, source_scope, guard_scope, false);
+        scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, source_scope, guard_scope);
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->right, source_scope, guard_scope, false);
+      }
+      return;
+    }
+    if (strcmp(expr->text, "==") == 0 || strcmp(expr->text, "!=") == 0) {
+      bool literal = false;
+      const Expr *condition = NULL;
+      if (maybe_bool_literal(expr->right, &literal)) {
+        condition = expr->left;
+      } else if (maybe_bool_literal(expr->left, &literal)) {
+        condition = expr->right;
+      }
+      if (condition) {
+        bool condition_value = strcmp(expr->text, "==") == 0
+          ? (value ? literal : !literal)
+          : (value ? !literal : literal);
+        scope_add_maybe_guards_from_condition_value(ctx, program, condition, source_scope, guard_scope, condition_value);
+      }
+      return;
+    }
+  }
+  if (!value) return;
   char root[128];
   char path[256];
-  if (maybe_comparison_guard_place(ctx, program, expr, source_scope, false, root, sizeof(root), path, sizeof(path))) {
+  if (maybe_presence_guard_place(ctx, program, expr, source_scope, root, sizeof(root), path, sizeof(path))) {
     scope_add_maybe_present(guard_scope, source_scope, root, path);
   }
 }
