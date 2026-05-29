@@ -1762,7 +1762,6 @@ static void scope_clear_maybe_guards_for_expr_mutations(CheckContext *ctx, const
   for (size_t i = 0; i < expr->fields.len; i++) scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->fields.items[i].value, lookup_scope, guard_scope);
 }
 
-
 static bool span_element_text(const char *type, char *out, size_t out_len) {
   if (!type || !out || out_len == 0) return false;
   const char *inner = NULL;
@@ -9434,6 +9433,7 @@ static bool check_scalar_match(CheckContext *ctx, const Program *program, const 
   for (size_t arm_index = 0; arm_index < stmt->match_arms.len; arm_index++) {
     provenance_scope_snapshot_restore(before);
     Scope arm_scope = {.parent = scope};
+    scope_add_maybe_guards_from_condition_true(ctx, program, stmt->match_arms.items[arm_index].guard, scope, &arm_scope);
     bool ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->match_arms.items[arm_index].body, &arm_scope, diag, loop_depth);
     scope_free(&arm_scope);
     if (!ok) {
