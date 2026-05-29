@@ -1406,6 +1406,7 @@ static const char *expr_type(CheckContext *ctx, const Program *program, const Ex
 static bool is_int_type(const char *type);
 static void set_expr_resolved_type(const Expr *expr, const char *type);
 static bool span_element_text(const char *type, char *out, size_t out_len);
+static bool readable_view_element_text(const char *type, char *out, size_t out_len);
 static bool fixed_array_type_parts(const char *type, char *length, size_t length_len, char *element, size_t element_len);
 static bool index_element_type(const char *base_type, char *out, size_t out_len);
 static bool types_compatible_in_scope(const Program *program, Scope *scope, const char *expected, const char *actual);
@@ -1428,7 +1429,8 @@ static bool reference_source_origin_is_local_storage(Scope *scope, const char *r
   return !type_is_named_generic(root_type, "ref") &&
          !type_is_named_generic(root_type, "mutref") &&
          !type_is_named_generic(root_type, "Span") &&
-         !type_is_named_generic(root_type, "MutSpan");
+         !type_is_named_generic(root_type, "MutSpan") &&
+         strcmp(root_type, "String") != 0;
 }
 
 static bool reference_place_origin_is_local_storage(Scope *scope, const char *root) {
@@ -1441,7 +1443,8 @@ static bool span_view_place_origin_is_local_storage(Scope *scope, const char *ro
   return !type_is_named_generic(root_type, "ref") &&
          !type_is_named_generic(root_type, "mutref") &&
          !type_is_named_generic(root_type, "Span") &&
-         !type_is_named_generic(root_type, "MutSpan");
+         !type_is_named_generic(root_type, "MutSpan") &&
+         strcmp(root_type, "String") != 0;
 }
 
 static bool expr_value_provenance(const Expr *expr, Scope *scope, ValueProvenance *origins) {
@@ -1474,7 +1477,6 @@ static bool expr_value_provenance(const Expr *expr, Scope *scope, ValueProvenanc
 
 static bool span_view_expr_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, const char *view_type, ValueProvenance *origins) {
   if (!expr || !scope || !view_type || !origins) return false;
-  if (!type_is_named_generic(view_type, "Span") && !type_is_named_generic(view_type, "MutSpan")) return false;
 
   ValueProvenance existing = {0};
   if (expr_reference_provenance(ctx, program, expr, scope, &existing)) {
@@ -1485,7 +1487,7 @@ static bool span_view_expr_provenance(CheckContext *ctx, const Program *program,
   value_provenance_free(&existing);
 
   char expected_element[128];
-  if (!span_element_text(view_type, expected_element, sizeof(expected_element))) return false;
+  if (!readable_view_element_text(view_type, expected_element, sizeof(expected_element))) return false;
 
   if (expr_is_addressable(expr)) {
     char root[128];
@@ -1507,7 +1509,7 @@ static bool span_view_expr_provenance(CheckContext *ctx, const Program *program,
     }
     if (expr->kind == EXPR_IDENT &&
         scope_is_param(scope, expr->text) &&
-        span_element_text(actual, actual_element, sizeof(actual_element)) &&
+        readable_view_element_text(actual, actual_element, sizeof(actual_element)) &&
         types_compatible_in_scope(program, scope, expected_element, actual_element)) {
       return value_provenance_add(origins, expr->text, scope_binding_scope(scope, expr->text), false, false);
     }
@@ -1517,7 +1519,7 @@ static bool span_view_expr_provenance(CheckContext *ctx, const Program *program,
 
   const char *source_type = expr_type(ctx, program, expr->left, scope);
   char actual_element[128];
-  if (span_element_text(source_type, actual_element, sizeof(actual_element)) &&
+  if (readable_view_element_text(source_type, actual_element, sizeof(actual_element)) &&
       types_compatible_in_scope(program, scope, expected_element, actual_element)) {
     return span_view_expr_provenance(ctx, program, expr->left, scope, source_type, origins);
   }
@@ -1775,6 +1777,15 @@ static bool span_element_text(const char *type, char *out, size_t out_len) {
       !type_has_generic_arg(type, "MutSpan", &inner, &inner_len)) return false;
   snprintf(out, out_len, "%.*s", (int)inner_len, inner);
   return true;
+}
+
+static bool readable_view_element_text(const char *type, char *out, size_t out_len) {
+  if (!type || !out || out_len == 0) return false;
+  if (strcmp(type, "String") == 0) {
+    snprintf(out, out_len, "u8");
+    return true;
+  }
+  return span_element_text(type, out, out_len);
 }
 
 static bool mutspan_element_text(const char *type, char *out, size_t out_len) {
@@ -7226,6 +7237,7 @@ static void mark_owned_move_if_needed(const Program *program, const Expr *expr, 
 
 static bool check_owned_array_element_transfer(const Program *program, const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag) {
   if (array_repeat && type_contains_owned(program, element_type, 0)) {
+    if (expr && expr->kind == EXPR_NULL) return true;
     return set_diag_detail(diag, 3013, "array repeat cannot duplicate owned values", expr ? expr->line : 0, expr ? expr->column : 0, "fresh owned value per element", element_type, "write each owned element explicitly so ownership is transferred once");
   }
   mark_owned_move_if_needed(program, expr, scope, element_type);
