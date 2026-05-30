@@ -10,7 +10,7 @@ Runnable today:
 | `std.mem.fillItems(dst, value)` | `usize` | Fills caller-owned mutable item storage with a matching `T` value and returns the filled item count. |
 | `std.mem.eql(a, b)` | `Bool` | Compares string-backed byte inputs. |
 | `std.mem.span(value)` | `Span<u8>` | Builds a native `Span<u8>` view over a string literal. |
-| `std.mem.contains(items, needle)` | `Bool` | Searches readable contiguous `T` storage for a matching value. |
+| `std.mem.contains(items, needle)` | `Bool` | Searches readable contiguous non-owned `T` storage for a matching value. |
 | `std.mem.isEmpty(items)` | `Bool` | Reports whether readable contiguous storage has zero items. |
 | `std.mem.prefix(items, count)` | `Span<T>` | Returns a clamped read-only prefix view. |
 | `std.mem.dropPrefix(items, count)` | `Span<T>` | Returns a clamped read-only view after the first `count` items. |

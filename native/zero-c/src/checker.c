@@ -6441,6 +6441,8 @@ static bool check_stdlib_mem_contains_call_expected(CheckContext *ctx, const Pro
   const char *items_actual = NULL;
   char element_type[128];
   if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.contains", element_type, sizeof(element_type), &items_actual)) return false;
+  if (z_std_helper_kind(resolution ? resolution->std_helper : NULL) == Z_STD_HELPER_KIND_MEM_CONTAINS &&
+      !stdlib_reject_owned_item_element(program, "std.mem.contains", element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly")) return false;
   char expected_items[160];
   stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, false);
   record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
