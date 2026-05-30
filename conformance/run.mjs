@@ -340,6 +340,13 @@ for (const fixture of [
   "conformance/native/pass/float-primitives.0",
   "conformance/native/pass/wrapping-saturating-arithmetic.0",
   "conformance/native/pass/maybe-error-flow.0",
+  "conformance/native/pass/maybe-guard-branch-restore.0",
+  "conformance/native/pass/maybe-guard-negated-conjunction.0",
+  "conformance/native/pass/maybe-guard-scalar-match.0",
+  "conformance/native/pass/maybe-guard-short-circuit-match.0",
+  "conformance/native/pass/maybe-guard-static-index-literals.0",
+  "conformance/native/pass/maybe-guard-variant-match-after.0",
+  "conformance/native/pass/maybe-guard-variant-guard-side-effect.0",
   "conformance/native/pass/match-scalar-guards.0",
   "conformance/native/pass/indexing-primitives.0",
   "conformance/native/pass/checked-bounds-get.0",
@@ -361,6 +368,7 @@ for (const fixture of [
   "conformance/native/pass/generic-spans.0",
   "conformance/native/pass/open-ended-slices.0",
   "conformance/native/pass/string-slices.0",
+  "conformance/native/pass/string-param-span-slice.0",
   "conformance/native/pass/coff-dynamic-byte-slice.0",
   "conformance/native/pass/macho-large-byte-slice-blocked.0",
   "conformance/native/pass/macho-nested-call-scratch-blocked.0",
@@ -401,6 +409,11 @@ for (const fixture of [
   "conformance/native/pass/match-fallback.0",
   "conformance/native/pass/memory-types.0",
   "conformance/native/pass/owned-transfer.0",
+  "conformance/native/pass/owned-field-move-return-branch.0",
+  "conformance/native/pass/owned-field-reassignment-after-move.0",
+  "conformance/native/pass/owned-array-static-index-reassignment.0",
+  "conformance/native/pass/owned-mutspan-alias-reassignment-after-move.0",
+  "conformance/native/pass/maybe-owned-null-repeat.0",
   "conformance/native/pass/owned-drop-cleanup.0",
   "conformance/native/pass/owned-drop-move-suppressed.0",
   "conformance/native/pass/borrow-primitives.0",
@@ -1334,6 +1347,7 @@ assert.equal(compileTimeBody.safetyFacts.bounds.optimizerElision, false);
 assert.equal(compileTimeBody.safetyFacts.overflow.runtimeArithmetic, "unchecked-machine-wrap");
 assert.equal(compileTimeBody.safetyFacts.overflow.unchecked, true);
 assert.equal(compileTimeBody.safetyFacts.initialization.locals, "initializer-required");
+assert.equal(compileTimeBody.safetyFacts.initialization.maybePayloadReads, "guard-checked");
 assert.equal(compileTimeBody.safetyFacts.aliasing.mutableAliases, "diagnostic");
 assert.equal(compileTimeBody.safetyFacts.mir.invalidMemoryContractsBlockEmission, true);
 
@@ -2927,7 +2941,7 @@ assert.match(programGraphDump, /node #[0-9a-f]{8} Module name:"hello"/);
 assert.match(programGraphDump, /edge #[0-9a-f]{8} function #[0-9a-f]{8} order:0/);
 assert.match(programGraphView, /^pub fn main\(world: World\) -> Void raises \{\n/);
 assert.match(programGraphView, /check world\.out\.write\("hello from zero\\n"\)/);
-assert.match(programGraphRichView, /bytesTail\(bytes\)\[1\]/);
+assert.match(programGraphRichView, /bytesTail\(bytesSpan\)\[1\]/);
 assert.match(programGraphRichView, /numbers\[2\.\.\]/);
 assert.match(programGraphCharView, /again == 'A'/);
 assert.match(programGraphBody.graphHash, /^graph:[0-9a-f]{16}$/);
@@ -3654,6 +3668,28 @@ const ownedUseAfterMove = await execFileAsync(zero, ["check", "conformance/nativ
 assert.notEqual(ownedUseAfterMove.code, 0);
 assert.match(ownedUseAfterMove.stderr, /OWN001/);
 
+for (const fixture of [
+  "owned-array-repeat.0",
+  "owned-array-dynamic-index-reassign-use-after-move.0",
+  "owned-array-element-use-after-move.0",
+  "owned-field-use-after-move.0",
+  "owned-field-copy-use-after-move.0",
+  "owned-field-nested-assignment-after-move.0",
+  "owned-aggregate-copy-use-after-move.0",
+  "owned-aggregate-array-repeat.0",
+  "owned-aggregate-root-use-after-move.0",
+  "owned-aggregate-partial-root-use-after-move.0",
+  "owned-mutspan-alias-use-after-move.0",
+  "owned-mutspan-alias-inverse-use-after-move.0",
+  "maybe-owned-check-use-after-move.0",
+  "maybe-owned-stmt-check-use-after-move.0",
+  "maybe-owned-rescue-fallback-use-after-move.0",
+]) {
+  const result = await execFileAsync(zero, ["check", `conformance/native/fail/${fixture}`]).catch((error) => error);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /OWN001/);
+}
+
 const unsupportedDrop = await execFileAsync(zero, ["check", "conformance/native/fail/unsupported-drop.0"]).catch((error) => error);
 assert.notEqual(unsupportedDrop.code, 0);
 assert.match(unsupportedDrop.stderr, /OWN002/);
@@ -3956,9 +3992,40 @@ for (const [fixture, code] of [
   ["duplicate-enum-case.0", /NAM004/],
   ["duplicate-shape-literal-field.0", /NAM004/],
   ["type-name-used-as-value.0", /TYP001/],
+  ["maybe-value-without-has.0", /MEM002/],
+  ["maybe-value-after-assignment.0", /MEM002/],
+  ["maybe-value-nested-without-has.0", /MEM002/],
+  ["maybe-value-nested-assignment-without-has.0", /MEM002/],
+  ["maybe-value-guard-invalidated-by-condition-call.0", /MEM002/],
+  ["maybe-value-temporary-without-has.0", /MEM002/],
+  ["maybe-value-branch-local-guard-leak.0", /MEM002/],
+  ["maybe-value-guard-invalidated-by-receiver-call.0", /MEM002/],
+  ["maybe-value-dynamic-index-guard.0", /MEM002/],
+  ["maybe-value-mutspan-alias-invalidated.0", /MEM002/],
+  ["maybe-value-nested-mutspan-alias-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-call-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-condition-call-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-alias-guard-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-call-shadow-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-assignment-shadow-invalidated.0", /MEM002/],
+  ["maybe-value-match-guard-mutates-subject.0", /MEM002/],
+  ["maybe-value-variant-match-guard-fallthrough.0", /MEM002/],
+  ["maybe-value-scalar-match-guard-fallthrough.0", /MEM002/],
   ["read-while-mutably-borrowed.0", /BOR001/],
   ["array-reference-borrow-origin.0", /BOR001/],
   ["return-array-reference-escape.0", /BOR002/],
+  ["span-return-local-array.0", /BOR002/],
+  ["span-binding-return-local-array.0", /BOR002/],
+  ["span-assignment-return-local-array.0", /BOR002/],
+  ["span-slice-return-local-array.0", /BOR002/],
+  ["span-slice-return-array-param.0", /BOR002/],
+  ["span-call-return-local-array.0", /BOR002/],
+  ["span-field-return-local-array.0", /BOR002/],
+  ["span-field-return-param-array.0", /BOR002/],
+  ["span-shape-literal-return-local-array.0", /BOR002/],
+  ["span-choice-return-local-array.0", /BOR002/],
+  ["string-return-local-array.0", /BOR002/],
+  ["stdlib-span-return-local-buffer.0", /BOR002/],
   ["check-array-reference-origin.0", /BOR001/],
   ["check-maybe-reference-origin.0", /BOR001/],
   ["rescue-reference-origin.0", /BOR001/],
@@ -3992,6 +4059,7 @@ for (const [fixture, code] of [
   ["function-mutref-local-reference-escape.0", /BOR002/],
   ["function-mutref-local-shape-reference-escape.0", /BOR002/],
   ["function-mutref-local-array-reference-escape.0", /BOR002/],
+  ["function-mutspan-local-reference-escape.0", /BOR002/],
   ["function-mutref-stored-reference-copy-origin.0", /BOR001/],
   ["static-interface-mutref-reference-origin.0", /BOR001/],
   ["nested-generic-mutref-reference-origin.0", /BOR001/],

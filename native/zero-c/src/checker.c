@@ -30,6 +30,7 @@ typedef struct {
   Place origin;
   bool mutable_borrow;
   bool local_storage;
+  bool index_exact;
 } ProvenanceEntry;
 
 typedef struct {
@@ -62,6 +63,9 @@ typedef struct {
 typedef struct ProvenanceScopeSnapshot {
   Scope *scope;
   ValueProvenance *origins;
+  bool *moved;
+  PlaceVec maybe_present;
+  PlaceVec moved_places;
   size_t len;
   struct ProvenanceScopeSnapshot *next;
 } ProvenanceScopeSnapshot;
@@ -77,6 +81,8 @@ struct Scope {
   int *decl_line;
   int *decl_column;
   ValueProvenance *value_provenance;
+  PlaceVec maybe_present;
+  PlaceVec moved_places;
   size_t len;
   size_t cap;
   Scope *parent;
@@ -163,6 +169,31 @@ static const char *origin_path_text(const char *path) {
 
 static bool origin_path_equal(const char *left, const char *right) {
   return strcmp(origin_path_text(left), origin_path_text(right)) == 0;
+}
+
+static bool origin_path_contains_wildcard(const char *path) {
+  return strstr(origin_path_text(path), "[*]") != NULL;
+}
+
+static char *origin_path_generalize_indexes(const char *path) {
+  const char *source = origin_path_text(path);
+  char *out = z_checked_malloc(strlen(source) + 1);
+  size_t write = 0;
+  for (size_t read = 0; source[read]; read++) {
+    if (source[read] == '[') {
+      const char *close = strchr(source + read, ']');
+      if (close) {
+        out[write++] = '[';
+        out[write++] = '*';
+        out[write++] = ']';
+        read = (size_t)(close - source);
+        continue;
+      }
+    }
+    out[write++] = source[read];
+  }
+  out[write] = '\0';
+  return out;
 }
 
 static bool origin_path_segment_boundary(char ch) {
@@ -254,6 +285,12 @@ static bool origin_path_overlaps(const char *left, const char *right) {
   return origin_path_is_within(left, right) || origin_path_is_within(right, left);
 }
 
+static bool origin_path_assignment_definitely_reinitializes(const char *moved_path, const char *assigned_path) {
+  if (!origin_path_text(assigned_path)[0]) return true;
+  if (origin_path_contains_wildcard(assigned_path)) return false;
+  return origin_path_is_definitely_within(moved_path, assigned_path);
+}
+
 static void format_origin_place(char *out, size_t out_len, const char *root, const char *path) {
   if (!out || out_len == 0) return;
   const char *actual_path = origin_path_text(path);
@@ -287,7 +324,7 @@ static char *origin_path_join(const char *prefix, const char *suffix) {
   return joined;
 }
 
-static bool value_provenance_add_full(ValueProvenance *origins, const char *root, Scope *root_scope, bool mut_borrow, bool local_storage, const char *path, const char *origin_path) {
+static bool value_provenance_add_full_with_index_exact(ValueProvenance *origins, const char *root, Scope *root_scope, bool mut_borrow, bool local_storage, bool index_exact, const char *path, const char *origin_path) {
   if (!origins || !root || !root[0]) return false;
   for (size_t i = 0; i < origins->len; i++) {
     ProvenanceEntry *entry = &origins->items[i];
@@ -295,6 +332,7 @@ static bool value_provenance_add_full(ValueProvenance *origins, const char *root
         origin_path_equal(entry->value_path, path) && origin_path_equal(entry->origin.path, origin_path)) {
       entry->mutable_borrow = entry->mutable_borrow || mut_borrow;
       entry->local_storage = entry->local_storage || local_storage;
+      entry->index_exact = entry->index_exact && index_exact;
       return true;
     }
   }
@@ -308,9 +346,14 @@ static bool value_provenance_add_full(ValueProvenance *origins, const char *root
     },
     .mutable_borrow = mut_borrow,
     .local_storage = local_storage,
+    .index_exact = index_exact,
   };
   origins->len++;
   return true;
+}
+
+static bool value_provenance_add_full(ValueProvenance *origins, const char *root, Scope *root_scope, bool mut_borrow, bool local_storage, const char *path, const char *origin_path) {
+  return value_provenance_add_full_with_index_exact(origins, root, root_scope, mut_borrow, local_storage, false, path, origin_path);
 }
 
 static bool value_provenance_add_path(ValueProvenance *origins, const char *root, Scope *root_scope, bool mut_borrow, bool local_storage, const char *path) {
@@ -326,7 +369,7 @@ static bool value_provenance_add_all(ValueProvenance *out, const ValueProvenance
   if (!out || !source) return false;
   for (size_t i = 0; i < source->len; i++) {
     ProvenanceEntry *entry = &source->items[i];
-    if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->value_path, entry->origin.path)) added = true;
+    if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, entry->value_path, entry->origin.path)) added = true;
   }
   return added;
 }
@@ -337,7 +380,7 @@ static bool value_provenance_add_all_with_prefix(ValueProvenance *out, const Val
   for (size_t i = 0; i < source->len; i++) {
     ProvenanceEntry *entry = &source->items[i];
     char *path = origin_path_join(path_prefix, entry->value_path);
-    if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, path, entry->origin.path)) added = true;
+    if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, path, entry->origin.path)) added = true;
     free(path);
   }
   return added;
@@ -349,7 +392,7 @@ static bool value_provenance_add_all_as_with_prefix(ValueProvenance *out, const 
   for (size_t i = 0; i < source->len; i++) {
     ProvenanceEntry *entry = &source->items[i];
     char *path = origin_path_join(path_prefix, entry->value_path);
-    if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, mut_borrow, entry->local_storage, path, entry->origin.path)) added = true;
+    if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, mut_borrow, entry->local_storage, entry->index_exact, path, entry->origin.path)) added = true;
     free(path);
   }
   return added;
@@ -362,7 +405,7 @@ static bool value_provenance_add_all_as_with_origin_suffix(ValueProvenance *out,
     ProvenanceEntry *entry = &source->items[i];
     char *value_path = origin_path_join(value_prefix, entry->value_path);
     char *origin_path = origin_path_join(entry->origin.path, origin_suffix);
-    if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, mut_borrow, entry->local_storage, value_path, origin_path)) added = true;
+    if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, mut_borrow, entry->local_storage, entry->index_exact, value_path, origin_path)) added = true;
     free(value_path);
     free(origin_path);
   }
@@ -376,7 +419,7 @@ static bool value_provenance_add_direct_as_with_origin_suffix(ValueProvenance *o
     ProvenanceEntry *entry = &source->items[i];
     if (origin_path_text(entry->value_path)[0]) continue;
     char *origin_path = origin_path_join(entry->origin.path, origin_suffix);
-    if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, mut_borrow, entry->local_storage, NULL, origin_path)) added = true;
+    if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, mut_borrow, entry->local_storage, entry->index_exact, NULL, origin_path)) added = true;
     free(origin_path);
   }
   return added;
@@ -389,7 +432,7 @@ static bool value_provenance_add_all_under_path(ValueProvenance *out, const Valu
     ProvenanceEntry *entry = &source->items[i];
     if (!origin_path_is_within(entry->value_path, path_prefix)) continue;
     const char *relative_path = origin_path_after_prefix(entry->value_path, path_prefix);
-    if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, relative_path, entry->origin.path)) added = true;
+    if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, relative_path, entry->origin.path)) added = true;
   }
   return added;
 }
@@ -438,6 +481,56 @@ static void place_vec_free(PlaceVec *places) {
   places->items = NULL;
   places->len = 0;
   places->cap = 0;
+}
+
+static void place_vec_add_all(PlaceVec *target, const PlaceVec *source) {
+  if (!target || !source) return;
+  for (size_t i = 0; i < source->len; i++) {
+    Place *place = &source->items[i];
+    place_vec_add(target, place->root, place->root_scope, place->path);
+  }
+}
+
+static bool place_vec_contains(const PlaceVec *places, const Place *target) {
+  if (!places || !target || !target->root || !target->root[0]) return false;
+  for (size_t i = 0; i < places->len; i++) {
+    Place *place = &places->items[i];
+    if (strcmp(place->root, target->root) == 0 &&
+        place->root_scope == target->root_scope &&
+        origin_path_equal(place->path, target->path)) return true;
+  }
+  return false;
+}
+
+static void place_vec_add_intersection(PlaceVec *out, const PlaceVec *left, const PlaceVec *right) {
+  if (!out || !left || !right) return;
+  for (size_t i = 0; i < left->len; i++) {
+    Place *place = &left->items[i];
+    if (place_vec_contains(right, place)) place_vec_add(out, place->root, place->root_scope, place->path);
+  }
+}
+
+static void place_vec_replace(PlaceVec *target, const PlaceVec *source) {
+  if (!target) return;
+  place_vec_free(target);
+  place_vec_add_all(target, source);
+}
+
+static void place_vec_clear_for_place(PlaceVec *places, Scope *root_scope, const char *root, const char *path) {
+  if (!places || !root || !root[0]) return;
+  size_t write = 0;
+  for (size_t read = 0; read < places->len; read++) {
+    Place *place = &places->items[read];
+    bool same_root = strcmp(place->root, root) == 0 && (!root_scope || !place->root_scope || place->root_scope == root_scope);
+    bool remove = same_root && origin_path_assignment_definitely_reinitializes(place->path, path);
+    if (remove) {
+      place_free(place);
+      continue;
+    }
+    if (write != read) places->items[write] = places->items[read];
+    write++;
+  }
+  places->len = write;
 }
 
 static bool provenance_storage_effect_vec_add(ProvenanceStorageEffectVec *effects, const char *target_root, Scope *target_scope, const char *target_path, const ValueProvenance *value, bool overwrite) {
@@ -604,16 +697,14 @@ static bool scope_is_moved(Scope *scope, const char *name) {
   return false;
 }
 
-static bool scope_set_moved(Scope *scope, const char *name, bool moved) {
-  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
-    for (size_t i = 0; i < cursor->len; i++) {
-      if (strcmp(cursor->names[i], name) == 0) {
-        cursor->moved[i] = moved;
-        return true;
-      }
-    }
-  }
-  return false;
+static bool scope_set_moved_in_scope(Scope *scope, Scope *binding_scope, const char *name, bool moved) {
+  if (!name) return false;
+  Scope *target = binding_scope ? binding_scope : scope_binding_scope(scope, name);
+  if (!target) return false;
+  size_t index = 0;
+  if (!scope_binding_index_in_scope(target, name, &index)) return false;
+  target->moved[index] = moved;
+  return true;
 }
 
 static bool scope_is_param(Scope *scope, const char *name) {
@@ -623,6 +714,138 @@ static bool scope_is_param(Scope *scope, const char *name) {
     }
   }
   return false;
+}
+
+static bool scope_add_maybe_present(Scope *guard_scope, Scope *lookup_scope, const char *root, const char *path) {
+  if (!guard_scope || !lookup_scope || !root || !root[0]) return false;
+  if (origin_path_contains_wildcard(path)) return false;
+  Scope *root_scope = scope_binding_scope(lookup_scope, root);
+  return place_vec_add(&guard_scope->maybe_present, root, root_scope, path);
+}
+
+static bool maybe_guard_place_overlaps_mutation(Scope *lookup_scope, const Place *guard_place, Scope *mutation_root_scope, const char *mutation_root, const char *mutation_path);
+
+static void place_vec_clear_maybe_present_for_place(PlaceVec *places, Scope *lookup_scope, Scope *root_scope, const char *root, const char *path) {
+  if (!places || !root || !root[0]) return;
+  size_t write = 0;
+  for (size_t read = 0; read < places->len; read++) {
+    Place *place = &places->items[read];
+    bool remove = maybe_guard_place_overlaps_mutation(lookup_scope, place, root_scope, root, path);
+    if (remove) {
+      place_free(place);
+      continue;
+    }
+    if (write != read) places->items[write] = places->items[read];
+    write++;
+  }
+  places->len = write;
+}
+
+static void scope_add_maybe_present_all(Scope *target, Scope *source) {
+  if (!target || !source) return;
+  for (size_t i = 0; i < source->maybe_present.len; i++) {
+    Place *place = &source->maybe_present.items[i];
+    Scope *root_scope = scope_binding_scope(target, place->root);
+    if (!root_scope || (place->root_scope && place->root_scope != root_scope)) continue;
+    place_vec_add(&target->maybe_present, place->root, root_scope, place->path);
+  }
+}
+
+static bool scope_has_maybe_present(Scope *scope, const char *root, const char *path) {
+  if (!scope || !root || !root[0]) return false;
+  if (origin_path_contains_wildcard(path)) return false;
+  Scope *root_scope = scope_binding_scope(scope, root);
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    for (size_t i = 0; i < cursor->maybe_present.len; i++) {
+      Place *place = &cursor->maybe_present.items[i];
+      if (strcmp(place->root, root) != 0) continue;
+      if (root_scope && place->root_scope && place->root_scope != root_scope) continue;
+      if (origin_path_equal(place->path, path)) return true;
+    }
+  }
+  return false;
+}
+
+static void scope_clear_maybe_present_for_place(Scope *scope, const char *root, const char *path) {
+  if (!scope || !root || !root[0]) return;
+  Scope *root_scope = scope_binding_scope(scope, root);
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    place_vec_clear_maybe_present_for_place(&cursor->maybe_present, scope, root_scope, root, path);
+  }
+}
+
+static void scope_clear_maybe_present_in_scope_for_place(Scope *target, Scope *lookup_scope, const char *root, const char *path) {
+  if (!target || !lookup_scope || !root || !root[0]) return;
+  place_vec_clear_maybe_present_for_place(&target->maybe_present, lookup_scope, scope_binding_scope(lookup_scope, root), root, path);
+}
+
+static void scope_clear_maybe_present_in_scope_for_resolved_place(Scope *target, Scope *lookup_scope, const Place *place) {
+  if (!target || !place || !place->root || !place->root[0]) return;
+  place_vec_clear_maybe_present_for_place(&target->maybe_present, lookup_scope, place->root_scope, place->root, place->path);
+}
+
+static void scope_clear_maybe_present_for_resolved_place(Scope *scope, const Place *place) {
+  if (!scope || !place || !place->root || !place->root[0]) return;
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    scope_clear_maybe_present_in_scope_for_resolved_place(cursor, scope, place);
+  }
+}
+
+static bool scope_add_moved_place_with_scope(Scope *scope, Scope *root_scope, const char *root, const char *path) {
+  if (!scope || !root || !root[0]) return false;
+  if (!root_scope) root_scope = scope_binding_scope(scope, root);
+  Scope *target_scope = root_scope ? root_scope : scope;
+  return place_vec_add(&target_scope->moved_places, root, root_scope, path);
+}
+
+static bool scope_add_moved_resolved_place(Scope *scope, const Place *place) {
+  if (!place) return false;
+  return scope_add_moved_place_with_scope(scope, place->root_scope, place->root, place->path);
+}
+
+static bool scope_has_moved_place_with_scope(Scope *scope, Scope *root_scope, const char *root, const char *path, bool covering) {
+  if (!scope || !root || !root[0]) return false;
+  if (!root_scope) root_scope = scope_binding_scope(scope, root);
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    for (size_t i = 0; i < cursor->moved_places.len; i++) {
+      Place *place = &cursor->moved_places.items[i];
+      if (strcmp(place->root, root) != 0) continue;
+      if (root_scope && place->root_scope && place->root_scope != root_scope) continue;
+      if (covering ? origin_path_is_within(path, place->path) : origin_path_overlaps(place->path, path)) return true;
+    }
+  }
+  return false;
+}
+
+static bool scope_has_moved_place(Scope *scope, const char *root, const char *path) {
+  return scope_has_moved_place_with_scope(scope, scope_binding_scope(scope, root), root, path, false);
+}
+
+static bool scope_has_moved_resolved_place(Scope *scope, const Place *place) {
+  if (!place) return false;
+  return scope_has_moved_place_with_scope(scope, place->root_scope, place->root, place->path, false);
+}
+
+static bool scope_has_moved_place_covering(Scope *scope, const char *root, const char *path) {
+  return scope_has_moved_place_with_scope(scope, scope_binding_scope(scope, root), root, path, true);
+}
+
+static bool scope_has_moved_resolved_place_covering(Scope *scope, const Place *place) {
+  if (!place) return false;
+  return scope_has_moved_place_with_scope(scope, place->root_scope, place->root, place->path, true);
+}
+
+static void scope_clear_moved_place_with_scope(Scope *scope, Scope *root_scope, const char *root, const char *path) {
+  if (!scope || !root || !root[0]) return;
+  if (!root_scope) root_scope = scope_binding_scope(scope, root);
+  for (Scope *cursor = scope; cursor; cursor = cursor->parent) {
+    place_vec_clear_for_place(&cursor->moved_places, root_scope, root, path);
+  }
+}
+
+static void scope_clear_moved_resolved_place(Scope *scope, const Place *place) {
+  if (!place) return;
+  scope_clear_moved_place_with_scope(scope, place->root_scope, place->root, place->path);
 }
 
 static bool scope_borrow_counts_for_place(Scope *scope, const char *root, const char *path, size_t *shared, size_t *mut) {
@@ -736,7 +959,7 @@ static void scope_replace_value_provenance_at(Scope *lookup_scope, Scope *bindin
   if (!origins) return;
   for (size_t origin_index = 0; origin_index < origins->len; origin_index++) {
     ProvenanceEntry *entry = &origins->items[origin_index];
-    value_provenance_add_full(&binding_scope->value_provenance[index], entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->value_path, entry->origin.path);
+    value_provenance_add_full_with_index_exact(&binding_scope->value_provenance[index], entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, entry->value_path, entry->origin.path);
   }
 }
 
@@ -747,7 +970,7 @@ static void scope_replace_value_provenance_path_at(Scope *lookup_scope, Scope *b
   for (size_t i = 0; i < existing->len; i++) {
     ProvenanceEntry *entry = &existing->items[i];
     if (origin_path_is_definitely_within(entry->value_path, path)) continue;
-    value_provenance_add_full(&merged, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->value_path, entry->origin.path);
+    value_provenance_add_full_with_index_exact(&merged, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, entry->value_path, entry->origin.path);
   }
   value_provenance_add_all_with_prefix(&merged, origins, path);
   scope_replace_value_provenance_at(lookup_scope, binding_scope, index, &merged);
@@ -797,7 +1020,7 @@ static bool scope_copy_value_provenance(Scope *scope, const char *name, ValuePro
       if (strcmp(cursor->names[i], name) == 0) {
         for (size_t origin_index = 0; origin_index < cursor->value_provenance[i].len; origin_index++) {
           ProvenanceEntry *entry = &cursor->value_provenance[i].items[origin_index];
-          if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->value_path, entry->origin.path)) added = true;
+          if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, entry->value_path, entry->origin.path)) added = true;
         }
         return added;
       }
@@ -813,7 +1036,7 @@ static bool scope_copy_value_provenance_from_scope(Scope *scope, Scope *binding_
     if (!scope_binding_index_in_scope(binding_scope, name, &index)) return false;
     for (size_t origin_index = 0; origin_index < binding_scope->value_provenance[index].len; origin_index++) {
       ProvenanceEntry *entry = &binding_scope->value_provenance[index].items[origin_index];
-      if (value_provenance_add_full(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->value_path, entry->origin.path)) added = true;
+      if (value_provenance_add_full_with_index_exact(out, entry->origin.root, entry->origin.root_scope, entry->mutable_borrow, entry->local_storage, entry->index_exact, entry->value_path, entry->origin.path)) added = true;
     }
     return added;
   }
@@ -828,9 +1051,13 @@ static ProvenanceScopeSnapshot *provenance_scope_snapshot_capture(Scope *scope) 
     frame->scope = cursor;
     frame->len = cursor->len;
     frame->origins = z_checked_calloc(frame->len, sizeof(ValueProvenance));
+    frame->moved = z_checked_calloc(frame->len, sizeof(bool));
     for (size_t i = 0; i < frame->len; i++) {
       value_provenance_add_all(&frame->origins[i], &cursor->value_provenance[i]);
+      frame->moved[i] = cursor->moved[i];
     }
+    place_vec_add_all(&frame->maybe_present, &cursor->maybe_present);
+    place_vec_add_all(&frame->moved_places, &cursor->moved_places);
     if (!head) {
       head = frame;
     } else {
@@ -854,7 +1081,10 @@ static void provenance_scope_snapshot_restore(const ProvenanceScopeSnapshot *sna
     size_t len = frame->len < frame->scope->len ? frame->len : frame->scope->len;
     for (size_t i = 0; i < len; i++) {
       scope_replace_value_provenance_at(frame->scope, frame->scope, i, &frame->origins[i]);
+      frame->scope->moved[i] = frame->moved[i];
     }
+    place_vec_replace(&frame->scope->maybe_present, &frame->maybe_present);
+    place_vec_replace(&frame->scope->moved_places, &frame->moved_places);
   }
 }
 
@@ -883,7 +1113,45 @@ static void provenance_scope_snapshot_restore_union(const ProvenanceScopeSnapsho
       }
       scope_replace_value_provenance_at(base_frame->scope, base_frame->scope, binding_index, &merged);
       value_provenance_free(&merged);
+      bool moved = false;
+      for (size_t state_index = 0; state_index < state_len; state_index++) {
+        if (!include[state_index]) continue;
+        const ProvenanceScopeSnapshot *state_frame = provenance_scope_snapshot_find(states[state_index], base_frame->scope);
+        if (state_frame && binding_index < state_frame->len) {
+          moved = moved || state_frame->moved[binding_index];
+        } else {
+          moved = moved || base_frame->moved[binding_index];
+        }
+      }
+      base_frame->scope->moved[binding_index] = moved;
     }
+    PlaceVec maybe_merged = {0};
+    bool seeded_maybe = false;
+    for (size_t state_index = 0; state_index < state_len; state_index++) {
+      if (!include[state_index]) continue;
+      const ProvenanceScopeSnapshot *state_frame = provenance_scope_snapshot_find(states[state_index], base_frame->scope);
+      const PlaceVec *state_maybe = state_frame ? &state_frame->maybe_present : &base_frame->maybe_present;
+      if (!seeded_maybe) {
+        place_vec_add_all(&maybe_merged, state_maybe);
+        seeded_maybe = true;
+      } else {
+        PlaceVec intersection = {0};
+        place_vec_add_intersection(&intersection, &maybe_merged, state_maybe);
+        place_vec_free(&maybe_merged);
+        maybe_merged = intersection;
+      }
+    }
+    place_vec_replace(&base_frame->scope->maybe_present, &maybe_merged);
+    place_vec_free(&maybe_merged);
+    PlaceVec moved_merged = {0};
+    for (size_t state_index = 0; state_index < state_len; state_index++) {
+      if (!include[state_index]) continue;
+      const ProvenanceScopeSnapshot *state_frame = provenance_scope_snapshot_find(states[state_index], base_frame->scope);
+      const PlaceVec *state_moved = state_frame ? &state_frame->moved_places : &base_frame->moved_places;
+      place_vec_add_all(&moved_merged, state_moved);
+    }
+    place_vec_replace(&base_frame->scope->moved_places, &moved_merged);
+    place_vec_free(&moved_merged);
   }
 }
 
@@ -897,7 +1165,10 @@ static void provenance_scope_snapshot_free(ProvenanceScopeSnapshot *snapshot) {
   while (snapshot) {
     ProvenanceScopeSnapshot *next = snapshot->next;
     for (size_t i = 0; i < snapshot->len; i++) value_provenance_free(&snapshot->origins[i]);
+    place_vec_free(&snapshot->maybe_present);
+    place_vec_free(&snapshot->moved_places);
     free(snapshot->origins);
+    free(snapshot->moved);
     free(snapshot);
     snapshot = next;
   }
@@ -919,6 +1190,8 @@ static void scope_free(Scope *scope) {
   free(scope->decl_line);
   free(scope->decl_column);
   free(scope->value_provenance);
+  place_vec_free(&scope->maybe_present);
+  place_vec_free(&scope->moved_places);
 }
 
 static bool diag_sink_set(DiagSink *sink, int code, const char *message, int line, int column) {
@@ -1139,14 +1412,14 @@ static bool expr_root_ident(const Expr *expr, char *out, size_t out_len) {
   }
 }
 
+static bool parse_static_uint_text(const char *text, unsigned long long *out);
+
 static bool expr_static_index_segment(const Expr *expr, char *out, size_t out_len) {
   if (!expr || expr->kind != EXPR_NUMBER || !expr->text || !out || out_len < 4) return false;
-  size_t len = strlen(expr->text);
-  if (len == 0 || len + 3 > out_len) return false;
-  for (size_t i = 0; i < len; i++) {
-    if (expr->text[i] < '0' || expr->text[i] > '9') return false;
-  }
-  snprintf(out, out_len, "[%s]", expr->text);
+  unsigned long long value = 0;
+  if (!parse_static_uint_text(expr->text, &value)) return false;
+  int written = snprintf(out, out_len, "[%llu]", value);
+  if (written < 0 || (size_t)written >= out_len) return false;
   return true;
 }
 
@@ -1196,9 +1469,17 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
 static const char *expr_type(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope);
 static bool is_int_type(const char *type);
 static void set_expr_resolved_type(const Expr *expr, const char *type);
+static bool collect_assignment_target_places(const Expr *target, Scope *scope, PlaceVec *places);
+static bool span_element_text(const char *type, char *out, size_t out_len);
+static bool readable_view_element_text(const char *type, char *out, size_t out_len);
+static bool fixed_array_type_parts(const char *type, char *length, size_t length_len, char *element, size_t element_len);
+static bool index_element_type(const char *base_type, char *out, size_t out_len);
+static bool types_compatible_in_scope(const Program *program, Scope *scope, const char *expected, const char *actual);
+static bool expr_addressable_storage_type(const Program *program, const Expr *expr, Scope *scope, char *out, size_t out_len);
 static bool place_storage_value_provenance_under_path(CheckContext *ctx, const Program *program, Scope *scope, const Place *place, const char *relative_path, ValueProvenance *out);
 static bool actual_storage_value_provenance_under_path(CheckContext *ctx, const Program *program, const Expr *actual, Scope *scope, const char *relative_path, ValueProvenance *out);
 static char *provenance_context_type_text(const CheckContext *ctx, const Program *program, const char *type, GenericBinding *bindings, size_t binding_len);
+static void scope_clear_maybe_guards_for_mutating_call_args(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope);
 
 static bool borrow_expr_source_is_local_storage(const Expr *borrowed, Scope *scope, const char *root) {
   if (!scope_is_param(scope, root)) return true;
@@ -1210,11 +1491,25 @@ static bool borrow_expr_source_is_local_storage(const Expr *borrowed, Scope *sco
 static bool reference_source_origin_is_local_storage(Scope *scope, const char *root) {
   if (!scope_is_param(scope, root)) return true;
   const char *root_type = scope_type(scope, root);
-  return !type_is_named_generic(root_type, "ref") && !type_is_named_generic(root_type, "mutref");
+  return !type_is_named_generic(root_type, "ref") &&
+         !type_is_named_generic(root_type, "mutref") &&
+         !type_is_named_generic(root_type, "Span") &&
+         !type_is_named_generic(root_type, "MutSpan") &&
+         strcmp(root_type, "String") != 0;
 }
 
 static bool reference_place_origin_is_local_storage(Scope *scope, const char *root) {
   return !scope_is_param(scope, root);
+}
+
+static bool span_view_place_origin_is_local_storage(Scope *scope, const char *root) {
+  if (!scope_is_param(scope, root)) return true;
+  const char *root_type = scope_type(scope, root);
+  return !type_is_named_generic(root_type, "ref") &&
+         !type_is_named_generic(root_type, "mutref") &&
+         !type_is_named_generic(root_type, "Span") &&
+         !type_is_named_generic(root_type, "MutSpan") &&
+         strcmp(root_type, "String") != 0;
 }
 
 static bool expr_value_provenance(const Expr *expr, Scope *scope, ValueProvenance *origins) {
@@ -1243,6 +1538,63 @@ static bool expr_value_provenance(const Expr *expr, Scope *scope, ValueProvenanc
     }
   }
   return false;
+}
+
+static bool span_view_expr_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, const char *view_type, ValueProvenance *origins) {
+  if (!expr || !scope || !view_type || !origins) return false;
+
+  ValueProvenance existing = {0};
+  if (expr_reference_provenance(ctx, program, expr, scope, &existing)) {
+    bool added = value_provenance_add_all(origins, &existing);
+    value_provenance_free(&existing);
+    return added;
+  }
+  value_provenance_free(&existing);
+
+  char expected_element[128];
+  if (!readable_view_element_text(view_type, expected_element, sizeof(expected_element))) return false;
+
+  if (expr_is_addressable(expr)) {
+    char root[128];
+    char path[256];
+    const char *actual = expr_type(ctx, program, expr, scope);
+    char actual_element[128];
+    if (expr_binding_path(expr, root, sizeof(root), path, sizeof(path)) &&
+        scope_has(scope, root)) {
+      char storage_type[192];
+      const char *actual_storage = actual;
+      if (expr_addressable_storage_type(program, expr, scope, storage_type, sizeof(storage_type))) actual_storage = storage_type;
+      if (fixed_array_type_parts(actual_storage, NULL, 0, actual_element, sizeof(actual_element)) &&
+          types_compatible_in_scope(program, scope, expected_element, actual_element)) {
+        bool local_storage = path[0]
+          ? span_view_place_origin_is_local_storage(scope, root)
+          : reference_source_origin_is_local_storage(scope, root);
+        return value_provenance_add_full_with_index_exact(origins, root, scope_binding_scope(scope, root), false, local_storage, true, NULL, path);
+      }
+    }
+    if (expr->kind == EXPR_IDENT &&
+        scope_is_param(scope, expr->text) &&
+        readable_view_element_text(actual, actual_element, sizeof(actual_element)) &&
+        types_compatible_in_scope(program, scope, expected_element, actual_element)) {
+      return value_provenance_add(origins, expr->text, scope_binding_scope(scope, expr->text), false, false);
+    }
+  }
+
+  if (expr->kind != EXPR_SLICE || !expr->left) return false;
+
+  const char *source_type = expr_type(ctx, program, expr->left, scope);
+  char actual_element[128];
+  if (readable_view_element_text(source_type, actual_element, sizeof(actual_element)) &&
+      types_compatible_in_scope(program, scope, expected_element, actual_element)) {
+    return span_view_expr_provenance(ctx, program, expr->left, scope, source_type, origins);
+  }
+  if (!index_element_type(source_type, actual_element, sizeof(actual_element)) ||
+      !types_compatible_in_scope(program, scope, expected_element, actual_element)) return false;
+  char root[128];
+  char path[256];
+  if (!expr_binding_path(expr->left, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) return false;
+  bool local_storage = path[0] ? span_view_place_origin_is_local_storage(scope, root) : reference_source_origin_is_local_storage(scope, root);
+  return value_provenance_add_full(origins, root, scope_binding_scope(scope, root), false, local_storage, NULL, path);
 }
 
 static bool expr_reference_provenance_as(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins, bool mut_borrow) {
@@ -1274,7 +1626,7 @@ static bool check_borrow_conflict_at(Scope *scope, const char *root, const char 
   return true;
 }
 
-static bool check_place_root_available(const Expr *expr, Scope *scope, const char *root, ZDiag *diag) {
+static bool check_place_available(const Expr *expr, Scope *scope, const char *root, const char *path, ZDiag *diag) {
   if (!expr || !scope || !root || !root[0]) return true;
   const char *actual = scope_type(scope, root);
   if (actual && strcmp(actual, "Type") == 0) {
@@ -1287,6 +1639,61 @@ static bool check_place_root_available(const Expr *expr, Scope *scope, const cha
     snprintf(actual_detail, sizeof(actual_detail), "%s was moved", root);
     return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
   }
+  if (scope_has_moved_place(scope, root, path)) {
+    char place[200];
+    format_origin_place(place, sizeof(place), root, path);
+    char actual_detail[240];
+    snprintf(actual_detail, sizeof(actual_detail), "%.200s was moved", place);
+    return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
+  }
+  PlaceVec resolved_places = {0};
+  if (collect_assignment_target_places(expr, scope, &resolved_places)) {
+    for (size_t i = 0; i < resolved_places.len; i++) {
+      Place *place = &resolved_places.items[i];
+      if (scope_has_moved_resolved_place(scope, place)) {
+        char place_text[200];
+        format_origin_place(place_text, sizeof(place_text), place->root, place->path);
+        char actual_detail[240];
+        snprintf(actual_detail, sizeof(actual_detail), "%.200s was moved", place_text);
+        place_vec_free(&resolved_places);
+        return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
+      }
+    }
+  }
+  place_vec_free(&resolved_places);
+  return true;
+}
+
+static bool check_lvalue_base_available(const Expr *expr, Scope *scope, const char *root, const char *path, ZDiag *diag) {
+  if (!expr || !scope || !root || !root[0]) return true;
+  const char *actual = scope_type(scope, root);
+  if (actual && strcmp(actual, "Type") == 0) {
+    char message[256];
+    snprintf(message, sizeof(message), "type name '%s' cannot be used as a runtime value", root);
+    return set_diag_detail(diag, 3005, message, expr->line, expr->column, "runtime value", "type name", "use the type name in an annotation or constructor context");
+  }
+  if (scope_has_moved_place_covering(scope, root, path)) {
+    char place[200];
+    format_origin_place(place, sizeof(place), root, path);
+    char actual_detail[240];
+    snprintf(actual_detail, sizeof(actual_detail), "%.200s was moved", place);
+    return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
+  }
+  PlaceVec resolved_places = {0};
+  if (collect_assignment_target_places(expr, scope, &resolved_places)) {
+    for (size_t i = 0; i < resolved_places.len; i++) {
+      Place *place = &resolved_places.items[i];
+      if (scope_has_moved_resolved_place_covering(scope, place)) {
+        char place_text[200];
+        format_origin_place(place_text, sizeof(place_text), place->root, place->path);
+        char actual_detail[240];
+        snprintf(actual_detail, sizeof(actual_detail), "%.200s was moved", place_text);
+        place_vec_free(&resolved_places);
+        return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
+      }
+    }
+  }
+  place_vec_free(&resolved_places);
   return true;
 }
 
@@ -1343,6 +1750,219 @@ static bool type_is_named_generic(const char *type, const char *name) {
   return type_has_generic_arg(type, name, &inner, &inner_len);
 }
 
+static bool place_root_scope_matches(Scope *left, Scope *right) {
+  return !left || !right || left == right;
+}
+
+static bool collect_provenance_resolved_places(Scope *scope, Scope *root_scope, const char *root, const char *path, bool include_direct_view, PlaceVec *places) {
+  if (!scope || !root || !root[0] || !places) return false;
+  const char *root_type = scope_type_in_binding_scope(scope, root_scope, root);
+  char storage_type[192];
+  const char *target_storage_type = root_type;
+  bool root_ref_like = false;
+  if (named_ref_inner_text(root_type, "ref", storage_type, sizeof(storage_type)) ||
+      named_ref_inner_text(root_type, "mutref", storage_type, sizeof(storage_type))) {
+    root_ref_like = true;
+    target_storage_type = storage_type;
+  }
+  bool root_view_like = type_is_named_generic(target_storage_type, "Span") || type_is_named_generic(target_storage_type, "MutSpan");
+  bool added = false;
+  ValueProvenance root_origins = {0};
+  if (scope_copy_value_provenance_from_scope(scope, root_scope, root, &root_origins)) {
+    for (size_t i = 0; i < root_origins.len; i++) {
+      ProvenanceEntry *entry = &root_origins.items[i];
+      const char *relative_path = NULL;
+      bool nested_alias = origin_path_text(entry->value_path)[0];
+      if (nested_alias) {
+        if (!origin_path_is_within(path, entry->value_path)) continue;
+        relative_path = origin_path_after_prefix(path, entry->value_path);
+        if (!origin_path_text(relative_path)[0]) continue;
+      } else if (include_direct_view && (root_ref_like || root_view_like) && origin_path_text(path)[0]) {
+        relative_path = path;
+      } else {
+        continue;
+      }
+      bool generalize_indexes = !entry->index_exact && (nested_alias || root_view_like);
+      char *generalized_path = generalize_indexes ? origin_path_generalize_indexes(relative_path) : NULL;
+      char *target_path = origin_path_join(entry->origin.path, generalized_path ? generalized_path : relative_path);
+      if (place_vec_add(places, entry->origin.root, entry->origin.root_scope, target_path)) added = true;
+      free(generalized_path);
+      free(target_path);
+    }
+  }
+  value_provenance_free(&root_origins);
+  return added;
+}
+
+static bool maybe_guard_place_overlaps_mutation(Scope *lookup_scope, const Place *guard_place, Scope *mutation_root_scope, const char *mutation_root, const char *mutation_path) {
+  if (!guard_place || !guard_place->root || !guard_place->root[0] || !mutation_root || !mutation_root[0]) return false;
+  if (strcmp(guard_place->root, mutation_root) == 0 &&
+      place_root_scope_matches(guard_place->root_scope, mutation_root_scope) &&
+      origin_path_overlaps(guard_place->path, mutation_path)) {
+    return true;
+  }
+  if (!lookup_scope || !origin_path_text(guard_place->path)[0]) return false;
+
+  PlaceVec guard_targets = {0};
+  bool overlaps = false;
+  if (collect_provenance_resolved_places(lookup_scope, guard_place->root_scope, guard_place->root, guard_place->path, true, &guard_targets)) {
+    for (size_t i = 0; i < guard_targets.len; i++) {
+      Place *target = &guard_targets.items[i];
+      bool same_storage_root = strcmp(target->root, mutation_root) == 0 &&
+        place_root_scope_matches(target->root_scope, mutation_root_scope);
+      if (same_storage_root && origin_path_overlaps(target->path, mutation_path)) overlaps = true;
+      if (overlaps) break;
+    }
+  }
+  place_vec_free(&guard_targets);
+  return overlaps;
+}
+
+static void scope_clear_maybe_guards_for_expr_mutations(CheckContext *ctx, const Program *program, const Expr *expr, Scope *lookup_scope, Scope *guard_scope);
+static void scope_clear_maybe_guards_for_resolved_call_mutations(CheckContext *ctx, const Program *program, const Expr *call, Scope *lookup_scope, Scope *guard_scope);
+static bool resolve_receiver_shape_call(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, const char *receiver_type_hint, ZCallResolution *out);
+static bool shape_method_receiver_info(const Function *method, bool *requires_mut);
+
+static bool maybe_presence_guard_place(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, char *root, size_t root_len, char *path, size_t path_len) {
+  if (!expr || expr->kind != EXPR_MEMBER || !expr->left || !expr->text || strcmp(expr->text, "has") != 0) return false;
+  if (!expr_binding_path(expr->left, root, root_len, path, path_len) || !scope_has(scope, root)) return false;
+  return type_is_named_generic(expr_type(ctx, program, expr->left, scope), "Maybe");
+}
+
+static bool maybe_bool_literal(const Expr *expr, bool *out) {
+  if (!expr || expr->kind != EXPR_BOOL) return false;
+  if (out) *out = expr->bool_value;
+  return true;
+}
+
+static void scope_add_maybe_guards_from_condition_value(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope, bool value);
+
+static void scope_add_maybe_guards_from_condition_true(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope) {
+  scope_add_maybe_guards_from_condition_value(ctx, program, expr, source_scope, guard_scope, true);
+}
+
+static void scope_add_maybe_guards_from_condition_false(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope) {
+  scope_add_maybe_guards_from_condition_value(ctx, program, expr, source_scope, guard_scope, false);
+}
+
+static void scope_add_maybe_guards_from_condition_value(CheckContext *ctx, const Program *program, const Expr *expr, Scope *source_scope, Scope *guard_scope, bool value) {
+  if (!expr || !source_scope || !guard_scope) return;
+  if (expr->kind == EXPR_BINARY && expr->text) {
+    if (strcmp(expr->text, "&&") == 0) {
+      if (value) {
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->left, source_scope, guard_scope, true);
+        scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, source_scope, guard_scope);
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->right, source_scope, guard_scope, true);
+      }
+      return;
+    }
+    if (strcmp(expr->text, "||") == 0) {
+      if (!value) {
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->left, source_scope, guard_scope, false);
+        scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, source_scope, guard_scope);
+        scope_add_maybe_guards_from_condition_value(ctx, program, expr->right, source_scope, guard_scope, false);
+      }
+      return;
+    }
+    if (strcmp(expr->text, "==") == 0 || strcmp(expr->text, "!=") == 0) {
+      bool literal = false;
+      const Expr *condition = NULL;
+      if (maybe_bool_literal(expr->right, &literal)) {
+        condition = expr->left;
+      } else if (maybe_bool_literal(expr->left, &literal)) {
+        condition = expr->right;
+      }
+      if (condition) {
+        bool condition_value = strcmp(expr->text, "==") == 0
+          ? (value ? literal : !literal)
+          : (value ? !literal : literal);
+        scope_add_maybe_guards_from_condition_value(ctx, program, condition, source_scope, guard_scope, condition_value);
+      }
+      return;
+    }
+  }
+  if (!value) return;
+  char root[128];
+  char path[256];
+  if (maybe_presence_guard_place(ctx, program, expr, source_scope, root, sizeof(root), path, sizeof(path))) {
+    scope_add_maybe_present(guard_scope, source_scope, root, path);
+  }
+}
+
+static bool check_maybe_value_present(const Expr *expr, Scope *scope, ZDiag *diag) {
+  if (!expr || !expr->left || !expr->text || strcmp(expr->text, "value") != 0) return true;
+  char root[128];
+  char path[256];
+  if (!expr_binding_path(expr->left, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) {
+    return set_diag_detail(diag, 3051, "Maybe payload read requires a presence guard", expr->line, expr->column, ".has proven true, check maybe_value, or rescue maybe_value err fallback", "temporary Maybe value", "bind the Maybe to a local and guard it with `.has`, or use `check`/`rescue` to handle absence");
+  }
+  if (scope_has_maybe_present(scope, root, path)) return true;
+  char actual[256];
+  format_origin_place(actual, sizeof(actual), root, path);
+  return set_diag_detail(diag, 3051, "Maybe payload read requires a presence guard", expr->line, expr->column, ".has proven true, check maybe_value, or rescue maybe_value err fallback", actual, "guard the Maybe with `.has` before reading `.value`, or use `check`/`rescue` to handle absence");
+}
+
+static bool check_maybe_value_accesses_in_place(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag) {
+  if (!expr) return true;
+  if (expr->kind == EXPR_MEMBER) {
+    if (!check_maybe_value_accesses_in_place(ctx, program, expr->left, scope, diag)) return false;
+    const char *left_type = expr_type(ctx, program, expr->left, scope);
+    if (type_is_named_generic(left_type, "Maybe") && !check_maybe_value_present(expr, scope, diag)) return false;
+  } else if (expr->kind == EXPR_INDEX) {
+    if (!check_maybe_value_accesses_in_place(ctx, program, expr->left, scope, diag)) return false;
+  }
+  return true;
+}
+
+static void scope_clear_maybe_guards_for_mutable_borrow_args(const Expr *call, Scope *scope) {
+  if (!call || call->kind != EXPR_CALL || !scope) return;
+  for (size_t i = 0; i < call->args.len; i++) {
+    const Expr *arg = call->args.items[i];
+    if (!arg || arg->kind != EXPR_BORROW || !arg->mutable_borrow) continue;
+    char root[128];
+    char path[256];
+    if (expr_binding_path(arg->left, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root)) {
+      scope_clear_maybe_present_for_place(scope, root, path);
+    }
+  }
+}
+
+static void scope_clear_maybe_guards_for_expr_mutations(CheckContext *ctx, const Program *program, const Expr *expr, Scope *lookup_scope, Scope *guard_scope) {
+  if (!expr || !lookup_scope || !guard_scope) return;
+  if (expr->kind == EXPR_CALL) {
+    for (size_t i = 0; i < expr->args.len; i++) {
+      const Expr *arg = expr->args.items[i];
+      if (!arg || arg->kind != EXPR_BORROW || !arg->mutable_borrow) continue;
+      char root[128];
+      char path[256];
+      if (expr_binding_path(arg->left, root, sizeof(root), path, sizeof(path)) && scope_has(lookup_scope, root)) {
+        scope_clear_maybe_present_in_scope_for_place(guard_scope, lookup_scope, root, path);
+      }
+    }
+    if (expr->left && expr->left->kind == EXPR_MEMBER && expr->left->left) {
+      const Expr *receiver = expr->left->left;
+      const char *receiver_type = expr_type(ctx, program, receiver, lookup_scope);
+      ZCallResolution resolution = {0};
+      if (resolve_receiver_shape_call(ctx, program, expr, lookup_scope, receiver_type, &resolution)) {
+        bool receiver_requires_mut = false;
+        if (shape_method_receiver_info(resolution.callee, &receiver_requires_mut) && receiver_requires_mut) {
+          char root[128];
+          char path[256];
+          if (expr_binding_path(receiver, root, sizeof(root), path, sizeof(path)) && scope_has(lookup_scope, root)) {
+            scope_clear_maybe_present_in_scope_for_place(guard_scope, lookup_scope, root, path);
+          }
+        }
+        z_call_resolution_free(&resolution);
+      }
+    }
+    scope_clear_maybe_guards_for_resolved_call_mutations(ctx, program, expr, lookup_scope, guard_scope);
+  }
+  scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->left, lookup_scope, guard_scope);
+  scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->right, lookup_scope, guard_scope);
+  for (size_t i = 0; i < expr->args.len; i++) scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->args.items[i], lookup_scope, guard_scope);
+  for (size_t i = 0; i < expr->fields.len; i++) scope_clear_maybe_guards_for_expr_mutations(ctx, program, expr->fields.items[i].value, lookup_scope, guard_scope);
+}
+
 static bool span_element_text(const char *type, char *out, size_t out_len) {
   if (!type || !out || out_len == 0) return false;
   const char *inner = NULL;
@@ -1351,6 +1971,15 @@ static bool span_element_text(const char *type, char *out, size_t out_len) {
       !type_has_generic_arg(type, "MutSpan", &inner, &inner_len)) return false;
   snprintf(out, out_len, "%.*s", (int)inner_len, inner);
   return true;
+}
+
+static bool readable_view_element_text(const char *type, char *out, size_t out_len) {
+  if (!type || !out || out_len == 0) return false;
+  if (strcmp(type, "String") == 0) {
+    snprintf(out, out_len, "u8");
+    return true;
+  }
+  return span_element_text(type, out, out_len);
 }
 
 static bool mutspan_element_text(const char *type, char *out, size_t out_len) {
@@ -1456,8 +2085,10 @@ static void call_resolution_record_bindings(ZCallResolution *resolution, Generic
 static void call_resolution_record_param_facts(CheckContext *ctx, const Program *program, const Function *callee, const Expr *call, const Expr *receiver, size_t param_offset, Scope *scope, GenericBinding *bindings, size_t binding_len, ZCallResolution *resolution);
 static char *call_resolution_param_type_text(const ZCallResolution *resolution, size_t param_index);
 static bool interface_constraint_parts(const Program *program, const char *constraint, const InterfaceDecl **out_interface, char ***out_args, size_t *out_arg_len);
-static void mark_owned_move_if_needed(const Expr *expr, Scope *scope, const char *destination_type);
-static void mark_owned_target_live_if_needed(const Expr *target, Scope *scope, const char *target_type);
+static bool type_contains_owned(const Program *program, const char *type, size_t depth);
+static void mark_owned_move_if_needed(const Program *program, const Expr *expr, Scope *scope, const char *destination_type);
+static bool check_owned_array_element_transfer(const Program *program, const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag);
+static void mark_owned_target_live_if_needed(const Program *program, const Expr *target, Scope *scope, const char *target_type);
 static size_t type_core_static_const_binder_count(const Program *program);
 static size_t append_type_core_static_const_binders(const Program *program, Scope *shadow_scope, ZTypeBinderDecl *decls, size_t len, ZTypeBinderId first_id, bool omit_ambiguous_type_args);
 static ZUnifyBinding *checker_unify_trace_push(ZUnifyTrace *trace);
@@ -3209,6 +3840,56 @@ static const Param *find_shape_field(const Shape *shape, const char *name) {
   return NULL;
 }
 
+static bool expr_addressable_storage_type(const Program *program, const Expr *expr, Scope *scope, char *out, size_t out_len) {
+  if (!expr || !out || out_len == 0) return false;
+  switch (expr->kind) {
+    case EXPR_IDENT: {
+      const char *type = scope_type(scope, expr->text);
+      if (!type) return false;
+      snprintf(out, out_len, "%s", type);
+      return true;
+    }
+    case EXPR_MEMBER: {
+      if (!expr->left || !expr->text) return false;
+      char left_type_storage[192];
+      if (!expr_addressable_storage_type(program, expr->left, scope, left_type_storage, sizeof(left_type_storage))) return false;
+      const char *left_type = left_type_storage;
+      char owned_left[192];
+      char ref_left[192];
+      if (owned_inner_text(left_type, owned_left, sizeof(owned_left))) left_type = owned_left;
+      if (ref_inner_text(left_type, ref_left, sizeof(ref_left))) left_type = ref_left;
+      const char *maybe_inner = NULL;
+      size_t maybe_inner_len = 0;
+      if (type_has_generic_arg(left_type, "Maybe", &maybe_inner, &maybe_inner_len)) {
+        if (strcmp(expr->text, "has") == 0) {
+          snprintf(out, out_len, "Bool");
+          return true;
+        }
+        if (strcmp(expr->text, "value") == 0) {
+          snprintf(out, out_len, "%.*s", (int)maybe_inner_len, maybe_inner);
+          return true;
+        }
+      }
+      const Shape *shape = find_shape_for_type(program, left_type);
+      if (!shape) return false;
+      const Param *field = find_shape_field(shape, expr->text);
+      if (!field) return false;
+      char *field_type = shape_field_type_for_owner(program, shape, left_type, field);
+      snprintf(out, out_len, "%s", field_type ? field_type : "Unknown");
+      free(field_type);
+      return true;
+    }
+    case EXPR_INDEX: {
+      if (!expr->left) return false;
+      char base_type[192];
+      if (!expr_addressable_storage_type(program, expr->left, scope, base_type, sizeof(base_type))) return false;
+      return index_element_type(base_type, out, out_len);
+    }
+    default:
+      return false;
+  }
+}
+
 static void meta_cache_free(MetaCache *cache) {
   if (!cache) return;
   MetaCacheEntry *entry = cache->entries;
@@ -4751,6 +5432,48 @@ static bool index_element_type(const char *base_type, char *out, size_t out_len)
   return false;
 }
 
+static bool type_contains_owned(const Program *program, const char *type, size_t depth) {
+  if (!program || !type || depth > 16) return false;
+  type = type_strip_const(resolve_alias_type(program, type));
+  if (type_is_owned(type)) return true;
+
+  const char *inner = NULL;
+  size_t inner_len = 0;
+  if (type_has_generic_arg(type, "Maybe", &inner, &inner_len)) {
+    char *inner_type = z_strndup(inner, inner_len);
+    bool result = type_contains_owned(program, inner_type, depth + 1);
+    free(inner_type);
+    return result;
+  }
+
+  char element_type[160];
+  if (fixed_array_type_parts(type, NULL, 0, element_type, sizeof(element_type))) {
+    return type_contains_owned(program, element_type, depth + 1);
+  }
+
+  const Choice *choice = find_choice(program, type);
+  if (choice) {
+    for (size_t i = 0; i < choice->cases.len; i++) {
+      const Param *item_case = &choice->cases.items[i];
+      if (item_case->type && type_contains_owned(program, item_case->type, depth + 1)) return true;
+    }
+    return false;
+  }
+
+  const Shape *shape = find_shape_for_type(program, type);
+  if (shape) {
+    for (size_t i = 0; i < shape->fields.len; i++) {
+      const Param *field = &shape->fields.items[i];
+      if (!field->type) continue;
+      char *field_type = shape_field_type_for_owner(program, shape, type, field);
+      bool result = type_contains_owned(program, field_type, depth + 1);
+      free(field_type);
+      if (result) return true;
+    }
+  }
+  return false;
+}
+
 static bool resolve_expr_call_for_type(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, ZCallResolution *resolution) {
   if (!program || !call || call->kind != EXPR_CALL || !call->left || !resolution) return false;
   if (call->left->kind == EXPR_IDENT) return resolve_named_function_call(program, call, resolution);
@@ -5385,7 +6108,7 @@ static bool check_call_resolution_args_expected(CheckContext *ctx, const Program
       free(expected_type);
       return ok;
     }
-    mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
+    mark_owned_move_if_needed(program, expr->args.items[i], scope, expected_type);
     free(expected_type);
   }
   return true;
@@ -5790,7 +6513,7 @@ static bool check_choice_constructor_call_expected(CheckContext *ctx, const Prog
       z_call_resolution_free(&choice_resolution);
       return ok;
     }
-    mark_owned_move_if_needed(expr->args.items[i], scope, expected_type);
+    mark_owned_move_if_needed(program, expr->args.items[i], scope, expected_type);
     free(expected_type);
   }
   z_call_resolution_free(&choice_resolution);
@@ -5967,6 +6690,13 @@ static bool check_receiver_shape_call_expected(CheckContext *ctx, const Program 
   return_type = type_substitute_generic_signature(program, receiver_method->return_type, receiver_bindings, receiver_binding_len);
   set_expr_resolved_type(expr, return_type);
   if (!apply_checked_call_storage_effects(ctx, program, expr, scope, diag)) ok = false;
+  if (ok && receiver_requires_mut) {
+    char root[128];
+    char path[256];
+    if (expr_binding_path(receiver, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root)) {
+      scope_clear_maybe_present_for_place(scope, root, path);
+    }
+  }
 
 cleanup:
   free(return_type);
@@ -6143,17 +6873,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
         return set_diag_detail(diag, 3005, message, expr->line, expr->column, "runtime value", "builtin namespace", "use a supported member call such as std.fs.host()");
       }
       {
-        const char *actual = scope_type(scope, expr->text);
-        if (actual && strcmp(actual, "Type") == 0) {
-          char message[256];
-          snprintf(message, sizeof(message), "type name '%s' cannot be used as a runtime value", expr->text);
-          return set_diag_detail(diag, 3005, message, expr->line, expr->column, "runtime value", "type name", "use the type name in an annotation or constructor context");
-        }
-        if (actual && type_is_owned(actual) && scope_is_moved(scope, expr->text)) {
-          char actual_detail[160];
-          snprintf(actual_detail, sizeof(actual_detail), "%s was moved", expr->text);
-          return set_diag_detail(diag, 3013, "owned value was already moved", expr->line, expr->column, "live owned binding", actual_detail, "stop using the old binding after transferring ownership");
-        }
+        if (scope_has(scope, expr->text) && !check_place_available(expr, scope, expr->text, NULL, diag)) return false;
         if (!check_read_not_mutably_borrowed(expr, scope, diag)) return false;
       }
       if (expected && type_is_named_generic(expected, "MutSpan")) {
@@ -6191,8 +6911,9 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
       char path[256];
       bool local_place = expr_binding_path(expr, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root);
       if (local_place) {
-        if (!check_place_root_available(expr, scope, root, diag)) return false;
+        if (!check_place_available(expr, scope, root, path, diag)) return false;
         if (!check_place_index_exprs(ctx, program, expr, scope, diag)) return false;
+        if (!check_maybe_value_accesses_in_place(ctx, program, expr, scope, diag)) return false;
       } else if (!check_expr(ctx, program, expr->left, scope, diag)) return false;
       {
         const char *left_type = expr_type(ctx, program, expr->left, scope);
@@ -6219,6 +6940,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           size_t inner_len = 0;
           if (type_has_generic_arg(left_type, "Maybe", &inner, &inner_len)) {
             if (strcmp(expr->text, "has") == 0 || strcmp(expr->text, "value") == 0) {
+              if (!check_maybe_value_present(expr, scope, diag)) return false;
               if (!expr->resolved_type) set_expr_resolved_type(expr, expr_type(ctx, program, expr, scope));
               if (!check_read_not_mutably_borrowed(expr, scope, diag)) return false;
               return true;
@@ -6233,8 +6955,9 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
       char path[256];
       bool local_place = expr_binding_path(expr, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root);
       if (local_place) {
-        if (!check_place_root_available(expr, scope, root, diag)) return false;
+        if (!check_place_available(expr, scope, root, path, diag)) return false;
         if (!check_place_index_exprs(ctx, program, expr, scope, diag)) return false;
+        if (!check_maybe_value_accesses_in_place(ctx, program, expr, scope, diag)) return false;
       } else if (!check_expr(ctx, program, expr->left, scope, diag)) return false;
       const char *base_type = expr_type(ctx, program, expr->left, scope);
       char element_type[128];
@@ -6385,7 +7108,9 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
       return true;
     }
     case EXPR_CALL:
-      return check_call_expr_expected(ctx, program, expr, scope, diag, expected);
+      if (!check_call_expr_expected(ctx, program, expr, scope, diag, expected)) return false;
+      scope_clear_maybe_guards_for_mutating_call_args(ctx, program, expr, scope);
+      return true;
     case EXPR_CAST: {
       if (!validate_type_form(expr->text, diag, expr->line, expr->column)) return false;
       if (!check_expr(ctx, program, expr->left, scope, diag)) return false;
@@ -6406,9 +7131,16 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
       const char *left_type = expr_type(ctx, program, expr->left, scope);
       if (logical) {
         ProvenanceScopeSnapshot *before_right = provenance_scope_snapshot_capture(scope);
-        if (!check_expr_expected(ctx, program, expr->right, scope, diag, "Bool")) {
+        Scope right_scope = {.parent = scope};
+        if (strcmp(expr->text, "&&") == 0) {
+          scope_add_maybe_guards_from_condition_true(ctx, program, expr->left, scope, &right_scope);
+        } else if (strcmp(expr->text, "||") == 0) {
+          scope_add_maybe_guards_from_condition_false(ctx, program, expr->left, scope, &right_scope);
+        }
+        if (!check_expr_expected(ctx, program, expr->right, &right_scope, diag, "Bool")) {
           provenance_scope_snapshot_restore(before_right);
           provenance_scope_snapshot_free(before_right);
+          scope_free(&right_scope);
           return false;
         }
         ProvenanceScopeSnapshot *right_after = provenance_scope_snapshot_capture(scope);
@@ -6426,7 +7158,8 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
         provenance_scope_snapshot_restore_optional_branch(before_right, right_after, include_before, include_after);
         provenance_scope_snapshot_free(right_after);
         provenance_scope_snapshot_free(before_right);
-        const char *right_type = expr_type(ctx, program, expr->right, scope);
+        const char *right_type = expr_type(ctx, program, expr->right, &right_scope);
+        scope_free(&right_scope);
         if (!is_bool_type(left_type) || !is_bool_type(right_type)) return set_diag_detail(diag, 3006, "logical operators require Bool operands", expr->line, expr->column, "Bool operands", "non-Bool operand", "compare values explicitly before using && or ||");
         set_expr_resolved_type(expr, "Bool");
         return true;
@@ -6532,6 +7265,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           free(shape_bindings);
           return ok;
         }
+        mark_owned_move_if_needed(program, field->value, scope, field_type);
         free(field_type);
       }
       for (size_t i = 0; i < shape->fields.len; i++) {
@@ -6627,23 +7361,21 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
       size_t element_count = expr->array_repeat ? 1 : expr->args.len;
       for (size_t i = 0; i < element_count; i++) {
         if (!check_expr_expected(ctx, program, expr->args.items[i], scope, diag, element_expected)) return false;
+        const char *actual = expr_type(ctx, program, expr->args.items[i], scope);
         if (element_expected) {
-          const char *actual = expr_type(ctx, program, expr->args.items[i], scope);
           if (!types_compatible_in_scope(program, scope, element_expected, actual)) {
             char message[256];
             snprintf(message, sizeof(message), "array literal element %zu has incompatible type", i + 1);
             return set_diag_detail(diag, 3006, message, expr->args.items[i]->line, expr->args.items[i]->column, element_expected, actual, "use elements whose types match the fixed-array element type");
           }
-        } else {
-          const char *actual = expr_type(ctx, program, expr->args.items[i], scope);
-          if (i == 0) {
-            snprintf(inferred_element_type, sizeof(inferred_element_type), "%s", actual ? actual : "Unknown");
-          } else if (!types_compatible_in_scope(program, scope, inferred_element_type, actual)) {
-            char message[256];
-            snprintf(message, sizeof(message), "array literal element %zu has incompatible type", i + 1);
-            return set_diag_detail(diag, 3006, message, expr->args.items[i]->line, expr->args.items[i]->column, inferred_element_type, actual, "annotate the array or use elements with one inferred element type");
-          }
+        } else if (i == 0) {
+          snprintf(inferred_element_type, sizeof(inferred_element_type), "%s", actual ? actual : "Unknown");
+        } else if (!types_compatible_in_scope(program, scope, inferred_element_type, actual)) {
+          char message[256];
+          snprintf(message, sizeof(message), "array literal element %zu has incompatible type", i + 1);
+          return set_diag_detail(diag, 3006, message, expr->args.items[i]->line, expr->args.items[i]->column, inferred_element_type, actual, "annotate the array or use elements with one inferred element type");
         }
+        if (!check_owned_array_element_transfer(program, expr->args.items[i], scope, element_expected ? element_expected : actual, expr->array_repeat, diag)) return false;
       }
       if (expected && expected[0] == '[') {
         set_expr_resolved_type(expr, expected);
@@ -6673,18 +7405,72 @@ static bool check_expr(CheckContext *ctx, const Program *program, const Expr *ex
   return check_expr_expected(ctx, program, expr, scope, diag, NULL);
 }
 
-static void mark_owned_move_if_needed(const Expr *expr, Scope *scope, const char *destination_type) {
-  if (!expr || expr->kind != EXPR_IDENT || !destination_type || !type_is_owned(destination_type)) return;
-  const char *source_type = scope_type(scope, expr->text);
-  if (source_type && type_is_owned(source_type)) {
-    scope_set_moved(scope, expr->text, true);
-    ((Expr *)expr)->moves_ownership = true;
+static bool mark_owned_payload_move_from_maybe_expr(const Expr *maybe_expr, Scope *scope) {
+  PlaceVec places = {0};
+  bool marked = false;
+  if (collect_assignment_target_places(maybe_expr, scope, &places)) {
+    for (size_t i = 0; i < places.len; i++) {
+      Place *place = &places.items[i];
+      char *payload_path = origin_path_join(place->path, "value");
+      if (scope_add_moved_place_with_scope(scope, place->root_scope, place->root, payload_path)) marked = true;
+      free(payload_path);
+    }
   }
+  place_vec_free(&places);
+  return marked;
 }
 
-static void mark_owned_target_live_if_needed(const Expr *target, Scope *scope, const char *target_type) {
-  if (!target || target->kind != EXPR_IDENT || !target_type || !type_is_owned(target_type)) return;
-  scope_set_moved(scope, target->text, false);
+static void mark_owned_move_if_needed(const Program *program, const Expr *expr, Scope *scope, const char *destination_type) {
+  if (!expr || !scope || !destination_type || !type_contains_owned(program, destination_type, 0)) return;
+  if (expr->kind == EXPR_CHECK) {
+    if (mark_owned_payload_move_from_maybe_expr(expr->left, scope)) ((Expr *)expr)->moves_ownership = true;
+    return;
+  }
+  if (expr->kind == EXPR_RESCUE) {
+    if (mark_owned_payload_move_from_maybe_expr(expr->left, scope)) ((Expr *)expr)->moves_ownership = true;
+    mark_owned_move_if_needed(program, expr->right, scope, destination_type);
+    return;
+  }
+  PlaceVec places = {0};
+  bool marked = false;
+  if (collect_assignment_target_places(expr, scope, &places)) {
+    for (size_t i = 0; i < places.len; i++) {
+      Place *place = &places.items[i];
+      if (!origin_path_text(place->path)[0]) {
+        const char *source_type = scope_type_in_binding_scope(scope, place->root_scope, place->root);
+        if (source_type && type_contains_owned(program, source_type, 0)) {
+          if (scope_add_moved_place_with_scope(scope, place->root_scope, place->root, NULL)) marked = true;
+          scope_set_moved_in_scope(scope, place->root_scope, place->root, true);
+        }
+      } else if (scope_add_moved_resolved_place(scope, place)) {
+        marked = true;
+      }
+    }
+  }
+  place_vec_free(&places);
+  if (marked) ((Expr *)expr)->moves_ownership = true;
+}
+
+static bool check_owned_array_element_transfer(const Program *program, const Expr *expr, Scope *scope, const char *element_type, bool array_repeat, ZDiag *diag) {
+  if (array_repeat && type_contains_owned(program, element_type, 0)) {
+    if (expr && expr->kind == EXPR_NULL) return true;
+    return set_diag_detail(diag, 3013, "array repeat cannot duplicate owned values", expr ? expr->line : 0, expr ? expr->column : 0, "fresh owned value per element", element_type, "write each owned element explicitly so ownership is transferred once");
+  }
+  mark_owned_move_if_needed(program, expr, scope, element_type);
+  return true;
+}
+
+static void mark_owned_target_live_if_needed(const Program *program, const Expr *target, Scope *scope, const char *target_type) {
+  if (!target || !scope || !target_type || !type_contains_owned(program, target_type, 0)) return;
+  PlaceVec places = {0};
+  if (collect_assignment_target_places(target, scope, &places)) {
+    for (size_t i = 0; i < places.len; i++) {
+      Place *place = &places.items[i];
+      if (!origin_path_text(place->path)[0]) scope_set_moved_in_scope(scope, place->root_scope, place->root, false);
+      scope_clear_moved_resolved_place(scope, place);
+    }
+  }
+  place_vec_free(&places);
 }
 
 static bool check_lvalue_target(CheckContext *ctx, const Program *program, const Expr *target, Scope *scope, ZDiag *diag, char *out_type, size_t out_type_len) {
@@ -6715,8 +7501,9 @@ static bool check_lvalue_target(CheckContext *ctx, const Program *program, const
       char path[256];
       bool local_place = expr_binding_path(target->left, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root);
       if (local_place) {
-        if (!check_place_root_available(target->left, scope, root, diag)) return false;
+        if (!check_lvalue_base_available(target->left, scope, root, path, diag)) return false;
         if (!check_place_index_exprs(ctx, program, target->left, scope, diag)) return false;
+        if (!check_maybe_value_accesses_in_place(ctx, program, target, scope, diag)) return false;
       } else if (!check_expr(ctx, program, target->left, scope, diag)) return false;
       const char *read_base_type = expr_type(ctx, program, target->left, scope);
       char base_type[128];
@@ -6755,8 +7542,9 @@ static bool check_lvalue_target(CheckContext *ctx, const Program *program, const
       char path[256];
       bool local_place = expr_binding_path(target->left, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root);
       if (local_place) {
-        if (!check_place_root_available(target->left, scope, root, diag)) return false;
+        if (!check_lvalue_base_available(target->left, scope, root, path, diag)) return false;
         if (!check_place_index_exprs(ctx, program, target->left, scope, diag)) return false;
+        if (!check_maybe_value_accesses_in_place(ctx, program, target, scope, diag)) return false;
       } else if (!check_expr(ctx, program, target->left, scope, diag)) return false;
       const char *read_base_type = expr_type(ctx, program, target->left, scope);
       char element_type[128];
@@ -7477,7 +8265,8 @@ static bool type_value_provenance_from_place(
     return added;
   }
   char element_type[160];
-  if (fixed_array_type_parts(type, NULL, 0, element_type, sizeof(element_type))) {
+  if (fixed_array_type_parts(type, NULL, 0, element_type, sizeof(element_type)) ||
+      span_element_text(type, element_type, sizeof(element_type))) {
     char *next_value_path = origin_path_join(value_path, "[*]");
     char *next_root_path = origin_path_join(root_path, "[*]");
     bool added = type_value_provenance_from_place(program, element_type, scope, root, root_scope, next_root_path, next_value_path, origins, depth + 1);
@@ -7535,7 +8324,8 @@ static bool choice_constructor_value_provenance(CheckContext *ctx, const Program
 
   ValueProvenance payload_origins = {0};
   bool added = false;
-  if (expr_reference_provenance(ctx, program, expr->args.items[0], scope, &payload_origins)) {
+  if (expr_reference_provenance(ctx, program, expr->args.items[0], scope, &payload_origins) ||
+      span_view_expr_provenance(ctx, program, expr->args.items[0], scope, item_case->type, &payload_origins)) {
     added = value_provenance_add_all_with_prefix(origins, &payload_origins, item_case->name);
   }
   value_provenance_free(&payload_origins);
@@ -7598,6 +8388,66 @@ done:
   return added;
 }
 
+static bool stdlib_return_type_is_borrowed_view(const char *return_type, const char **value_prefix) {
+  if (value_prefix) *value_prefix = NULL;
+  if (!return_type) return false;
+  char element_type[128];
+  const char *inner = NULL;
+  size_t inner_len = 0;
+  if (type_has_generic_arg(return_type, "Maybe", &inner, &inner_len)) {
+    char inner_type[160];
+    snprintf(inner_type, sizeof(inner_type), "%.*s", (int)inner_len, inner);
+    if (!readable_view_element_text(inner_type, element_type, sizeof(element_type))) return false;
+    if (value_prefix) *value_prefix = "value";
+    return true;
+  }
+  return readable_view_element_text(return_type, element_type, sizeof(element_type));
+}
+
+static bool stdlib_borrowed_result_arg_index(const ZStdHelperInfo *helper, size_t *arg_index) {
+  if (!helper || !helper->name || !arg_index) return false;
+  const char *behavior = helper->allocation_behavior ? helper->allocation_behavior : "";
+  if (strncmp(behavior, "borrows input", strlen("borrows input")) == 0 ||
+      strncmp(behavior, "borrows/static", strlen("borrows/static")) == 0 ||
+      strncmp(behavior, "borrows owned buffer", strlen("borrows owned buffer")) == 0 ||
+      strncmp(behavior, "writes caller buffer", strlen("writes caller buffer")) == 0 ||
+      strncmp(behavior, "writes non-overlapping caller buffer", strlen("writes non-overlapping caller buffer")) == 0) {
+    *arg_index = 0;
+    return true;
+  }
+  return false;
+}
+
+static bool stdlib_result_value_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins) {
+  if (!program || !expr || expr->kind != EXPR_CALL || !expr->left || !origins) return false;
+  ZCallResolution resolution = {0};
+  if (!resolve_stdlib_call(expr, &resolution)) return false;
+  bool added = false;
+  const char *value_prefix = NULL;
+  size_t arg_index = 0;
+  if (!stdlib_return_type_is_borrowed_view(resolution.return_type, &value_prefix) ||
+      !stdlib_borrowed_result_arg_index(resolution.std_helper, &arg_index) ||
+      arg_index >= expr->args.len) {
+    goto done;
+  }
+  const Expr *arg = expr->args.items[arg_index];
+  const char *arg_type = z_call_resolution_param_type(&resolution, arg_index);
+  if (!arg_type && resolution.std_helper && arg_index < Z_STD_HELPER_MAX_ARGS) arg_type = resolution.std_helper->arg_types[arg_index];
+  ValueProvenance arg_origins = {0};
+  if (expr_reference_provenance(ctx, program, arg, scope, &arg_origins) ||
+      (arg_type && span_view_expr_provenance(ctx, program, arg, scope, arg_type, &arg_origins))) {
+    if (value_prefix) {
+      if (value_provenance_add_all_with_prefix(origins, &arg_origins, value_prefix)) added = true;
+    } else if (value_provenance_add_all(origins, &arg_origins)) {
+      added = true;
+    }
+  }
+  value_provenance_free(&arg_origins);
+done:
+  z_call_resolution_free(&resolution);
+  return added;
+}
+
 static bool value_provenance_add_actual_place(ValueProvenance *origins, const Expr *actual, Scope *scope, const ProvenanceEntry *summary_entry) {
   if (!origins || !actual || !scope || !summary_entry) return false;
   char root[128];
@@ -7623,6 +8473,7 @@ static bool instantiate_call_provenance_entry(CheckContext *ctx, const Program *
 static bool call_result_value_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins) {
   if (!program || !expr || expr->kind != EXPR_CALL || !expr->left || !origins) return false;
   if (std_mem_get_value_provenance(ctx, program, expr, scope, origins)) return true;
+  if (stdlib_result_value_provenance(ctx, program, expr, scope, origins)) return true;
   const char *return_type = expr_type(ctx, program, expr, scope);
   bool return_mut = type_is_named_generic(return_type, "mutref");
 
@@ -7805,21 +8656,44 @@ static bool expr_reference_provenance(CheckContext *ctx, const Program *program,
   }
   if (expr->kind == EXPR_SHAPE_LITERAL) {
     bool added = false;
+    const char *owner_type = expr->resolved_type ? expr->resolved_type : expr->text;
+    char owned_owner[160];
+    if (owned_inner_text(owner_type, owned_owner, sizeof(owned_owner))) owner_type = owned_owner;
+    const Shape *shape = find_shape_for_type(program, type_strip_const(owner_type));
+    if (!shape) shape = find_shape(program, expr->text);
     for (size_t i = 0; i < expr->fields.len; i++) {
+      FieldInit *field_init = &expr->fields.items[i];
+      char *field_type = NULL;
+      if (shape) {
+        const Param *shape_field = find_shape_field(shape, field_init->name);
+        if (shape_field) field_type = shape_field_type_for_owner(program, shape, owner_type, shape_field);
+      }
       ValueProvenance field_origins = {0};
-      if (expr_reference_provenance(ctx, program, expr->fields.items[i].value, scope, &field_origins)) {
-        if (value_provenance_add_all_with_prefix(origins, &field_origins, expr->fields.items[i].name)) added = true;
+      bool collected = expr_reference_provenance(ctx, program, field_init->value, scope, &field_origins);
+      if (!collected && field_type) {
+        collected = span_view_expr_provenance(ctx, program, field_init->value, scope, field_type, &field_origins);
+      }
+      if (collected) {
+        if (value_provenance_add_all_with_prefix(origins, &field_origins, field_init->name)) added = true;
       }
       value_provenance_free(&field_origins);
+      free(field_type);
     }
     return added;
   }
   if (expr->kind == EXPR_ARRAY_LITERAL) {
     bool added = false;
+    char element_type[160];
+    bool has_element_type = expr->resolved_type &&
+      fixed_array_type_parts(expr->resolved_type, NULL, 0, element_type, sizeof(element_type));
     size_t element_count = expr->array_repeat ? (expr->args.len > 0 ? 1 : 0) : expr->args.len;
     for (size_t i = 0; i < element_count; i++) {
       ValueProvenance item_origins = {0};
-      if (expr_reference_provenance(ctx, program, expr->args.items[i], scope, &item_origins)) {
+      bool collected = expr_reference_provenance(ctx, program, expr->args.items[i], scope, &item_origins);
+      if (!collected && has_element_type) {
+        collected = span_view_expr_provenance(ctx, program, expr->args.items[i], scope, element_type, &item_origins);
+      }
+      if (collected) {
         char element_path[40];
         snprintf(element_path, sizeof(element_path), "[%zu]", i);
         if (value_provenance_add_all_with_prefix(origins, &item_origins, element_path)) added = true;
@@ -7834,11 +8708,12 @@ static bool expr_reference_provenance(CheckContext *ctx, const Program *program,
 static bool register_borrow_binding(CheckContext *ctx, const Program *program, const Stmt *stmt, Scope *scope) {
   if (!stmt || !stmt->name || !stmt->expr) return false;
   ValueProvenance origins = {0};
-  if (!expr_reference_provenance(ctx, program, stmt->expr, scope, &origins)) {
+  const char *binding_type = stmt->resolved_type ? stmt->resolved_type : stmt->type;
+  if (!expr_reference_provenance(ctx, program, stmt->expr, scope, &origins) &&
+      !span_view_expr_provenance(ctx, program, stmt->expr, scope, binding_type, &origins)) {
     value_provenance_free(&origins);
     return false;
   }
-  const char *binding_type = stmt->resolved_type ? stmt->resolved_type : stmt->type;
   if (binding_type && (type_is_named_generic(binding_type, "ref") || type_is_named_generic(binding_type, "mutref"))) {
     bool mut_borrow = type_is_named_generic(binding_type, "mutref");
     for (size_t i = 0; i < origins.len; i++) origins.items[i].mutable_borrow = mut_borrow;
@@ -7854,24 +8729,9 @@ static bool collect_assignment_target_places(const Expr *target, Scope *scope, P
   char path[256];
   if (!expr_binding_path(target, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) return false;
 
-  const char *root_type = scope_type(scope, root);
-  bool root_ref_like = type_is_named_generic(root_type, "ref") || type_is_named_generic(root_type, "mutref");
-  bool added = false;
-  if (root_ref_like && origin_path_text(path)[0]) {
-    ValueProvenance root_origins = {0};
-    if (scope_copy_value_provenance(scope, root, &root_origins)) {
-      for (size_t i = 0; i < root_origins.len; i++) {
-        ProvenanceEntry *entry = &root_origins.items[i];
-        if (origin_path_text(entry->value_path)[0]) continue;
-        char *target_path = origin_path_join(entry->origin.path, path);
-        if (place_vec_add(places, entry->origin.root, entry->origin.root_scope, target_path)) added = true;
-        free(target_path);
-      }
-    }
-    value_provenance_free(&root_origins);
-  }
-  if (added) return true;
-  return place_vec_add(places, root, scope_binding_scope(scope, root), path);
+  Scope *root_scope = scope_binding_scope(scope, root);
+  if (collect_provenance_resolved_places(scope, root_scope, root, path, true, places)) return true;
+  return place_vec_add(places, root, root_scope, path);
 }
 
 static bool update_borrow_assignment(CheckContext *ctx, const Program *program, const Expr *target, const Expr *value, Scope *scope, ZDiag *diag) {
@@ -7883,7 +8743,8 @@ static bool update_borrow_assignment(CheckContext *ctx, const Program *program, 
   PlaceVec targets = {0};
   if (!collect_assignment_target_places(target, scope, &targets)) return true;
   ValueProvenance origins = {0};
-  if (expr_reference_provenance(ctx, program, value, scope, &origins)) {
+  if (expr_reference_provenance(ctx, program, value, scope, &origins) ||
+      span_view_expr_provenance(ctx, program, value, scope, target_type, &origins)) {
     for (size_t target_index = 0; target_index < targets.len; target_index++) {
       Scope *target_scope = targets.items[target_index].root_scope ? targets.items[target_index].root_scope : scope_binding_scope(scope, targets.items[target_index].root);
       for (size_t i = 0; i < origins.len; i++) {
@@ -7961,6 +8822,17 @@ static char *return_provenance_type_text(const Program *program, const char *typ
   return z_strdup(type);
 }
 
+static bool collect_return_expr_provenance(CheckContext *ctx, const Program *program, const Function *fun, const Expr *expr, Scope *scope, GenericBinding *bindings, size_t binding_len, ValueProvenance *out) {
+  ValueProvenance origins = {0};
+  char *return_type = return_provenance_type_text(program, fun ? fun->return_type : NULL, bindings, binding_len);
+  bool added = expr_reference_provenance(ctx, program, expr, scope, &origins) ||
+               span_view_expr_provenance(ctx, program, expr, scope, return_type ? return_type : (fun ? fun->return_type : NULL), &origins);
+  if (added) added = value_provenance_add_all(out, &origins);
+  free(return_type);
+  value_provenance_free(&origins);
+  return added;
+}
+
 static bool collect_return_value_provenance_from_stmt_vec(CheckContext *ctx, const Program *program, const Function *fun, const StmtVec *body, Scope *scope, GenericBinding *bindings, size_t binding_len, ValueProvenance *out, bool *may_return, bool *complete) {
   if (!program || !fun || !body || !scope || !out) {
     if (complete) *complete = false;
@@ -8005,11 +8877,7 @@ static bool collect_return_value_provenance_from_stmt_vec(CheckContext *ctx, con
         return added;
       }
       if (may_return) *may_return = true;
-      ValueProvenance origins = {0};
-      if (expr_reference_provenance(ctx, program, stmt->expr, scope, &origins)) {
-        if (value_provenance_add_all(out, &origins)) added = true;
-      }
-      value_provenance_free(&origins);
+      if (collect_return_expr_provenance(ctx, program, fun, stmt->expr, scope, bindings, binding_len, out)) added = true;
       return added;
     }
     if (stmt->kind == STMT_RAISE) {
@@ -8188,7 +9056,7 @@ static bool function_provenance_summary(CheckContext *ctx, const Program *progra
     if (param->name) {
       char *param_type = return_provenance_type_text(program, param->type, bindings, binding_len);
       scope_add_param_decl(&scope, param->name, param_type ? param_type : "Unknown", param->line, param->column);
-      if (type_is_named_generic(param_type, "mutref")) {
+      if (type_is_named_generic(param_type, "mutref") || type_is_named_generic(param_type, "MutSpan")) {
         seed_param_storage_value_provenance(program, &scope, param->name, param_type ? param_type : "Unknown");
       }
       free(param_type);
@@ -8205,9 +9073,9 @@ static bool function_provenance_summary(CheckContext *ctx, const Program *progra
     const Param *param = &fun->params.items[param_index];
     if (!param->name) continue;
     char *param_type = call_param_type_text(program, fun, param_index, bindings, binding_len);
-    bool mutref_param = type_is_named_generic(param_type, "mutref");
+    bool mutating_param = type_is_named_generic(param_type, "mutref") || type_is_named_generic(param_type, "MutSpan");
     free(param_type);
-    if (!mutref_param) continue;
+    if (!mutating_param) continue;
     ValueProvenance value = {0};
     if (scope_copy_value_provenance(&scope, param->name, &value)) {
       for (size_t i = 0; i < value.len; i++) {
@@ -8275,6 +9143,71 @@ static bool collect_effect_target_places(CheckContext *ctx, const Program *progr
   return false;
 }
 
+static void scope_clear_maybe_guards_for_places(Scope *scope, const PlaceVec *places) {
+  if (!scope || !places) return;
+  for (size_t i = 0; i < places->len; i++) {
+    const Place *place = &places->items[i];
+    scope_clear_maybe_present_for_resolved_place(scope, place);
+  }
+}
+
+static void scope_clear_maybe_guards_for_mutating_actual(CheckContext *ctx, const Program *program, const Expr *actual, Scope *scope) {
+  if (!program || !actual || !scope) return;
+  PlaceVec places = {0};
+  if (collect_effect_target_places(ctx, program, actual, scope, &places)) {
+    scope_clear_maybe_guards_for_places(scope, &places);
+  }
+  place_vec_free(&places);
+}
+
+static void scope_clear_maybe_guards_for_resolved_call_mutations(CheckContext *ctx, const Program *program, const Expr *call, Scope *lookup_scope, Scope *guard_scope) {
+  if (!program || !call || call->kind != EXPR_CALL || !lookup_scope || !guard_scope) return;
+  ResolvedProvenanceCall resolved = {0};
+  if (!resolve_provenance_call(ctx, program, call, lookup_scope, expr_type(ctx, program, call, lookup_scope), ctx ? ctx->function : NULL, ctx ? ctx->return_provenance_expr_bindings : NULL, ctx ? ctx->return_provenance_expr_binding_len : 0, &resolved)) {
+    resolved_provenance_call_free(&resolved);
+    return;
+  }
+  const ZCallResolution *resolution = &resolved.resolution;
+  const Function *callee = resolution->callee;
+  for (size_t param_index = 0; callee && param_index < callee->params.len; param_index++) {
+    char *param_type = resolved_call_param_type_text(program, &resolved, param_index);
+    bool mutating_param = type_is_named_generic(param_type, "mutref") || type_is_named_generic(param_type, "MutSpan");
+    free(param_type);
+    if (!mutating_param) continue;
+    const Expr *actual = call_actual_for_param(call, resolution->receiver_expr, resolution->param_offset, param_index);
+    PlaceVec places = {0};
+    if (collect_effect_target_places(ctx, program, actual, lookup_scope, &places)) {
+      for (size_t i = 0; i < places.len; i++) {
+        scope_clear_maybe_present_in_scope_for_resolved_place(guard_scope, lookup_scope, &places.items[i]);
+      }
+    }
+    place_vec_free(&places);
+  }
+  resolved_provenance_call_free(&resolved);
+}
+
+static void scope_clear_maybe_guards_for_mutating_call_args(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope) {
+  if (!program || !call || call->kind != EXPR_CALL || !scope) return;
+  scope_clear_maybe_guards_for_mutable_borrow_args(call, scope);
+
+  ResolvedProvenanceCall resolved = {0};
+  if (!resolve_provenance_call(ctx, program, call, scope, expr_type(ctx, program, call, scope), ctx ? ctx->function : NULL, ctx ? ctx->return_provenance_expr_bindings : NULL, ctx ? ctx->return_provenance_expr_binding_len : 0, &resolved)) {
+    resolved_provenance_call_free(&resolved);
+    return;
+  }
+  const ZCallResolution *resolution = &resolved.resolution;
+  const Function *callee = resolution->callee;
+  for (size_t param_index = 0; callee && param_index < callee->params.len; param_index++) {
+    char *param_type = resolved_call_param_type_text(program, &resolved, param_index);
+    bool mutating_param = type_is_named_generic(param_type, "mutref") || type_is_named_generic(param_type, "MutSpan");
+    free(param_type);
+    if (!mutating_param) continue;
+    const Expr *actual = call_actual_for_param(call, resolution->receiver_expr, resolution->param_offset, param_index);
+    scope_clear_maybe_guards_for_mutating_actual(ctx, program, actual, scope);
+  }
+  resolved_provenance_call_free(&resolved);
+}
+
 static bool place_storage_value_provenance_under_path(CheckContext *ctx, const Program *program, Scope *scope, const Place *place, const char *relative_path, ValueProvenance *out) {
   (void)ctx;
   if (!program || !scope || !place || !place->root || !out) return false;
@@ -8332,13 +9265,14 @@ static bool instantiate_call_provenance_entry(CheckContext *ctx, const Program *
   ValueProvenance actual_origins = {0};
   char *param_type = resolved_call_param_type_text(program, resolved, param_index);
   bool reference_param = type_is_named_generic(param_type, "ref") || type_is_named_generic(param_type, "mutref");
-  free(param_type);
+  bool view_param = type_is_named_generic(param_type, "Span") || type_is_named_generic(param_type, "MutSpan");
   if (reference_param && callee->params.items[param_index].name &&
       strcmp(callee->params.items[param_index].name, summary_entry->origin.root) == 0) {
     ValueProvenance storage_origins = {0};
     if (actual_storage_value_provenance_under_path(ctx, program, actual, scope, summary_entry->origin.path, &storage_origins)) {
       if (value_provenance_add_all_as_with_prefix(out, &storage_origins, summary_entry->mutable_borrow, summary_entry->value_path)) added = true;
       value_provenance_free(&storage_origins);
+      free(param_type);
       return added;
     }
     value_provenance_free(&storage_origins);
@@ -8350,7 +9284,8 @@ static bool instantiate_call_provenance_entry(CheckContext *ctx, const Program *
   bool implicit_reference_actual = reference_param && !actual_ref_like &&
     expr_binding_path(actual, actual_root, sizeof(actual_root), actual_path, sizeof(actual_path)) &&
     scope_has(scope, actual_root);
-  if (expr_reference_provenance_as(ctx, program, actual, scope, &actual_origins, summary_entry->mutable_borrow)) {
+  if (expr_reference_provenance_as(ctx, program, actual, scope, &actual_origins, summary_entry->mutable_borrow) ||
+      (view_param && span_view_expr_provenance(ctx, program, actual, scope, param_type, &actual_origins))) {
     ValueProvenance selected_origins = {0};
     ValueProvenance *source_origins = &actual_origins;
     if (summary_entry->origin.path) {
@@ -8378,6 +9313,8 @@ static bool instantiate_call_provenance_entry(CheckContext *ctx, const Program *
     if (expr_binding_path(actual, root, sizeof(root), path, sizeof(path)) && scope_has(scope, root)) {
       if (reference_param) {
         if (value_provenance_add_actual_place(out, actual, scope, summary_entry)) added = true;
+      } else if (view_param && (type_is_named_generic(actual_type, "Span") || type_is_named_generic(actual_type, "MutSpan"))) {
+        added = false;
       } else {
         char *origin_path = origin_path_join(path, summary_entry->origin.path);
         bool local_storage = summary_entry->origin.path ? reference_place_origin_is_local_storage(scope, root) : reference_source_origin_is_local_storage(scope, root);
@@ -8386,6 +9323,7 @@ static bool instantiate_call_provenance_entry(CheckContext *ctx, const Program *
       }
     }
   }
+  free(param_type);
   value_provenance_free(&actual_origins);
   return added;
 }
@@ -8496,9 +9434,9 @@ static bool apply_provenance_call_storage_effects(CheckContext *ctx, const Progr
   if (!complete) {
     for (size_t i = 0; i < resolution->callee->params.len; i++) {
       char *param_type = resolved_call_param_type_text(program, resolved, i);
-      bool mutref_param = type_is_named_generic(param_type, "mutref");
+      bool mutating_param = type_is_named_generic(param_type, "mutref") || type_is_named_generic(param_type, "MutSpan");
       free(param_type);
-      if (!mutref_param) continue;
+      if (!mutating_param) continue;
       provenance_storage_effect_vec_free(&effects);
       return set_diag_detail(diag, 3030, "cannot verify provenance effects for mutable parameter call", resolution->call_expr->line, resolution->call_expr->column, "complete provenance summary", "recursive or incomplete mutable parameter summary", "simplify the call cycle or keep reference-storing mutable calls non-recursive");
     }
@@ -8602,11 +9540,12 @@ static bool check_assignment_not_borrowed(const Expr *target, Scope *scope, ZDia
   return false;
 }
 
-static bool check_return_borrow_escape(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag) {
+static bool check_return_borrow_escape(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, const char *return_type, ZDiag *diag) {
   diag = check_context_diag(ctx, diag);
   if (!expr) return true;
   ValueProvenance origins = {0};
-  if (!expr_reference_provenance(ctx, program, expr, scope, &origins)) {
+  if (!expr_reference_provenance(ctx, program, expr, scope, &origins) &&
+      !span_view_expr_provenance(ctx, program, expr, scope, return_type, &origins)) {
     value_provenance_free(&origins);
     return true;
   }
@@ -8644,10 +9583,10 @@ static bool check_return_call_borrow_escape(CheckContext *ctx, const Program *pr
   return true;
 }
 
-static bool check_return_reference_escape(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag) {
+static bool check_return_reference_escape(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, const char *return_type, ZDiag *diag) {
   diag = check_context_diag(ctx, diag);
   if (!check_return_call_borrow_escape(ctx, program, expr, scope, diag)) return false;
-  return check_return_borrow_escape(ctx, program, expr, scope, diag);
+  return check_return_borrow_escape(ctx, program, expr, scope, return_type, diag);
 }
 
 static bool param_vec_contains_name(const ParamVec *params, const char *name) {
@@ -8712,6 +9651,122 @@ static bool check_match_guard(CheckContext *ctx, const Program *program, MatchAr
   return true;
 }
 
+static bool match_arm_is_fallback(const MatchArm *arm) {
+  return arm && arm->case_name && strcmp(arm->case_name, "_") == 0;
+}
+
+static bool scalar_match_arm_bounds(const MatchArm *arm, unsigned long long *start, unsigned long long *end) {
+  if (!arm || match_arm_is_fallback(arm)) return false;
+  unsigned long long parsed_start = 0;
+  unsigned long long parsed_end = 0;
+  if (!parse_match_int_literal(arm->case_name, &parsed_start)) return false;
+  parsed_end = parsed_start;
+  if (arm->range_end && !parse_match_int_literal(arm->range_end, &parsed_end)) return false;
+  if (start) *start = parsed_start;
+  if (end) *end = parsed_end;
+  return true;
+}
+
+static bool scalar_match_arms_may_share_value(const MatchArm *left, const MatchArm *right, bool is_bool) {
+  if (!left || !right) return false;
+  if (match_arm_is_fallback(left) || match_arm_is_fallback(right)) return true;
+  if (is_bool) return !left->range_end && !right->range_end && strcmp(left->case_name, right->case_name) == 0;
+  unsigned long long left_start = 0;
+  unsigned long long left_end = 0;
+  unsigned long long right_start = 0;
+  unsigned long long right_end = 0;
+  if (!scalar_match_arm_bounds(left, &left_start, &left_end) ||
+      !scalar_match_arm_bounds(right, &right_start, &right_end)) return true;
+  return left_start <= right_end && right_start <= left_end;
+}
+
+static bool variant_match_arms_may_share_value(const MatchArm *left, const MatchArm *right) {
+  if (!left || !right) return false;
+  if (match_arm_is_fallback(left) || match_arm_is_fallback(right)) return true;
+  return strcmp(left->case_name, right->case_name) == 0;
+}
+
+static bool match_guard_can_be_false(const MatchArm *arm) {
+  return !arm || !arm->guard || arm->guard->kind != EXPR_BOOL || !arm->guard->bool_value;
+}
+
+static void scope_add_bool_match_case_guards(CheckContext *ctx, const Program *program, const Expr *match_expr, const MatchArm *arm, Scope *source_scope, Scope *guard_scope) {
+  if (!arm || arm->range_end || match_arm_is_fallback(arm)) return;
+  if (strcmp(arm->case_name, "true") == 0) {
+    scope_add_maybe_guards_from_condition_true(ctx, program, match_expr, source_scope, guard_scope);
+  } else if (strcmp(arm->case_name, "false") == 0) {
+    scope_add_maybe_guards_from_condition_false(ctx, program, match_expr, source_scope, guard_scope);
+  }
+}
+
+static bool match_subject_maybe_guard_invalidated_by_guard(CheckContext *ctx, const Program *program, const Expr *match_expr, const Expr *guard, Scope *scope) {
+  if (!match_expr || !guard || !scope) return false;
+  char root[128];
+  char path[256];
+  if (!maybe_presence_guard_place(ctx, program, match_expr, scope, root, sizeof(root), path, sizeof(path))) return false;
+  Scope temp = {.parent = scope};
+  if (!scope_add_maybe_present(&temp, scope, root, path)) return false;
+  scope_clear_maybe_guards_for_expr_mutations(ctx, program, guard, scope, &temp);
+  Place fact = {
+    .root = root,
+    .root_scope = scope_binding_scope(scope, root),
+    .path = path[0] ? path : NULL,
+  };
+  bool still_present = place_vec_contains(&temp.maybe_present, &fact);
+  scope_free(&temp);
+  return !still_present;
+}
+
+static void seed_variant_match_payload_scope(CheckContext *ctx, const Program *program, const Expr *match_expr, Scope *match_scope, Scope *arm_scope, const MatchArm *arm, const Choice *item_choice) {
+  if (!arm || match_arm_is_fallback(arm) || !arm->payload_name || !item_choice) return;
+  const Param *item_case = find_case(&item_choice->cases, arm->case_name);
+  if (!item_case || !item_case->type) return;
+  scope_add(arm_scope, arm->payload_name, item_case->type, false);
+  register_match_payload_binding_provenance(ctx, program, match_expr, match_scope, arm_scope, arm->payload_name, arm->case_name);
+}
+
+static bool apply_match_guard_false_fallthrough(CheckContext *ctx, const Program *program, MatchArm *arm, Scope *match_scope, Scope *guard_scope, ZDiag *diag) {
+  if (!check_match_guard(ctx, program, arm, guard_scope, diag)) return false;
+  scope_clear_maybe_guards_for_expr_mutations(ctx, program, arm->guard, guard_scope, match_scope);
+  Scope fallthrough_facts = {.parent = match_scope};
+  scope_add_maybe_guards_from_condition_false(ctx, program, arm->guard, guard_scope, &fallthrough_facts);
+  scope_add_maybe_present_all(match_scope, &fallthrough_facts);
+  scope_free(&fallthrough_facts);
+  return true;
+}
+
+static bool apply_prior_scalar_match_guard_fallthroughs(CheckContext *ctx, const Program *program, const Stmt *stmt, size_t current_index, bool is_bool, Scope *scope, ZDiag *diag, bool *case_facts_valid) {
+  bool facts_valid = true;
+  MatchArm *current = &stmt->match_arms.items[current_index];
+  for (size_t previous_index = 0; previous_index < current_index; previous_index++) {
+    MatchArm *previous = &stmt->match_arms.items[previous_index];
+    if (!previous->guard || !match_guard_can_be_false(previous) || !scalar_match_arms_may_share_value(previous, current, is_bool)) continue;
+    bool invalidates_match_fact = is_bool && facts_valid && match_subject_maybe_guard_invalidated_by_guard(ctx, program, stmt->expr, previous->guard, scope);
+    Scope guard_scope = {.parent = scope};
+    if (is_bool && facts_valid) scope_add_bool_match_case_guards(ctx, program, stmt->expr, previous, scope, &guard_scope);
+    bool ok = apply_match_guard_false_fallthrough(ctx, program, previous, scope, &guard_scope, diag);
+    scope_free(&guard_scope);
+    if (!ok) return false;
+    if (invalidates_match_fact) facts_valid = false;
+  }
+  if (case_facts_valid) *case_facts_valid = facts_valid;
+  return true;
+}
+
+static bool apply_prior_variant_match_guard_fallthroughs(CheckContext *ctx, const Program *program, const Stmt *stmt, size_t current_index, Scope *scope, ZDiag *diag, const Choice *item_choice) {
+  MatchArm *current = &stmt->match_arms.items[current_index];
+  for (size_t previous_index = 0; previous_index < current_index; previous_index++) {
+    MatchArm *previous = &stmt->match_arms.items[previous_index];
+    if (!previous->guard || !match_guard_can_be_false(previous) || !variant_match_arms_may_share_value(previous, current)) continue;
+    Scope guard_scope = {.parent = scope};
+    seed_variant_match_payload_scope(ctx, program, stmt->expr, scope, &guard_scope, previous, item_choice);
+    bool ok = apply_match_guard_false_fallthrough(ctx, program, previous, scope, &guard_scope, diag);
+    scope_free(&guard_scope);
+    if (!ok) return false;
+  }
+  return true;
+}
+
 static bool check_scalar_match(CheckContext *ctx, const Program *program, const Function *fun, const Stmt *stmt, Scope *scope, ZDiag *diag, int loop_depth, const char *match_type) {
   diag = check_context_diag(ctx, diag);
   bool is_bool = is_bool_type(match_type);
@@ -8749,7 +9804,6 @@ static bool check_scalar_match(CheckContext *ctx, const Program *program, const 
         }
       }
     }
-    if (!check_match_guard(ctx, program, arm, scope, diag)) return false;
   }
   if (!has_fallback) {
     if (is_bool) {
@@ -8765,26 +9819,131 @@ static bool check_scalar_match(CheckContext *ctx, const Program *program, const 
   ProvenanceScopeSnapshot *before = provenance_scope_snapshot_capture(scope);
   ProvenanceScopeSnapshot **arm_states = z_checked_calloc(stmt->match_arms.len, sizeof(ProvenanceScopeSnapshot *));
   bool *arm_continues = z_checked_calloc(stmt->match_arms.len, sizeof(bool));
+  PlaceVec *arm_maybe_present = z_checked_calloc(stmt->match_arms.len, sizeof(PlaceVec));
   for (size_t arm_index = 0; arm_index < stmt->match_arms.len; arm_index++) {
     provenance_scope_snapshot_restore(before);
+    bool case_facts_valid = true;
+    if (!apply_prior_scalar_match_guard_fallthroughs(ctx, program, stmt, arm_index, is_bool, scope, diag, &case_facts_valid)) {
+      provenance_scope_snapshot_restore(before);
+      for (size_t i = 0; i < stmt->match_arms.len; i++) {
+        provenance_scope_snapshot_free(arm_states[i]);
+        place_vec_free(&arm_maybe_present[i]);
+      }
+      free(arm_states);
+      free(arm_continues);
+      free(arm_maybe_present);
+      provenance_scope_snapshot_free(before);
+      return false;
+    }
     Scope arm_scope = {.parent = scope};
-    bool ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->match_arms.items[arm_index].body, &arm_scope, diag, loop_depth);
+    MatchArm *arm = &stmt->match_arms.items[arm_index];
+    if (is_bool && case_facts_valid) scope_add_bool_match_case_guards(ctx, program, stmt->expr, arm, scope, &arm_scope);
+    if (!check_match_guard(ctx, program, arm, &arm_scope, diag)) {
+      scope_free(&arm_scope);
+      provenance_scope_snapshot_restore(before);
+      for (size_t i = 0; i < stmt->match_arms.len; i++) {
+        provenance_scope_snapshot_free(arm_states[i]);
+        place_vec_free(&arm_maybe_present[i]);
+      }
+      free(arm_states);
+      free(arm_continues);
+      free(arm_maybe_present);
+      provenance_scope_snapshot_free(before);
+      return false;
+    }
+    scope_clear_maybe_guards_for_expr_mutations(ctx, program, arm->guard, &arm_scope, &arm_scope);
+    scope_add_maybe_guards_from_condition_true(ctx, program, arm->guard, &arm_scope, &arm_scope);
+    bool ok = check_stmt_vec_with_loop(ctx, program, fun, &arm->body, &arm_scope, diag, loop_depth);
+    place_vec_add_all(&arm_maybe_present[arm_index], &arm_scope.maybe_present);
     scope_free(&arm_scope);
     if (!ok) {
       provenance_scope_snapshot_restore(before);
-      for (size_t i = 0; i < stmt->match_arms.len; i++) provenance_scope_snapshot_free(arm_states[i]);
+      for (size_t i = 0; i < stmt->match_arms.len; i++) {
+        provenance_scope_snapshot_free(arm_states[i]);
+        place_vec_free(&arm_maybe_present[i]);
+      }
       free(arm_states);
       free(arm_continues);
+      free(arm_maybe_present);
       provenance_scope_snapshot_free(before);
       return false;
     }
     arm_states[arm_index] = provenance_scope_snapshot_capture(scope);
-    arm_continues[arm_index] = !stmt_vec_guarantees_exit(&stmt->match_arms.items[arm_index].body, fun->raises);
+    arm_continues[arm_index] = !stmt_vec_guarantees_exit(&arm->body, fun->raises);
   }
   provenance_scope_snapshot_restore_union(before, arm_states, arm_continues, stmt->match_arms.len);
-  for (size_t i = 0; i < stmt->match_arms.len; i++) provenance_scope_snapshot_free(arm_states[i]);
+  size_t continuing_arm = stmt->match_arms.len;
+  size_t continuing_count = 0;
+  for (size_t i = 0; i < stmt->match_arms.len; i++) {
+    if (arm_continues[i]) {
+      continuing_arm = i;
+      continuing_count++;
+    }
+  }
+  if (continuing_count == 1) {
+    Scope guard_source = {.parent = scope, .maybe_present = arm_maybe_present[continuing_arm]};
+    scope_add_maybe_present_all(scope, &guard_source);
+  }
+  for (size_t i = 0; i < stmt->match_arms.len; i++) {
+    provenance_scope_snapshot_free(arm_states[i]);
+    place_vec_free(&arm_maybe_present[i]);
+  }
   free(arm_states);
   free(arm_continues);
+  free(arm_maybe_present);
+  provenance_scope_snapshot_free(before);
+  return true;
+}
+
+static bool check_if_stmt(CheckContext *ctx, const Program *program, const Function *fun, const Stmt *stmt, Scope *scope, ZDiag *diag, int loop_depth) {
+  if (!check_expr_expected(ctx, program, stmt->expr, scope, diag, "Bool")) return false;
+  const char *condition_type = expr_type(ctx, program, stmt->expr, scope);
+  if (!is_bool_type(condition_type)) return set_diag_detail(diag, 3016, "condition must be Bool", stmt->expr->line, stmt->expr->column, "Bool", condition_type, "compare explicitly or produce a Bool value");
+  bool then_possible = true;
+  bool else_possible = true;
+  if (stmt->expr && stmt->expr->kind == EXPR_BOOL) {
+    then_possible = stmt->expr->bool_value;
+    else_possible = !stmt->expr->bool_value;
+  }
+  ProvenanceScopeSnapshot *before = provenance_scope_snapshot_capture(scope);
+  Scope then_scope = {.parent = scope};
+  scope_add_maybe_guards_from_condition_true(ctx, program, stmt->expr, scope, &then_scope);
+  bool ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->then_body, &then_scope, diag, loop_depth);
+  if (!ok) {
+    scope_free(&then_scope);
+    provenance_scope_snapshot_restore(before);
+    provenance_scope_snapshot_free(before);
+    return false;
+  }
+  ProvenanceScopeSnapshot *then_after = provenance_scope_snapshot_capture(scope);
+  provenance_scope_snapshot_restore(before);
+  Scope else_scope = {.parent = scope};
+  scope_add_maybe_guards_from_condition_false(ctx, program, stmt->expr, scope, &else_scope);
+  ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->else_body, &else_scope, diag, loop_depth);
+  if (!ok) {
+    scope_free(&then_scope);
+    scope_free(&else_scope);
+    provenance_scope_snapshot_restore(before);
+    provenance_scope_snapshot_free(then_after);
+    provenance_scope_snapshot_free(before);
+    return false;
+  }
+  ProvenanceScopeSnapshot *else_after = provenance_scope_snapshot_capture(scope);
+  ProvenanceScopeSnapshot *states[] = {then_after, else_after};
+  bool continues[] = {
+    then_possible && !stmt_vec_guarantees_exit(&stmt->then_body, fun->raises),
+    else_possible && !stmt_vec_guarantees_exit(&stmt->else_body, fun->raises),
+  };
+  provenance_scope_snapshot_restore_union(before, states, continues, 2);
+  if (continues[0] && !continues[1]) {
+    scope_add_maybe_present_all(scope, &then_scope);
+  } else if (continues[1] && !continues[0]) {
+    scope_add_maybe_present_all(scope, &else_scope);
+  }
+  scope_free(&then_scope);
+  scope_free(&else_scope);
+  provenance_scope_snapshot_free(then_after);
+  provenance_scope_snapshot_free(else_after);
   provenance_scope_snapshot_free(before);
   return true;
 }
@@ -8805,7 +9964,7 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
       return set_diag_detail(diag, 3006, "let binding type does not match initializer", stmt->line, stmt->column, stmt->type, actual, "change the annotation or initializer");
     }
     const char *binding_type = stmt->type ? stmt->type : actual;
-    mark_owned_move_if_needed(stmt->expr, scope, binding_type);
+    mark_owned_move_if_needed(program, stmt->expr, scope, binding_type);
     set_stmt_resolved_type(stmt, binding_type);
     scope_add_decl(scope, stmt->name, binding_type, stmt->mutable_binding, stmt->line, stmt->column);
     register_borrow_binding(ctx, program, stmt, scope);
@@ -8827,9 +9986,22 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
     if (!types_compatible_in_scope(program, scope, expected, actual)) {
       return set_diag_detail(diag, 3006, "assignment type does not match binding", stmt->line, stmt->column, expected, actual, "assign a compatible value");
     }
-    mark_owned_move_if_needed(stmt->expr, scope, expected);
-    mark_owned_target_live_if_needed(target, scope, expected);
+    mark_owned_move_if_needed(program, stmt->expr, scope, expected);
+    mark_owned_target_live_if_needed(program, target, scope, expected);
     if (!update_borrow_assignment(ctx, program, target, stmt->expr, scope, diag)) return false;
+    char assigned_root[128];
+    char assigned_path[256];
+    if (expr_binding_path(target, assigned_root, sizeof(assigned_root), assigned_path, sizeof(assigned_path)) && scope_has(scope, assigned_root)) {
+      scope_clear_maybe_present_for_place(scope, assigned_root, assigned_path);
+    }
+    PlaceVec assigned_places = {0};
+    if (collect_assignment_target_places(target, scope, &assigned_places)) {
+      for (size_t i = 0; i < assigned_places.len; i++) {
+        Place *place = &assigned_places.items[i];
+        scope_clear_maybe_present_for_resolved_place(scope, place);
+      }
+    }
+    place_vec_free(&assigned_places);
     return true;
   }
   if (stmt->kind == STMT_CHECK) {
@@ -8853,6 +10025,11 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
     if (type_is_named_generic(checked_type, "Maybe") && !type_is_named_generic(fun->return_type, "Maybe")) {
       return set_diag_detail(diag, 1001, "`check` on Maybe<T> requires a Maybe return type", stmt->line, stmt->column, "function returning Maybe<T>", fun->return_type ? fun->return_type : "Void", "return Maybe<T> from this function or handle the Maybe value explicitly");
     }
+    if (maybe_value) {
+      char *inner_type = z_strndup(inner, inner_len);
+      if (type_contains_owned(program, inner_type, 0)) mark_owned_payload_move_from_maybe_expr(stmt->expr, scope);
+      free(inner_type);
+    }
     return true;
   }
   if (stmt->kind == STMT_RAISE) {
@@ -8872,59 +10049,19 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
     if (!types_compatible_in_scope(program, scope, fun->return_type, actual)) {
       return set_diag_detail(diag, 3007, "return type does not match function return type", stmt->line, stmt->column, fun->return_type, actual, "return a value compatible with the function signature");
     }
-    if (!check_return_reference_escape(ctx, program, stmt->expr, scope, diag)) return false;
-    mark_owned_move_if_needed(stmt->expr, scope, fun->return_type);
+    if (!check_return_reference_escape(ctx, program, stmt->expr, scope, fun->return_type, diag)) return false;
+    mark_owned_move_if_needed(program, stmt->expr, scope, fun->return_type);
     return true;
   }
   if (stmt->kind == STMT_EXPR) return check_expr(ctx, program, stmt->expr, scope, diag);
-  if (stmt->kind == STMT_IF) {
-    if (!check_expr_expected(ctx, program, stmt->expr, scope, diag, "Bool")) return false;
-    const char *condition_type = expr_type(ctx, program, stmt->expr, scope);
-    if (!is_bool_type(condition_type)) return set_diag_detail(diag, 3016, "condition must be Bool", stmt->expr->line, stmt->expr->column, "Bool", condition_type, "compare explicitly or produce a Bool value");
-    bool then_possible = true;
-    bool else_possible = true;
-    if (stmt->expr && stmt->expr->kind == EXPR_BOOL) {
-      then_possible = stmt->expr->bool_value;
-      else_possible = !stmt->expr->bool_value;
-    }
-    ProvenanceScopeSnapshot *before = provenance_scope_snapshot_capture(scope);
-    Scope then_scope = {.parent = scope};
-    bool ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->then_body, &then_scope, diag, loop_depth);
-    scope_free(&then_scope);
-    if (!ok) {
-      provenance_scope_snapshot_restore(before);
-      provenance_scope_snapshot_free(before);
-      return false;
-    }
-    ProvenanceScopeSnapshot *then_after = provenance_scope_snapshot_capture(scope);
-    provenance_scope_snapshot_restore(before);
-    Scope else_scope = {.parent = scope};
-    ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->else_body, &else_scope, diag, loop_depth);
-    scope_free(&else_scope);
-    if (!ok) {
-      provenance_scope_snapshot_restore(before);
-      provenance_scope_snapshot_free(then_after);
-      provenance_scope_snapshot_free(before);
-      return false;
-    }
-    ProvenanceScopeSnapshot *else_after = provenance_scope_snapshot_capture(scope);
-    ProvenanceScopeSnapshot *states[] = {then_after, else_after};
-    bool continues[] = {
-      then_possible && !stmt_vec_guarantees_exit(&stmt->then_body, fun->raises),
-      else_possible && !stmt_vec_guarantees_exit(&stmt->else_body, fun->raises),
-    };
-    provenance_scope_snapshot_restore_union(before, states, continues, 2);
-    provenance_scope_snapshot_free(then_after);
-    provenance_scope_snapshot_free(else_after);
-    provenance_scope_snapshot_free(before);
-    return true;
-  }
+  if (stmt->kind == STMT_IF) return check_if_stmt(ctx, program, fun, stmt, scope, diag, loop_depth);
   if (stmt->kind == STMT_WHILE) {
     if (!check_expr_expected(ctx, program, stmt->expr, scope, diag, "Bool")) return false;
     const char *condition_type = expr_type(ctx, program, stmt->expr, scope);
     if (!is_bool_type(condition_type)) return set_diag_detail(diag, 3016, "condition must be Bool", stmt->expr->line, stmt->expr->column, "Bool", condition_type, "compare explicitly or produce a Bool value");
     ProvenanceScopeSnapshot *before = provenance_scope_snapshot_capture(scope);
     Scope body_scope = {.parent = scope};
+    scope_add_maybe_guards_from_condition_true(ctx, program, stmt->expr, scope, &body_scope);
     bool ok = check_stmt_vec_with_loop(ctx, program, fun, &stmt->then_body, &body_scope, diag, loop_depth + 1);
     scope_free(&body_scope);
     if (!ok) {
@@ -9003,7 +10140,6 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
       for (size_t previous = 0; previous < arm_index; previous++) {
         if (!arm->guard && !stmt->match_arms.items[previous].guard && strcmp(stmt->match_arms.items[previous].case_name, arm->case_name) == 0) return set_diag_detail(diag, 3107, "duplicate match arm", arm->line, arm->column, "one unguarded arm per variant case", arm->case_name, "remove the duplicate arm");
       }
-      if (!check_match_guard(ctx, program, arm, scope, diag)) return false;
     }
     for (size_t case_index = 0; case_index < cases->len; case_index++) {
       bool seen = false;
@@ -9015,24 +10151,51 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
     ProvenanceScopeSnapshot *before = provenance_scope_snapshot_capture(scope);
     ProvenanceScopeSnapshot **arm_states = z_checked_calloc(stmt->match_arms.len, sizeof(ProvenanceScopeSnapshot *));
     bool *arm_continues = z_checked_calloc(stmt->match_arms.len, sizeof(bool));
+    PlaceVec *arm_maybe_present = z_checked_calloc(stmt->match_arms.len, sizeof(PlaceVec));
     for (size_t arm_index = 0; arm_index < stmt->match_arms.len; arm_index++) {
       provenance_scope_snapshot_restore(before);
+      if (!apply_prior_variant_match_guard_fallthroughs(ctx, program, stmt, arm_index, scope, diag, item_choice)) {
+        provenance_scope_snapshot_restore(before);
+        for (size_t i = 0; i < stmt->match_arms.len; i++) {
+          provenance_scope_snapshot_free(arm_states[i]);
+          place_vec_free(&arm_maybe_present[i]);
+        }
+        free(arm_states);
+        free(arm_continues);
+        free(arm_maybe_present);
+        provenance_scope_snapshot_free(before);
+        return false;
+      }
       Scope arm_scope = {.parent = scope};
       MatchArm *arm = &stmt->match_arms.items[arm_index];
-      if (strcmp(arm->case_name, "_") != 0 && arm->payload_name && item_choice) {
-        const Param *item_case = find_case(&item_choice->cases, arm->case_name);
-        if (item_case && item_case->type) {
-          scope_add(&arm_scope, arm->payload_name, item_case->type, false);
-          register_match_payload_binding_provenance(ctx, program, stmt->expr, scope, &arm_scope, arm->payload_name, arm->case_name);
+      seed_variant_match_payload_scope(ctx, program, stmt->expr, scope, &arm_scope, arm, item_choice);
+      if (!check_match_guard(ctx, program, arm, &arm_scope, diag)) {
+        scope_free(&arm_scope);
+        provenance_scope_snapshot_restore(before);
+        for (size_t i = 0; i < stmt->match_arms.len; i++) {
+          provenance_scope_snapshot_free(arm_states[i]);
+          place_vec_free(&arm_maybe_present[i]);
         }
+        free(arm_states);
+        free(arm_continues);
+        free(arm_maybe_present);
+        provenance_scope_snapshot_free(before);
+        return false;
       }
+      scope_clear_maybe_guards_for_expr_mutations(ctx, program, arm->guard, &arm_scope, &arm_scope);
+      scope_add_maybe_guards_from_condition_true(ctx, program, arm->guard, &arm_scope, &arm_scope);
       bool ok = check_stmt_vec_with_loop(ctx, program, fun, &arm->body, &arm_scope, diag, loop_depth);
+      place_vec_add_all(&arm_maybe_present[arm_index], &arm_scope.maybe_present);
       scope_free(&arm_scope);
       if (!ok) {
         provenance_scope_snapshot_restore(before);
-        for (size_t i = 0; i < stmt->match_arms.len; i++) provenance_scope_snapshot_free(arm_states[i]);
+        for (size_t i = 0; i < stmt->match_arms.len; i++) {
+          provenance_scope_snapshot_free(arm_states[i]);
+          place_vec_free(&arm_maybe_present[i]);
+        }
         free(arm_states);
         free(arm_continues);
+        free(arm_maybe_present);
         provenance_scope_snapshot_free(before);
         return false;
       }
@@ -9040,9 +10203,25 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
       arm_continues[arm_index] = !stmt_vec_guarantees_exit(&arm->body, fun->raises);
     }
     provenance_scope_snapshot_restore_union(before, arm_states, arm_continues, stmt->match_arms.len);
-    for (size_t i = 0; i < stmt->match_arms.len; i++) provenance_scope_snapshot_free(arm_states[i]);
+    size_t continuing_arm = stmt->match_arms.len;
+    size_t continuing_count = 0;
+    for (size_t i = 0; i < stmt->match_arms.len; i++) {
+      if (arm_continues[i]) {
+        continuing_arm = i;
+        continuing_count++;
+      }
+    }
+    if (continuing_count == 1) {
+      Scope guard_source = {.parent = scope, .maybe_present = arm_maybe_present[continuing_arm]};
+      scope_add_maybe_present_all(scope, &guard_source);
+    }
+    for (size_t i = 0; i < stmt->match_arms.len; i++) {
+      provenance_scope_snapshot_free(arm_states[i]);
+      place_vec_free(&arm_maybe_present[i]);
+    }
     free(arm_states);
     free(arm_continues);
+    free(arm_maybe_present);
     provenance_scope_snapshot_free(before);
     return true;
   }
