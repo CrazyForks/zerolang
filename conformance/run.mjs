@@ -3936,6 +3936,21 @@ const memDropPrefixCountI32 = await execFileAsync(zero, ["check", "conformance/n
 assert.notEqual(memDropPrefixCountI32.code, 0);
 assert.match(memDropPrefixCountI32.stderr, /TYP022/);
 
+for (const [fixture, code] of [
+  ["std-collections-append-mismatch.0", /STD003/],
+  ["std-collections-append-overlap.0", /STD003/],
+  ["std-collections-append-mutspan-overlap.0", /STD003/],
+  ["std-collections-push-immutable.0", /TYP009/],
+  ["std-collections-push-mismatch.0", /STD003/],
+  ["std-collections-push-owned.0", /OWN001/],
+  ["std-search-owned.0", /OWN001/],
+  ["std-sort-immutable.0", /TYP009/],
+]) {
+  const result = await execFileAsync(zero, ["check", `conformance/native/fail/${fixture}`]).catch((error) => error);
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, code);
+}
+
 const mutspanFromSpan = await execFileAsync(zero, ["check", "conformance/native/fail/mutspan-from-span.0"]).catch((error) => error);
 assert.notEqual(mutspanFromSpan.code, 0);
 assert.match(mutspanFromSpan.stderr, /TYP002/);

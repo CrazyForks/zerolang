@@ -6558,30 +6558,50 @@ static bool check_stdlib_collections_push_call_expected(CheckContext *ctx, const
   return true;
 }
 
-static bool stdlib_reject_overlapping_collection_append(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, const char *values_type) {
-  char dst_root[128];
-  char dst_path[256];
-  if (!expr_binding_path(expr->args.items[0], dst_root, sizeof(dst_root), dst_path, sizeof(dst_path)) ||
-      !scope_has(scope, dst_root)) return true;
-  Scope *dst_scope = scope_binding_scope(scope, dst_root);
-  ValueProvenance origins = {0};
-  bool known = span_view_expr_provenance(ctx, program, expr->args.items[2], scope, values_type, &origins);
-  if (!known) {
-    value_provenance_free(&origins);
-    return true;
-  }
-  for (size_t i = 0; i < origins.len; i++) {
-    const ProvenanceEntry *entry = &origins.items[i];
-    Scope *origin_scope = entry->origin.root_scope ? entry->origin.root_scope : scope_binding_scope(scope, entry->origin.root);
-    if (entry->origin.root &&
-        origin_path_equal(entry->origin.root, dst_root) &&
-        (!dst_scope || !origin_scope || dst_scope == origin_scope) &&
-        origin_path_overlaps(entry->origin.path, dst_path)) {
-      value_provenance_free(&origins);
-      return set_diag_detail(diag, 3012, "std.collections.append source must not overlap destination storage", expr->args.items[2]->line, expr->args.items[2]->column, "separate source storage", "overlapping append source", "copy through a separate scratch buffer or append values from distinct storage");
+static bool stdlib_direct_place_provenance(Scope *scope, const Expr *expr, ValueProvenance *origins) {
+  char root[128];
+  char path[256];
+  if (!expr_binding_path(expr, root, sizeof(root), path, sizeof(path)) ||
+      !scope_has(scope, root)) return false;
+  return value_provenance_add_full_with_index_exact(origins, root, scope_binding_scope(scope, root), false, reference_source_origin_is_local_storage(scope, root), true, NULL, path);
+}
+
+static bool stdlib_provenance_sets_overlap(Scope *scope, const ValueProvenance *left, const ValueProvenance *right) {
+  if (!left || !right) return false;
+  for (size_t left_index = 0; left_index < left->len; left_index++) {
+    const ProvenanceEntry *left_entry = &left->items[left_index];
+    Scope *left_scope = left_entry->origin.root_scope ? left_entry->origin.root_scope : scope_binding_scope(scope, left_entry->origin.root);
+    for (size_t right_index = 0; right_index < right->len; right_index++) {
+      const ProvenanceEntry *right_entry = &right->items[right_index];
+      Scope *right_scope = right_entry->origin.root_scope ? right_entry->origin.root_scope : scope_binding_scope(scope, right_entry->origin.root);
+      if (left_entry->origin.root &&
+          right_entry->origin.root &&
+          origin_path_equal(left_entry->origin.root, right_entry->origin.root) &&
+          (!left_scope || !right_scope || left_scope == right_scope) &&
+          origin_path_overlaps(left_entry->origin.path, right_entry->origin.path)) return true;
     }
   }
-  value_provenance_free(&origins);
+  return false;
+}
+
+static bool stdlib_reject_overlapping_collection_append(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, const char *items_type, const char *values_type) {
+  ValueProvenance dst_origins = {0};
+  ValueProvenance src_origins = {0};
+  bool dst_known = span_view_expr_provenance(ctx, program, expr->args.items[0], scope, items_type, &dst_origins) ||
+                   stdlib_direct_place_provenance(scope, expr->args.items[0], &dst_origins);
+  bool src_known = span_view_expr_provenance(ctx, program, expr->args.items[2], scope, values_type, &src_origins);
+  if (!dst_known || !src_known) {
+    value_provenance_free(&dst_origins);
+    value_provenance_free(&src_origins);
+    return true;
+  }
+  if (stdlib_provenance_sets_overlap(scope, &dst_origins, &src_origins)) {
+    value_provenance_free(&dst_origins);
+    value_provenance_free(&src_origins);
+    return set_diag_detail(diag, 3012, "std.collections.append source must not overlap destination storage", expr->args.items[2]->line, expr->args.items[2]->column, "separate source storage", "overlapping append source", "copy through a separate scratch buffer or append values from distinct storage");
+  }
+  value_provenance_free(&dst_origins);
+  value_provenance_free(&src_origins);
   return true;
 }
 
@@ -6603,7 +6623,7 @@ static bool check_stdlib_collections_append_call_expected(CheckContext *ctx, con
   if (!types_compatible_in_scope(program, scope, expected_values, values_actual)) {
     return set_diag_detail(diag, 3012, "std.collections.append source element type must match item storage", expr->args.items[2]->line, expr->args.items[2]->column, expected_values, values_actual, "append values with the same element type");
   }
-  if (!stdlib_reject_overlapping_collection_append(ctx, program, expr, scope, diag, expected_values)) return false;
+  if (!stdlib_reject_overlapping_collection_append(ctx, program, expr, scope, diag, expected_items, expected_values)) return false;
   set_expr_resolved_type(expr, "usize");
   z_call_resolution_set_return_type(resolution, "usize");
   stdlib_record_single_type_arg(expr, element_type);

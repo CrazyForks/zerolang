@@ -513,11 +513,25 @@ if bin/zero check conformance/native/fail/mem-copy-immutable-dst.0 2>.zero/nativ
 fi
 grep -q "TYP009" .zero/native-test/mem-copy-immutable-dst.err
 
-if bin/zero check conformance/native/fail/std-collections-append-overlap.0 2>.zero/native-test/std-collections-append-overlap.err; then
-  echo "expected std-collections-append-overlap fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/std-collections-append-overlap.err
+expect_native_check_fail() {
+  local fixture="$1"
+  local code="$2"
+  local name="${fixture%.0}"
+  if bin/zero check "conformance/native/fail/$fixture" 2>".zero/native-test/$name.err"; then
+    echo "expected $fixture fixture to fail" >&2
+    exit 1
+  fi
+  grep -q "$code" ".zero/native-test/$name.err"
+}
+
+expect_native_check_fail std-collections-append-mismatch.0 STD003
+expect_native_check_fail std-collections-append-overlap.0 STD003
+expect_native_check_fail std-collections-append-mutspan-overlap.0 STD003
+expect_native_check_fail std-collections-push-immutable.0 TYP009
+expect_native_check_fail std-collections-push-mismatch.0 STD003
+expect_native_check_fail std-collections-push-owned.0 OWN001
+expect_native_check_fail std-search-owned.0 OWN001
+expect_native_check_fail std-sort-immutable.0 TYP009
 
 if bin/zero check conformance/native/fail/std-fs-create-error-set-mismatch.0 2>.zero/native-test/std-fs-create-error-set-mismatch.err; then
   echo "expected std-fs-create-error-set-mismatch fixture to fail" >&2

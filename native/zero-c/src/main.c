@@ -833,11 +833,15 @@ typedef struct {
 typedef struct {
   const char *name;
   size_t byte_len;
+  size_t owner_id;
+  size_t binding_id;
 } MemoryArrayBinding;
 
 typedef struct {
   MemoryArrayBinding arrays[128];
   size_t len;
+  size_t owner_id;
+  size_t next_binding_id;
 } MemoryScope;
 
 typedef struct {
@@ -1057,15 +1061,20 @@ static bool memory_parse_number_literal(const Expr *expr, size_t *out_value) {
 
 static void memory_scope_note_array(MemoryScope *scope, const char *name, size_t byte_len) {
   if (!scope || !name || scope->len >= sizeof(scope->arrays) / sizeof(scope->arrays[0])) return;
-  scope->arrays[scope->len++] = (MemoryArrayBinding){.name = name, .byte_len = byte_len};
+  scope->arrays[scope->len++] = (MemoryArrayBinding){.name = name, .byte_len = byte_len, .owner_id = scope->owner_id, .binding_id = ++scope->next_binding_id};
+}
+
+static const MemoryArrayBinding *memory_scope_lookup_array_binding(const MemoryScope *scope, const char *name) {
+  if (!scope || !name) return NULL;
+  for (size_t i = scope->len; i > 0; i--) {
+    if (scope->arrays[i - 1].name && strcmp(scope->arrays[i - 1].name, name) == 0) return &scope->arrays[i - 1];
+  }
+  return NULL;
 }
 
 static size_t memory_scope_lookup_array(const MemoryScope *scope, const char *name) {
-  if (!scope || !name) return 0;
-  for (size_t i = scope->len; i > 0; i--) {
-    if (scope->arrays[i - 1].name && strcmp(scope->arrays[i - 1].name, name) == 0) return scope->arrays[i - 1].byte_len;
-  }
-  return 0;
+  const MemoryArrayBinding *binding = memory_scope_lookup_array_binding(scope, name);
+  return binding ? binding->byte_len : 0;
 }
 
 static size_t memory_byte_capacity_expr(const MemoryScope *scope, const Expr *expr) {
@@ -1085,20 +1094,22 @@ static void memory_model_note_fixed_collection_storage(MemoryModelSummary *summa
     summary->unknown_capacity_sites++;
     return;
   }
-  size_t capacity = memory_scope_lookup_array(scope, storage->text);
-  if (capacity == 0) {
+  const MemoryArrayBinding *binding = memory_scope_lookup_array_binding(scope, storage->text);
+  if (!binding || binding->byte_len == 0) {
     summary->unknown_capacity_sites++;
     return;
   }
   for (size_t i = 0; i < summary->collection_storage_count; i++) {
-    if (summary->collection_storages[i].name && strcmp(summary->collection_storages[i].name, storage->text) == 0) return;
+    if (summary->collection_storages[i].name &&
+        summary->collection_storages[i].owner_id == binding->owner_id &&
+        summary->collection_storages[i].binding_id == binding->binding_id) return;
   }
   if (summary->collection_storage_count >= sizeof(summary->collection_storages) / sizeof(summary->collection_storages[0])) {
     summary->unknown_capacity_sites++;
     return;
   }
-  summary->collection_storages[summary->collection_storage_count++] = (MemoryArrayBinding){.name = storage->text, .byte_len = capacity};
-  summary->fixed_collection_capacity_bytes += capacity;
+  summary->collection_storages[summary->collection_storage_count++] = *binding;
+  summary->fixed_collection_capacity_bytes += binding->byte_len;
 }
 
 static void memory_model_note_allocator_capacity(MemoryModelSummary *summary, size_t capacity, bool arena) {
@@ -1210,7 +1221,7 @@ static MemoryModelSummary memory_model_summary_from_program(const Program *progr
     }
   }
   for (size_t i = 0; i < program->functions.len; i++) {
-    MemoryScope scope = {0};
+    MemoryScope scope = {.owner_id = i + 1};
     memory_model_collect_stmt_vec(&program->functions.items[i].body, &scope, &summary);
   }
   return summary;
