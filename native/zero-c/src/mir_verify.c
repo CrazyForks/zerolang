@@ -446,8 +446,12 @@ static bool mir_verify_mutable_byte_storage(IrProgram *ir, const IrFunction *fun
     if (!mir_verify_local_index(ir, fun, value->array_index, value->line, value->column, message)) return false;
     const IrLocal *local = &fun->locals[value->array_index];
     if (local->is_array && local->element_type == IR_TYPE_U8 && local->is_mutable) return true;
+    if (local->is_record && local->is_mutable && value->element_type == IR_TYPE_U8 &&
+        value->field_offset <= local->byte_size && value->data_len <= local->byte_size - value->field_offset) {
+      return true;
+    }
     char actual[192];
-    snprintf(actual, sizeof(actual), "%s local %s is %s byte array and is %s", role ? role : "storage", local->name ? local->name : "<unnamed>", local->is_array && local->element_type == IR_TYPE_U8 ? "a" : "not a", local->is_mutable ? "mutable" : "immutable");
+    snprintf(actual, sizeof(actual), "%s local %s is %s byte storage and is %s", role ? role : "storage", local->name ? local->name : "<unnamed>", (local->is_array && local->element_type == IR_TYPE_U8) || (local->is_record && value->element_type == IR_TYPE_U8) ? "a" : "not a", local->is_mutable ? "mutable" : "immutable");
     mir_verify_mark_unsupported(ir, message, value->line, value->column, actual);
     return false;
   }

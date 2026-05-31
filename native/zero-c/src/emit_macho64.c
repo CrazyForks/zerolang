@@ -741,7 +741,8 @@ static bool macho_emit_index_load_to_reg_at(ZBuf *text, const IrFunction *fun, c
     return true;
   }
   if (local->is_array &&
-      (local->element_type == IR_TYPE_U16 || local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 || local->element_type == IR_TYPE_USIZE)) {
+      (local->element_type == IR_TYPE_U16 || local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 ||
+       local->element_type == IR_TYPE_USIZE || macho_type_is_scalar64(local->element_type))) {
     if (!value->index || !macho_emit_value_to_reg_at(text, fun, value->index, 8, frame_size, scratch_slot, ctx, diag)) return false;
     if (!macho_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
     z_aarch64_emit_movz_w(text, 9, local->array_len);
@@ -1261,7 +1262,8 @@ static bool macho_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *i
       return true;
     }
     if (local->is_array &&
-        (local->element_type == IR_TYPE_U16 || local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 || local->element_type == IR_TYPE_USIZE)) {
+        (local->element_type == IR_TYPE_U16 || local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 ||
+         local->element_type == IR_TYPE_USIZE || macho_type_is_scalar64(local->element_type))) {
       if (!macho_emit_value_to_reg_at(text, fun, instr->value, 10, frame_size, 0, ctx, diag)) return false;
       if (!macho_emit_store_scratch(text, 10, instr->value ? instr->value->type : local->element_type, 0, instr->value, diag)) return false;
       if (!instr->index || !macho_emit_value_to_reg_at(text, fun, instr->index, 8, frame_size, 1, ctx, diag)) return false;
@@ -1381,7 +1383,8 @@ static bool macho_validate_function(const IrFunction *fun, ZDiag *diag) {
     }
     if (fun->locals[i].is_array && (fun->locals[i].element_type == IR_TYPE_U8 || fun->locals[i].element_type == IR_TYPE_BOOL ||
                                     fun->locals[i].element_type == IR_TYPE_U16 || fun->locals[i].element_type == IR_TYPE_U32 ||
-                                    fun->locals[i].element_type == IR_TYPE_I32 || fun->locals[i].element_type == IR_TYPE_USIZE)) continue;
+                                    fun->locals[i].element_type == IR_TYPE_I32 || fun->locals[i].element_type == IR_TYPE_USIZE ||
+                                    macho_type_is_scalar64(fun->locals[i].element_type))) continue;
     if (fun->locals[i].is_record) continue;
     if (fun->locals[i].type == IR_TYPE_ALLOC || fun->locals[i].type == IR_TYPE_MAYBE_BYTE_VIEW || fun->locals[i].type == IR_TYPE_MAYBE_SCALAR) continue;
     if (fun->locals[i].type == IR_TYPE_VEC) continue;

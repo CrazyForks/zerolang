@@ -916,13 +916,29 @@ static bool ir_expr_is_byte_view_source(const Expr *expr) {
                   (expr->kind == EXPR_MEMBER && expr->resolved_type && ir_type_kind(expr->resolved_type) == IR_TYPE_BYTE_VIEW));
 }
 
-static bool ir_expr_is_mutable_byte_view_dest(const IrFunction *fun, const Expr *expr) {
+static bool ir_expr_is_mutable_record_byte_field_dest(const Program *program, const IrFunction *fun, const Expr *expr) {
+  if (!program || !fun || !expr || expr->kind != EXPR_MEMBER || !expr->left || expr->left->kind != EXPR_IDENT) return false;
+  const IrLocal *record = ir_function_find_local(fun, expr->left->text);
+  unsigned field_offset = 0;
+  bool field_is_array = false;
+  unsigned field_array_len = 0;
+  IrTypeKind field_element_type = IR_TYPE_UNSUPPORTED;
+  if (!record || !record->is_record || !record->is_mutable ||
+      !ir_shape_field_storage_info(program, record->shape_name, expr->text, &field_offset, NULL, &field_is_array, &field_array_len, &field_element_type) ||
+      !field_is_array || field_element_type != IR_TYPE_U8) {
+    return false;
+  }
+  return field_offset <= record->byte_size && field_array_len <= record->byte_size - field_offset;
+}
+
+static bool ir_expr_is_mutable_byte_view_dest(const Program *program, const IrFunction *fun, const Expr *expr) {
   if (!fun || !expr) return false;
-  if (expr->kind == EXPR_SLICE) return ir_expr_is_mutable_byte_view_dest(fun, expr->left);
+  if (expr->kind == EXPR_SLICE) return ir_expr_is_mutable_byte_view_dest(program, fun, expr->left);
   if (expr->kind == EXPR_MEMBER && expr->left && expr->left->kind == EXPR_IDENT && strcmp(expr->text ? expr->text : "", "value") == 0) {
     const IrLocal *local = ir_function_find_local(fun, expr->left->text);
     return local && local->type == IR_TYPE_MAYBE_BYTE_VIEW;
   }
+  if (ir_expr_is_mutable_record_byte_field_dest(program, fun, expr)) return true;
   if (expr->kind != EXPR_IDENT) return false;
   const IrLocal *local = ir_function_find_local(fun, expr->text);
   if (!local) return false;
@@ -1686,7 +1702,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       }
       if (strcmp(callee_name, "std.mem.fixedBufAlloc") == 0 &&
           expr->args.len == 1 &&
-          ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
+          ir_expr_is_mutable_byte_view_dest(program, fun, expr->args.items[0])) {
         IrValue *bytes = NULL;
         if (!ir_lower_byte_view(program, ir, fun, expr->args.items[0], &bytes)) {
           free(callee_name);
@@ -2431,7 +2447,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
           expr->args.len == 2 &&
           expr->args.items[0] &&
           ir_expr_is_byte_view_source(expr->args.items[1])) {
-        if (!ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
+        if (!ir_expr_is_mutable_byte_view_dest(program, fun, expr->args.items[0])) {
           free(callee_name);
           ir_mark_unsupported(ir, "direct backend std.io.copy expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
           return false;
@@ -2454,7 +2470,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       }
       if (strcmp(callee_name, "std.mem.vec") == 0 &&
           expr->args.len == 1 &&
-          ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
+          ir_expr_is_mutable_byte_view_dest(program, fun, expr->args.items[0])) {
         IrValue *bytes = NULL;
         if (!ir_lower_byte_view(program, ir, fun, expr->args.items[0], &bytes)) {
           free(callee_name);
@@ -2550,7 +2566,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
           expr->args.len == 2 &&
           expr->args.items[0] &&
           ir_expr_is_byte_view_source(expr->args.items[1])) {
-        if (!ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
+        if (!ir_expr_is_mutable_byte_view_dest(program, fun, expr->args.items[0])) {
           free(callee_name);
           ir_mark_unsupported(ir, "direct backend std.mem.copy expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
           return false;
@@ -2574,7 +2590,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       if (strcmp(callee_name, "std.mem.fill") == 0 &&
           expr->args.len == 2 &&
           expr->args.items[0]) {
-        if (!ir_expr_is_mutable_byte_view_dest(fun, expr->args.items[0])) {
+        if (!ir_expr_is_mutable_byte_view_dest(program, fun, expr->args.items[0])) {
           free(callee_name);
           ir_mark_unsupported(ir, "direct backend std.mem.fill expects a mutable byte destination", expr->args.items[0]->line, expr->args.items[0]->column, "non-mutable byte destination");
           return false;
