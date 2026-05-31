@@ -1,6 +1,7 @@
 #include "zero.h"
 #include "call_resolve.h"
 #include "std_sig.h"
+#include "std_source.h"
 #include "unify.h"
 
 #include <ctype.h>
@@ -7988,6 +7989,53 @@ static bool resolve_named_provenance_call(CheckContext *ctx, const Program *prog
   return true;
 }
 
+static bool resolve_source_backed_stdlib_provenance_call(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, const char *return_type, GenericBinding *context_bindings, size_t context_binding_len, ResolvedProvenanceCall *out, bool *handled) {
+  if (handled) *handled = false;
+  if (!program || !call || call->kind != EXPR_CALL || !call->left || call->left->kind != EXPR_MEMBER || !out) return true;
+
+  ZBuf public_name;
+  zbuf_init(&public_name);
+  member_name_buf(call->left, &public_name);
+  const char *target_name = z_std_source_target_for_public_call(public_name.data);
+  if (!target_name) {
+    zbuf_free(&public_name);
+    return true;
+  }
+  if (handled) *handled = true;
+
+  const Function *callee = find_function(program, target_name);
+  if (!callee) {
+    zbuf_free(&public_name);
+    return false;
+  }
+
+  z_call_resolution_init(&out->resolution);
+  out->resolution.kind = Z_CALL_FUNCTION;
+  out->resolution.call_expr = call;
+  out->resolution.callee_expr = call->left;
+  out->resolution.type_args = checked_call_type_args(call);
+  if (!out->resolution.type_args || out->resolution.type_args->len == 0) out->resolution.type_args = call_type_args(call);
+  out->resolution.callee = callee;
+  out->resolution.param_len = callee->params.len;
+  out->resolution.fallible = callee->raises || callee->has_error_set;
+  z_call_resolution_set_callee_name(&out->resolution, public_name.data);
+  z_call_resolution_set_return_type(&out->resolution, return_type ? return_type : (callee->return_type ? callee->return_type : "Void"));
+  call_resolution_record_function_errors(&out->resolution, callee);
+
+  if (function_is_generic(callee)) {
+    if (!generic_call_bindings_from_checked_call(ctx, program, callee, call, scope, out->resolution.return_type, &out->bindings, &out->binding_len)) {
+      zbuf_free(&public_name);
+      resolved_provenance_call_free(out);
+      return false;
+    }
+    provenance_context_substitute_bindings(ctx, program, out->bindings, out->binding_len, context_bindings, context_binding_len);
+    call_resolution_record_bindings(&out->resolution, out->bindings, out->binding_len);
+  }
+  call_resolution_record_param_facts(ctx, program, callee, call, NULL, 0, scope, out->bindings, out->binding_len, &out->resolution);
+  zbuf_free(&public_name);
+  return true;
+}
+
 static bool resolve_constrained_interface_provenance_call(CheckContext *ctx, const Program *program, const Function *context_fun, const Expr *call, Scope *scope, const char *return_type, GenericBinding *context_bindings, size_t context_binding_len, ResolvedProvenanceCall *out, bool *handled) {
   if (handled) *handled = false;
   if (!resolve_constrained_interface_call(program, context_fun, call, &out->resolution)) return true;
@@ -8049,6 +8097,9 @@ static bool resolve_provenance_call(CheckContext *ctx, const Program *program, c
   if (call->left->kind != EXPR_MEMBER) return false;
 
   bool handled = false;
+  if (!resolve_source_backed_stdlib_provenance_call(ctx, program, call, scope, return_type, context_bindings, context_binding_len, out, &handled)) return false;
+  if (handled) return true;
+
   if (!resolve_shape_namespace_provenance_call(ctx, program, call, scope, return_type, context_bindings, context_binding_len, out, &handled)) return false;
   if (handled) return true;
 
