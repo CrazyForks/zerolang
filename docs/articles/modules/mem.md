@@ -35,8 +35,6 @@ types: `Bool`, `u8`, `u16`, `usize`, `i32`, `u32`, `i64`, and `u64`.
 | `std.mem.vecPush(&mut vec, value)` | `Bool` | Appends one byte when capacity remains; returns `false` instead of growing implicitly. |
 | `std.mem.vecLen(&vec)` | `usize` | Reports current vector length. |
 | `std.mem.vecCapacity(&vec)` | `usize` | Reports caller-provided vector capacity. |
-| `std.mem.mapEmpty()` / `std.mem.setEmpty()` | `Map` / `Set` | Empty fixed metadata values with no allocation. |
-| `std.mem.mapLen(&map)` / `std.mem.setLen(&set)` | `usize` | Reports `0` for the current empty metadata values. |
 
 ## Example
 
@@ -100,7 +98,8 @@ Target support: current compiler targets.
   `GeneralAlloc` usage, capacity, failure behavior, and
   hidden-global-allocator status.
 - `allocationInstrumentation`: pay-as-used hooks for attempts, successes, failures, requested bytes, granted bytes, and peak live bytes.
-- `collectionFacts`: fixed-capacity `Vec`, owned `ByteBuf`, and empty `Map`/`Set` metadata, including growth/failure/cleanup behavior.
+- `collectionFacts`: fixed-capacity `Vec`, fixed-storage `std.collections`
+  helpers, and owned `ByteBuf`, including growth/failure/cleanup behavior.
 - `safetyFacts`: the selected profile plus the current bounds,
   initialization, aliasing, lifetime, ownership, span, MIR, literal integer
   range-check, runtime arithmetic, and unchecked-surface facts.

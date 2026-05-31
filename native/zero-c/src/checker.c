@@ -6526,6 +6526,143 @@ static bool check_stdlib_mem_slice_call_expected(CheckContext *ctx, const Progra
   return true;
 }
 
+static bool check_stdlib_usize_arg_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution, size_t index, const char *message, const char *help) {
+  if (!check_expr_expected(ctx, program, expr->args.items[index], scope, diag, "usize")) return false;
+  const char *actual = expr_type(ctx, program, expr->args.items[index], scope);
+  record_stdlib_arg_fact(resolution, index, expr->args.items[index], "usize", actual);
+  if (!types_compatible_in_scope(program, scope, "usize", actual)) {
+    return set_diag_detail(diag, 3028, message, expr->args.items[index]->line, expr->args.items[index]->column, "usize", actual, help);
+  }
+  return true;
+}
+
+static bool check_stdlib_collections_push_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  const char *items_actual = NULL;
+  char element_type[128];
+  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.collections.push", element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, "std.collections.push", element_type, expr->args.items[0], diag, "copy", "push owned values explicitly so ownership is transferred once") ||
+      !stdlib_require_supported_item_element(program, "std.collections.push", element_type, expr->args.items[0], diag)) return false;
+  char expected_items[160];
+  stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, true);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
+  if (!check_stdlib_usize_arg_expected(ctx, program, expr, scope, diag, resolution, 1, "std.collections.push length must be usize", "track the live item count as a usize")) return false;
+  if (!check_expr_expected(ctx, program, expr->args.items[2], scope, diag, element_type)) return false;
+  const char *value_actual = expr_type(ctx, program, expr->args.items[2], scope);
+  record_stdlib_arg_fact(resolution, 2, expr->args.items[2], element_type, value_actual);
+  if (!types_compatible_in_scope(program, scope, element_type, value_actual)) {
+    return set_diag_detail(diag, 3012, "std.collections.push value type must match item element", expr->args.items[2]->line, expr->args.items[2]->column, element_type, value_actual, "push a value of the same element type");
+  }
+  set_expr_resolved_type(expr, "usize");
+  z_call_resolution_set_return_type(resolution, "usize");
+  stdlib_record_single_type_arg(expr, element_type);
+  return true;
+}
+
+static bool check_stdlib_collections_append_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  const char *items_actual = NULL;
+  char element_type[128];
+  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.collections.append", element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, "std.collections.append", element_type, expr->args.items[0], diag, "copy", "append owned values explicitly so ownership is transferred once") ||
+      !stdlib_require_supported_item_element(program, "std.collections.append", element_type, expr->args.items[0], diag)) return false;
+  char expected_items[160];
+  char expected_values[160];
+  stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, true);
+  stdlib_span_type_for_element(expected_values, sizeof(expected_values), element_type, false);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
+  if (!check_stdlib_usize_arg_expected(ctx, program, expr, scope, diag, resolution, 1, "std.collections.append length must be usize", "track the live item count as a usize")) return false;
+  if (!check_expr_expected(ctx, program, expr->args.items[2], scope, diag, expected_values)) return false;
+  const char *values_actual = expr_type(ctx, program, expr->args.items[2], scope);
+  record_stdlib_arg_fact(resolution, 2, expr->args.items[2], expected_values, values_actual);
+  if (!types_compatible_in_scope(program, scope, expected_values, values_actual)) {
+    return set_diag_detail(diag, 3012, "std.collections.append source element type must match item storage", expr->args.items[2]->line, expr->args.items[2]->column, expected_values, values_actual, "append values with the same element type");
+  }
+  set_expr_resolved_type(expr, "usize");
+  z_call_resolution_set_return_type(resolution, "usize");
+  stdlib_record_single_type_arg(expr, element_type);
+  return true;
+}
+
+static bool check_stdlib_collections_view_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  const char *items_actual = NULL;
+  char element_type[128];
+  if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.collections.view", element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_require_supported_item_element(program, "std.collections.view", element_type, expr->args.items[0], diag)) return false;
+  char expected_items[160];
+  char result_type[160];
+  stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, false);
+  stdlib_span_type_for_element(result_type, sizeof(result_type), element_type, false);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
+  if (!check_stdlib_usize_arg_expected(ctx, program, expr, scope, diag, resolution, 1, "std.collections.view length must be usize", "track the live item count as a usize")) return false;
+  set_expr_resolved_type(expr, result_type);
+  z_call_resolution_set_return_type(resolution, result_type);
+  stdlib_record_single_type_arg(expr, element_type);
+  return true;
+}
+
+static bool check_stdlib_collections_len_value_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  const char *items_actual = NULL;
+  const char *name = resolution && resolution->callee_name ? resolution->callee_name : "std.collections";
+  char element_type[128];
+  if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, name, element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, name, element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly") ||
+      !stdlib_require_supported_item_element(program, name, element_type, expr->args.items[0], diag)) return false;
+  char expected_items[160];
+  stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, false);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
+  if (!check_stdlib_usize_arg_expected(ctx, program, expr, scope, diag, resolution, 1, "collection length must be usize", "track the live item count as a usize")) return false;
+  if (!check_expr_expected(ctx, program, expr->args.items[2], scope, diag, element_type)) return false;
+  const char *needle_actual = expr_type(ctx, program, expr->args.items[2], scope);
+  record_stdlib_arg_fact(resolution, 2, expr->args.items[2], element_type, needle_actual);
+  if (!types_compatible_in_scope(program, scope, element_type, needle_actual)) {
+    return set_diag_detail(diag, 3012, "collection value type must match item element", expr->args.items[2]->line, expr->args.items[2]->column, element_type, needle_actual, "use a value of the same element type");
+  }
+  const char *return_type = name && strcmp(name, "std.collections.contains") == 0 ? "Bool" : "usize";
+  set_expr_resolved_type(expr, return_type);
+  z_call_resolution_set_return_type(resolution, return_type);
+  stdlib_record_single_type_arg(expr, element_type);
+  return true;
+}
+
+static bool check_stdlib_collections_len_index_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  const char *items_actual = NULL;
+  const char *name = resolution && resolution->callee_name ? resolution->callee_name : "std.collections";
+  char element_type[128];
+  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, name, element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, name, element_type, expr->args.items[0], diag, "move", "move owned values explicitly so ownership is transferred once") ||
+      !stdlib_require_supported_item_element(program, name, element_type, expr->args.items[0], diag)) return false;
+  char expected_items[160];
+  stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, true);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
+  if (!check_stdlib_usize_arg_expected(ctx, program, expr, scope, diag, resolution, 1, "collection length must be usize", "track the live item count as a usize") ||
+      !check_stdlib_usize_arg_expected(ctx, program, expr, scope, diag, resolution, 2, "collection index must be usize", "pass a usize index")) return false;
+  set_expr_resolved_type(expr, "usize");
+  z_call_resolution_set_return_type(resolution, "usize");
+  stdlib_record_single_type_arg(expr, element_type);
+  return true;
+}
+
+static bool check_stdlib_search_index_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  const char *items_actual = NULL;
+  const char *name = resolution && resolution->callee_name ? resolution->callee_name : "std.search";
+  char element_type[128];
+  if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, name, element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, name, element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly") ||
+      !stdlib_require_supported_item_element(program, name, element_type, expr->args.items[0], diag)) return false;
+  char expected_items[160];
+  stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, false);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
+  if (!check_expr_expected(ctx, program, expr->args.items[1], scope, diag, element_type)) return false;
+  const char *needle_actual = expr_type(ctx, program, expr->args.items[1], scope);
+  record_stdlib_arg_fact(resolution, 1, expr->args.items[1], element_type, needle_actual);
+  if (!types_compatible_in_scope(program, scope, element_type, needle_actual)) {
+    return set_diag_detail(diag, 3012, "std.search value type must match item element", expr->args.items[1]->line, expr->args.items[1]->column, element_type, needle_actual, "search for a value with the same element type");
+  }
+  set_expr_resolved_type(expr, "usize");
+  z_call_resolution_set_return_type(resolution, "usize");
+  stdlib_record_single_type_arg(expr, element_type);
+  return true;
+}
+
 static bool check_stdlib_allocator_len_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution, const char *name, const char *result_type, const char *len_message, const char *len_help, const char *mut_help) {
   if (!check_stdlib_allocator_arg(ctx, program, expr, scope, diag, resolution, 0, name, "use std.mem.nullAlloc() or a mut FixedBufAlloc from std.mem.fixedBufAlloc(buffer)", mut_help)) return false;
   if (!check_expr_expected(ctx, program, expr->args.items[1], scope, diag, "usize")) return false;
@@ -6611,6 +6748,18 @@ static bool check_stdlib_known_call_expected(CheckContext *ctx, const Program *p
       return check_stdlib_mem_contains_call_expected(ctx, program, expr, scope, diag, resolution);
     case Z_STD_HELPER_KIND_MEM_SLICE:
       return check_stdlib_mem_slice_call_expected(ctx, program, expr, scope, diag, resolution);
+    case Z_STD_HELPER_KIND_COLLECTIONS_PUSH:
+      return check_stdlib_collections_push_call_expected(ctx, program, expr, scope, diag, resolution);
+    case Z_STD_HELPER_KIND_COLLECTIONS_APPEND:
+      return check_stdlib_collections_append_call_expected(ctx, program, expr, scope, diag, resolution);
+    case Z_STD_HELPER_KIND_COLLECTIONS_VIEW:
+      return check_stdlib_collections_view_call_expected(ctx, program, expr, scope, diag, resolution);
+    case Z_STD_HELPER_KIND_COLLECTIONS_LEN_VALUE:
+      return check_stdlib_collections_len_value_call_expected(ctx, program, expr, scope, diag, resolution);
+    case Z_STD_HELPER_KIND_COLLECTIONS_LEN_INDEX:
+      return check_stdlib_collections_len_index_call_expected(ctx, program, expr, scope, diag, resolution);
+    case Z_STD_HELPER_KIND_SEARCH_INDEX:
+      return check_stdlib_search_index_call_expected(ctx, program, expr, scope, diag, resolution);
     case Z_STD_HELPER_KIND_MEM_ALLOC_BYTES:
       return check_stdlib_allocator_len_call_expected(ctx, program, expr, scope, diag, resolution, name, "Maybe<MutSpan<u8>>", "allocation length must be an integer", "pass an integer byte count", "store the fixed buffer allocator in a var binding before allocating");
     case Z_STD_HELPER_KIND_MEM_BYTE_BUF:
@@ -10737,7 +10886,7 @@ static bool is_builtin_type_name(const char *name) {
   const char *names[] = {
     "Void", "Bool", "bool", "String", "char", "Type",
     "World", "WorldStream", "Fs", "File", "ByteBuf", "NullAlloc", "FixedBufAlloc", "PageAlloc", "GeneralAlloc",
-    "Vec", "Map", "Set", "Duration", "RandSource", "ProcStatus", "Address", "Net", "Conn", "Listener",
+    "Vec", "Duration", "RandSource", "ProcStatus", "Address", "Net", "Conn", "Listener",
     "HttpMethod", "HttpClient", "HttpServer", "HttpResult", "HttpError", "HttpHeaderValue", "JsonDoc", "BufferedReader", "BufferedWriter",
     "Env", "Args", "Clock", "Rand", "Proc", "Alloc",
     "Maybe", "Span", "MutSpan", "ref", "mutref", "owned",

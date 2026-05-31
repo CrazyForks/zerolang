@@ -20,6 +20,9 @@ Call functions with their module path, such as `std.mem.len(value)`.
 ## Target-Neutral Helpers
 
 - `std.mem`: spans, byte copy/fill, non-owned scalar item copy/fill/search, scalar item slicing, length, safe indexed `get`, fixed-buffer allocation, byte buffers, and caller-owned vectors.
+- `std.collections`: fixed-capacity push, append, live-prefix view, count, contains, swap-remove, and move-to-front helpers over caller-owned storage plus explicit lengths.
+- `std.search`: generic scalar index search plus typed lower-bound and binary-search helpers.
+- `std.sort`: in-place insertion sort and sortedness checks for `i32`, `u32`, and `usize` storage.
 - `std.math`: pure `u32` integer helpers, GCD/LCM, powers, modular power, primality, and divisor routines.
 - `std.path`: target-neutral lexical path basename, dirname, extension, join, normalize, and relative helpers.
 - `std.codec`: byte reads, varint sizing, CRC helpers, and byte checksums.
@@ -89,6 +92,31 @@ pub fn main() -> Void {
     let copied: usize = std.mem.copyItems(scratch, values)
     let prefix: Span<i32> = std.mem.prefix(scratch, 2)
     expect copied == 4 && std.mem.contains(prefix, 1)
+}
+```
+
+Fixed-capacity collection helpers keep storage and length explicit:
+
+```zero
+pub fn main() -> Void {
+    var values: [4]i32 = [0, 0, 0, 0]
+    var len: usize = 0
+    len = std.collections.push(values, len, 3)
+    len = std.collections.push(values, len, 1)
+    let live: Span<i32> = std.collections.view(values, len)
+    expect std.collections.contains(values, len, 3) && std.mem.len(live) == 2
+}
+```
+
+Use `std.sort` and `std.search` for common scalar algorithms instead of
+hand-rolling loops:
+
+```zero
+pub fn main() -> Void {
+    var values: [5]i32 = [5, 1, 4, 2, 3]
+    std.sort.insertionI32(values)
+    expect std.sort.isSortedI32(values)
+    expect std.search.binaryI32(values, 4) == 3
 }
 ```
 

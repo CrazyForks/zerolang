@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
-import { access, readFile } from "node:fs/promises";
+import { access, readFile, readdir } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { describe, it } from "node:test";
 import ts from "typescript";
@@ -56,8 +56,10 @@ const publicTargets = [
 describe("docs registry", () => {
   it("declares module pages with source files", async () => {
     const moduleDocs = docs.filter((doc) => doc.section === "Modules");
+    const moduleFiles = (await readdir(join(docsSiteRoot, "articles/modules")))
+      .filter((name) => name.endsWith(".md"));
 
-    assert.equal(moduleDocs.length, 17);
+    assert.equal(moduleDocs.length, moduleFiles.length);
     assert.ok(moduleDocs.every((doc) => doc.path.startsWith("/modules/")));
 
     await Promise.all(

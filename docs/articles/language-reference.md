@@ -720,8 +720,7 @@ use std.parse
 Current native helpers include:
 
 - `std.mem`: allocation-free memory helpers, span construction, byte equality,
-  explicit allocators, fixed-capacity `Vec`, empty map/set metadata, and
-  `ByteBuf`
+  explicit allocators, fixed-capacity `Vec`, and `ByteBuf`
 - `std.codec`: byte and checksum helpers such as `readU32`, `encodedVarintLen`, and `crc32`
 - `std.parse`: scanner helpers such as digit and identifier predicates
 - `std.time`: duration helpers such as `ms`, `seconds`, `add`, and `asMsFloor`

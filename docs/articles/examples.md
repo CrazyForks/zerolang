@@ -64,7 +64,7 @@ Core examples:
 - `examples/fixed-vec.0`: field defaults, static value parameters, constructor-style methods, and receiver calls.
 - `examples/fallibility.0`: named errors and explicit error sets.
 - `examples/memory-primitives.0`: spans, fixed buffers, references, `Maybe<T>`, and allocator vocabulary.
-- `examples/allocator-collections.0`: `NullAlloc`, fixed-buffer allocation, `Vec`, empty map/set metadata, and `zero mem --json` allocator budget reporting.
+- `examples/allocator-collections.0`: `NullAlloc`, fixed-buffer allocation, `Vec`, fixed-storage collections, and `zero mem --json` allocator budget reporting.
 - `examples/compile-time-v1.0`: bounded `meta`, target/type reflection facts, Bool and enum static values, and compile-time JSON metadata.
 - `examples/ownership-cleanup.0`: `owned<T>` cleanup, canonical `drop`, and `defer` at lexical scope exit.
 - `examples/std-math.0`: pure fixed-width integer helpers and number-theory routines.

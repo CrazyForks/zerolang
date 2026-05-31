@@ -856,15 +856,19 @@ typedef struct {
   size_t vec_push_calls;
   size_t vec_len_calls;
   size_t vec_capacity_calls;
-  size_t map_empty_count;
-  size_t map_len_calls;
-  size_t set_empty_count;
-  size_t set_len_calls;
+  size_t vec_capacity_bytes;
+  size_t collection_storage_count;
+  size_t collection_push_calls;
+  size_t collection_append_calls;
+  size_t collection_view_calls;
+  size_t collection_query_calls;
+  size_t collection_mutation_calls;
   size_t fixed_allocator_capacity_bytes;
   size_t arena_capacity_bytes;
-  size_t collection_capacity_bytes;
+  size_t fixed_collection_capacity_bytes;
   size_t allocation_requested_bytes;
   size_t unknown_capacity_sites;
+  MemoryArrayBinding collection_storages[128];
 } MemoryModelSummary;
 
 
@@ -1073,6 +1077,30 @@ static size_t memory_byte_capacity_expr(const MemoryScope *scope, const Expr *ex
 
 static void memory_model_collect_expr(const Expr *expr, MemoryScope *scope, MemoryModelSummary *summary);
 
+static void memory_model_note_fixed_collection_storage(MemoryModelSummary *summary, const MemoryScope *scope, const Expr *expr) {
+  if (!summary) return;
+  const Expr *storage = expr;
+  if (storage && storage->kind == EXPR_BORROW) storage = storage->left;
+  if (!storage || storage->kind != EXPR_IDENT || !storage->text) {
+    summary->unknown_capacity_sites++;
+    return;
+  }
+  size_t capacity = memory_scope_lookup_array(scope, storage->text);
+  if (capacity == 0) {
+    summary->unknown_capacity_sites++;
+    return;
+  }
+  for (size_t i = 0; i < summary->collection_storage_count; i++) {
+    if (summary->collection_storages[i].name && strcmp(summary->collection_storages[i].name, storage->text) == 0) return;
+  }
+  if (summary->collection_storage_count >= sizeof(summary->collection_storages) / sizeof(summary->collection_storages[0])) {
+    summary->unknown_capacity_sites++;
+    return;
+  }
+  summary->collection_storages[summary->collection_storage_count++] = (MemoryArrayBinding){.name = storage->text, .byte_len = capacity};
+  summary->fixed_collection_capacity_bytes += capacity;
+}
+
 static void memory_model_note_allocator_capacity(MemoryModelSummary *summary, size_t capacity, bool arena) {
   if (!summary) return;
   if (capacity == 0) {
@@ -1117,15 +1145,28 @@ static void memory_model_collect_expr(const Expr *expr, MemoryScope *scope, Memo
     else if (strcmp(callee, "std.mem.vec") == 0) {
       summary->vec_count++;
       size_t capacity = expr->args.len > 0 ? memory_byte_capacity_expr(scope, expr->args.items[0]) : 0;
-      if (capacity > 0) summary->collection_capacity_bytes += capacity;
+      if (capacity > 0) summary->vec_capacity_bytes += capacity;
       else summary->unknown_capacity_sites++;
     } else if (strcmp(callee, "std.mem.vecPush") == 0) summary->vec_push_calls++;
     else if (strcmp(callee, "std.mem.vecLen") == 0) summary->vec_len_calls++;
     else if (strcmp(callee, "std.mem.vecCapacity") == 0) summary->vec_capacity_calls++;
-    else if (strcmp(callee, "std.mem.mapEmpty") == 0) summary->map_empty_count++;
-    else if (strcmp(callee, "std.mem.mapLen") == 0) summary->map_len_calls++;
-    else if (strcmp(callee, "std.mem.setEmpty") == 0) summary->set_empty_count++;
-    else if (strcmp(callee, "std.mem.setLen") == 0) summary->set_len_calls++;
+    else if (strcmp(callee, "std.collections.push") == 0) {
+      summary->collection_push_calls++;
+      summary->collection_mutation_calls++;
+      memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
+    } else if (strcmp(callee, "std.collections.append") == 0) {
+      summary->collection_append_calls++;
+      summary->collection_mutation_calls++;
+      memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
+    } else if (strcmp(callee, "std.collections.view") == 0) {
+      summary->collection_view_calls++;
+      memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
+    } else if (strcmp(callee, "std.collections.contains") == 0 || strcmp(callee, "std.collections.count") == 0) {
+      summary->collection_query_calls++;
+    } else if (strcmp(callee, "std.collections.removeSwap") == 0 || strcmp(callee, "std.collections.moveToFront") == 0) {
+      summary->collection_mutation_calls++;
+      memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
+    }
     free(callee);
   }
   memory_model_collect_expr(expr->left, scope, summary);
@@ -1141,13 +1182,10 @@ static void memory_model_collect_stmt_vec(const StmtVec *body, MemoryScope *scop
     if (!stmt) continue;
     if (stmt->kind == STMT_LET) {
       const char *type = stmt->resolved_type ? stmt->resolved_type : stmt->type;
-      size_t array_len = 0;
       size_t array_bytes = 0;
-      bool is_u8 = false;
-      if (memory_parse_fixed_array_type(type, &array_len, &array_bytes, &is_u8)) {
-        (void)array_len;
+      if (memory_parse_fixed_array_type(type, NULL, &array_bytes, NULL)) {
         summary->stack_estimate_bytes += array_bytes;
-        if (is_u8) memory_scope_note_array(scope, stmt->name, array_bytes);
+        memory_scope_note_array(scope, stmt->name, array_bytes);
       }
     }
     memory_model_collect_expr(stmt->target, scope, summary);
@@ -5514,10 +5552,12 @@ static bool memory_summary_uses_collections(const MemoryModelSummary *summary) {
                      summary->vec_push_calls > 0 ||
                      summary->vec_len_calls > 0 ||
                      summary->vec_capacity_calls > 0 ||
-                     summary->map_empty_count > 0 ||
-                     summary->map_len_calls > 0 ||
-                     summary->set_empty_count > 0 ||
-                     summary->set_len_calls > 0 ||
+                     summary->collection_storage_count > 0 ||
+                     summary->collection_push_calls > 0 ||
+                     summary->collection_append_calls > 0 ||
+                     summary->collection_view_calls > 0 ||
+                     summary->collection_query_calls > 0 ||
+                     summary->collection_mutation_calls > 0 ||
                      summary->byte_buf_calls > 0);
 }
 
@@ -5527,7 +5567,7 @@ static void append_memory_budgets_json(ZBuf *buf, const SourceInput *input, cons
   size_t static_bytes = memory_budget_static_bytes(input, summary);
   size_t fixed_capacity = summary ? summary->fixed_allocator_capacity_bytes : 0;
   size_t arena_capacity = summary ? summary->arena_capacity_bytes : 0;
-  size_t collection_capacity = summary ? summary->collection_capacity_bytes : 0;
+  size_t collection_capacity = summary ? summary->vec_capacity_bytes + summary->fixed_collection_capacity_bytes : 0;
   zbuf_appendf(buf, "{\"stackBytes\":%zu,\"maxFrameBytes\":%zu,\"staticBytes\":%zu,\"heapBytes\":0,\"arenaBytes\":%zu,\"fixedBufferBytes\":%zu,\"collectionCapacityBytes\":%zu,\"allocatorCapacityBytes\":%zu,\"allocationRequestedBytes\":%zu,\"globalHeapBytes\":0,\"linearMemoryFloorBytes\":%d,\"hiddenHeapAllocation\":false,\"unknownCapacitySites\":%zu,\"source\":\"direct-mir-and-checked-ast\"}",
                stack_bytes,
                max_frame_bytes,
@@ -5580,18 +5620,25 @@ static void append_collection_facts_json(ZBuf *buf, const MemoryModelSummary *su
                summary ? summary->vec_count : 0,
                summary ? summary->vec_push_calls : 0,
                summary ? summary->vec_capacity_calls : 0,
-               summary ? summary->collection_capacity_bytes : 0);
+               summary ? summary->vec_capacity_bytes : 0);
+  zbuf_appendf(buf, ",\"FixedStorage\":{\"used\":%s,\"storageSites\":%zu,\"pushCalls\":%zu,\"appendCalls\":%zu,\"viewCalls\":%zu,\"queryCalls\":%zu,\"mutationCalls\":%zu,\"capacityBytes\":%zu,\"lengthModel\":\"caller-tracked usize\",\"overflow\":\"returns unchanged length\",\"cleanup\":\"caller owns storage\",\"hiddenAllocation\":false}",
+               summary && (summary->collection_storage_count > 0 ||
+                            summary->collection_push_calls > 0 ||
+                            summary->collection_append_calls > 0 ||
+                            summary->collection_view_calls > 0 ||
+                            summary->collection_query_calls > 0 ||
+                            summary->collection_mutation_calls > 0) ? "true" : "false",
+               summary ? summary->collection_storage_count : 0,
+               summary ? summary->collection_push_calls : 0,
+               summary ? summary->collection_append_calls : 0,
+               summary ? summary->collection_view_calls : 0,
+               summary ? summary->collection_query_calls : 0,
+               summary ? summary->collection_mutation_calls : 0,
+               summary ? summary->fixed_collection_capacity_bytes : 0);
   zbuf_appendf(buf, ",\"ByteBuf\":{\"used\":%s,\"allocationCalls\":%zu,\"ownership\":\"owned ByteBuf backed by explicit allocator storage\",\"cleanup\":\"owned value releases logical ownership; allocator storage remains explicit\",\"hiddenAllocation\":false}",
                summary && summary->byte_buf_calls > 0 ? "true" : "false",
                summary ? summary->byte_buf_calls : 0);
-  zbuf_appendf(buf, ",\"Map\":{\"used\":%s,\"instances\":%zu,\"lenCalls\":%zu,\"status\":\"empty fixed metadata\",\"growth\":\"not enabled without explicit allocator/capacity contract\",\"hiddenAllocation\":false}",
-               summary && summary->map_empty_count > 0 ? "true" : "false",
-               summary ? summary->map_empty_count : 0,
-               summary ? summary->map_len_calls : 0);
-  zbuf_appendf(buf, ",\"Set\":{\"used\":%s,\"instances\":%zu,\"lenCalls\":%zu,\"status\":\"empty fixed metadata\",\"growth\":\"not enabled without explicit allocator/capacity contract\",\"hiddenAllocation\":false}}",
-               summary && summary->set_empty_count > 0 ? "true" : "false",
-               summary ? summary->set_empty_count : 0,
-               summary ? summary->set_len_calls : 0);
+  zbuf_append(buf, "}");
 }
 
 static void append_memory_regions_json(ZBuf *buf, const SourceInput *input, const MemoryModelSummary *summary, bool linear_memory) {
@@ -5609,7 +5656,7 @@ static void append_memory_regions_json(ZBuf *buf, const SourceInput *input, cons
   zbuf_appendf(buf, ", {\"name\":\"fixed-buffer-storage\",\"kind\":\"allocator-capacity\",\"bytes\":%zu,\"payAsUsed\":true,\"source\":\"caller-owned FixedBufAlloc buffers\"}",
                summary ? summary->fixed_allocator_capacity_bytes : 0);
   zbuf_appendf(buf, ", {\"name\":\"collection-storage\",\"kind\":\"collection-capacity\",\"bytes\":%zu,\"payAsUsed\":true,\"source\":\"caller-owned collection storage\"}",
-               summary ? summary->collection_capacity_bytes : 0);
+               summary ? summary->vec_capacity_bytes + summary->fixed_collection_capacity_bytes : 0);
   zbuf_append(buf, "]");
 }
 
