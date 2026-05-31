@@ -135,7 +135,7 @@ static bool build_check_instr(const ZBuildability *ctx, const IrFunction *fun, c
     case IR_INSTR_INDEX_STORE:
     case IR_INSTR_FIELD_STORE: {
       if (instr->value && !z_build_check_value(ctx, fun, instr->value, false, 0, diag)) return false;
-      unsigned index_scratch_slot = instr->kind == IR_INSTR_INDEX_STORE && z_build_backend_is_aarch64_direct(ctx->backend) ? 1 : 0;
+      unsigned index_scratch_slot = instr->kind == IR_INSTR_INDEX_STORE && (ctx->backend == Z_DIRECT_BACKEND_MACHO64 || z_build_backend_is_aarch64_direct(ctx->backend)) ? 1 : 0;
       if (instr->index && !z_build_check_value(ctx, fun, instr->index, false, index_scratch_slot, diag)) return false;
       return true;
     }
