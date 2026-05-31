@@ -842,6 +842,7 @@ typedef struct {
   size_t len;
   size_t owner_id;
   size_t next_binding_id;
+  const ZTargetInfo *target;
 } MemoryScope;
 
 typedef struct {
@@ -995,7 +996,9 @@ static char *expr_callee_name(const Expr *callee) {
   return name.data;
 }
 
-static size_t memory_element_size(const char *element, bool *is_u8) {
+static int abi_pointer_size(const ZTargetInfo *target);
+
+static size_t memory_element_size(const char *element, const ZTargetInfo *target, bool *is_u8) {
   if (is_u8) *is_u8 = false;
   if (!element) return 0;
   while (*element == ' ' || *element == '\t') element++;
@@ -1004,12 +1007,13 @@ static size_t memory_element_size(const char *element, bool *is_u8) {
     return 1;
   }
   if (strcmp(element, "u16") == 0 || strcmp(element, "i16") == 0) return 2;
-  if (strcmp(element, "u32") == 0 || strcmp(element, "i32") == 0 || strcmp(element, "f32") == 0 || strcmp(element, "usize") == 0 || strcmp(element, "isize") == 0) return 4;
+  if (strcmp(element, "u32") == 0 || strcmp(element, "i32") == 0 || strcmp(element, "f32") == 0) return 4;
+  if (strcmp(element, "usize") == 0 || strcmp(element, "isize") == 0) return (size_t)abi_pointer_size(target);
   if (strcmp(element, "u64") == 0 || strcmp(element, "i64") == 0 || strcmp(element, "f64") == 0) return 8;
   return 0;
 }
 
-static bool memory_parse_fixed_array_type(const char *type, size_t *out_len, size_t *out_bytes, bool *out_u8) {
+static bool memory_parse_fixed_array_type(const char *type, const ZTargetInfo *target, size_t *out_len, size_t *out_bytes, bool *out_u8) {
   if (out_len) *out_len = 0;
   if (out_bytes) *out_bytes = 0;
   if (out_u8) *out_u8 = false;
@@ -1030,7 +1034,7 @@ static bool memory_parse_fixed_array_type(const char *type, size_t *out_len, siz
   if (!saw_digit || *cursor != ']') return false;
   cursor++;
   bool is_u8 = false;
-  size_t element_size = memory_element_size(cursor, &is_u8);
+  size_t element_size = memory_element_size(cursor, target, &is_u8);
   if (element_size == 0) return false;
   if (out_len) *out_len = len;
   if (out_bytes) *out_bytes = len * element_size;
@@ -1174,6 +1178,7 @@ static void memory_model_collect_expr(const Expr *expr, MemoryScope *scope, Memo
       memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
     } else if (strcmp(callee, "std.collections.contains") == 0 || strcmp(callee, "std.collections.count") == 0) {
       summary->collection_query_calls++;
+      memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
     } else if (strcmp(callee, "std.collections.removeSwap") == 0 || strcmp(callee, "std.collections.moveToFront") == 0) {
       summary->collection_mutation_calls++;
       memory_model_note_fixed_collection_storage(summary, scope, expr->args.len > 0 ? expr->args.items[0] : NULL);
@@ -1194,7 +1199,7 @@ static void memory_model_collect_stmt_vec(const StmtVec *body, MemoryScope *scop
     if (stmt->kind == STMT_LET) {
       const char *type = stmt->resolved_type ? stmt->resolved_type : stmt->type;
       size_t array_bytes = 0;
-      if (memory_parse_fixed_array_type(type, NULL, &array_bytes, NULL)) {
+      if (memory_parse_fixed_array_type(type, scope ? scope->target : NULL, NULL, &array_bytes, NULL)) {
         summary->stack_estimate_bytes += array_bytes;
         memory_scope_note_array(scope, stmt->name, array_bytes);
       }
@@ -1211,17 +1216,17 @@ static void memory_model_collect_stmt_vec(const StmtVec *body, MemoryScope *scop
   }
 }
 
-static MemoryModelSummary memory_model_summary_from_program(const Program *program) {
+static MemoryModelSummary memory_model_summary_from_program(const Program *program, const ZTargetInfo *target) {
   MemoryModelSummary summary = {0};
   if (!program) return summary;
-  for (size_t i = 0; i < program->consts.len; i++) memory_model_collect_expr(program->consts.items[i].expr, &(MemoryScope){0}, &summary);
+  for (size_t i = 0; i < program->consts.len; i++) memory_model_collect_expr(program->consts.items[i].expr, &(MemoryScope){.target = target}, &summary);
   for (size_t i = 0; i < program->shapes.len; i++) {
     for (size_t field_index = 0; field_index < program->shapes.items[i].fields.len; field_index++) {
-      memory_model_collect_expr(program->shapes.items[i].fields.items[field_index].default_value, &(MemoryScope){0}, &summary);
+      memory_model_collect_expr(program->shapes.items[i].fields.items[field_index].default_value, &(MemoryScope){.target = target}, &summary);
     }
   }
   for (size_t i = 0; i < program->functions.len; i++) {
-    MemoryScope scope = {.owner_id = i + 1};
+    MemoryScope scope = {.owner_id = i + 1, .target = target};
     memory_model_collect_stmt_vec(&program->functions.items[i].body, &scope, &summary);
   }
   return summary;
@@ -5690,7 +5695,7 @@ static void append_memory_capability_facts_json(ZBuf *buf, const CapabilitySumma
 static void append_direct_memory_json(ZBuf *buf, const SourceInput *input, const Program *program, const ZTargetInfo *target, const Command *command, const IrProgram *ir) {
   CapabilitySummary caps = program_capabilities(program);
   HelperUseSummary used_helpers = program_used_helpers(program);
-  MemoryModelSummary memory_summary = memory_model_summary_from_program(program);
+  MemoryModelSummary memory_summary = memory_model_summary_from_program(program, target);
   bool uses_allocator = (input && input->direct_allocator_helper_count > 0) || memory_summary_uses_allocator(&memory_summary);
   bool uses_buffers = (input && input->direct_buffer_helper_count > 0) || memory_summary_uses_collections(&memory_summary);
   bool linear_memory = input && (input->direct_stack_bytes > 0 ||

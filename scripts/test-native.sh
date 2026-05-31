@@ -194,6 +194,8 @@ run_native_or_gap conformance/native/pass/payload-match.0 .zero/native-test/payl
 run_native_or_gap conformance/native/pass/std-mem-arrays.0 .zero/native-test/std-mem-arrays "native std mem arrays"
 run_native_or_gap conformance/native/pass/std-collections-algorithms.0 .zero/native-test/std-collections-algorithms "std collections algorithms ok"
 run_native_or_gap conformance/native/pass/std-collections-u8.0 .zero/native-test/std-collections-u8 "std collections u8 ok"
+run_native_or_gap conformance/native/pass/std-collections-usize-memory.0 .zero/native-test/std-collections-usize-memory "std collections usize memory ok"
+run_native_or_gap conformance/native/pass/std-collections-query-memory.0 .zero/native-test/std-collections-query-memory "std collections query memory ok"
 run_native_or_gap conformance/native/pass/std-search-sort-widths.0 .zero/native-test/std-search-sort-widths "std search sort widths ok"
 run_native_or_gap conformance/native/pass/memory-types.0 .zero/native-test/memory-types "native memory types"
 run_native_or_gap conformance/native/pass/recursive-fibonacci.0 .zero/native-test/recursive-fibonacci "recursive fibonacci ok"
@@ -525,13 +527,15 @@ expect_native_check_fail() {
 }
 
 expect_native_check_fail std-collections-append-mismatch.0 STD003
-expect_native_check_fail std-collections-append-overlap.0 STD003
+expect_native_check_fail std-collections-append-overlap.0 BOR001
 expect_native_check_fail std-collections-append-mutspan-overlap.0 STD003
+expect_native_check_fail std-collections-push-borrowed.0 BOR001
 expect_native_check_fail std-collections-push-immutable.0 TYP009
 expect_native_check_fail std-collections-push-mismatch.0 STD003
 expect_native_check_fail std-collections-push-owned.0 OWN001
 expect_native_check_fail std-search-owned.0 OWN001
 expect_native_check_fail std-sort-immutable.0 TYP009
+expect_native_check_fail std-sort-mutates-borrowed.0 BOR001
 
 if bin/zero check conformance/native/fail/std-fs-create-error-set-mismatch.0 2>.zero/native-test/std-fs-create-error-set-mismatch.err; then
   echo "expected std-fs-create-error-set-mismatch fixture to fail" >&2

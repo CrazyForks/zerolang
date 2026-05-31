@@ -1648,6 +1648,30 @@ static bool check_borrow_conflict_at(Scope *scope, const char *root, const char 
   return true;
 }
 
+static bool mutating_fixed_storage_place(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, char *root, size_t root_len, char *path, size_t path_len) {
+  if (!expr || !scope || !root || !path) return false;
+  const Expr *storage = expr && expr->kind == EXPR_SLICE ? expr->left : expr;
+  if (!storage || !expr_binding_path(storage, root, root_len, path, path_len) || !scope_has(scope, root)) return false;
+
+  const char *storage_type = expr_type(ctx, program, storage, scope);
+  char ref_inner[192];
+  if (named_ref_inner_text(storage_type, "ref", ref_inner, sizeof(ref_inner)) ||
+      named_ref_inner_text(storage_type, "mutref", ref_inner, sizeof(ref_inner)) ||
+      type_is_named_generic(storage_type, "MutSpan")) return false;
+
+  char actual_storage[192];
+  if (expr_addressable_storage_type(program, storage, scope, actual_storage, sizeof(actual_storage))) storage_type = actual_storage;
+  char element_type[128];
+  return fixed_array_type_parts(storage_type, NULL, 0, element_type, sizeof(element_type));
+}
+
+static bool check_mutating_fixed_storage_not_borrowed(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag) {
+  char root[128];
+  char path[256];
+  if (!mutating_fixed_storage_place(ctx, program, expr, scope, root, sizeof(root), path, sizeof(path))) return true;
+  return check_borrow_conflict_at(scope, root, path, true, diag, expr);
+}
+
 static bool check_place_available(const Expr *expr, Scope *scope, const char *root, const char *path, ZDiag *diag) {
   if (!expr || !scope || !root || !root[0]) return true;
   const char *actual = scope_type(scope, root);
@@ -6378,9 +6402,15 @@ static bool stdlib_mutable_items_arg_element(CheckContext *ctx, const Program *p
   if (!check_expr(ctx, program, expr, scope, diag)) return false;
   const char *actual = expr_type(ctx, program, expr, scope);
   if (actual_type) *actual_type = actual;
-  if (mutspan_element_text(actual, element_type, element_len)) return stdlib_writable_item_element(expr, diag, display_name, element_type);
+  if (mutspan_element_text(actual, element_type, element_len)) {
+    return check_mutating_fixed_storage_not_borrowed(ctx, program, expr, scope, diag) &&
+           stdlib_writable_item_element(expr, diag, display_name, element_type);
+  }
   if (fixed_array_type_parts(actual, NULL, 0, element_type, element_len)) {
-    if (slice_source_is_mutable_storage(expr, scope, actual)) return stdlib_writable_item_element(expr, diag, display_name, element_type);
+    if (slice_source_is_mutable_storage(expr, scope, actual)) {
+      return check_mutating_fixed_storage_not_borrowed(ctx, program, expr, scope, diag) &&
+             stdlib_writable_item_element(expr, diag, display_name, element_type);
+    }
     char message[256];
     snprintf(message, sizeof(message), "%s expects mutable item storage", display_name);
     return set_diag_detail(diag, 3010, message, expr->line, expr->column, "mutable [N]T or MutSpan<T>", "immutable array binding", "declare the array with var or pass a MutSpan<T>");
@@ -7282,6 +7312,7 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
           if (!types_compatible_in_scope(program, scope, expected_element, actual_element)) {
             return set_diag_detail(diag, 3006, "MutSpan element type does not match array element", expr->line, expr->column, expected_element, actual_element, "use a MutSpan with the same element type as the array");
           }
+          if (!check_mutating_fixed_storage_not_borrowed(ctx, program, expr, scope, diag)) return false;
           set_expr_resolved_type(expr, expected);
           return true;
         }
@@ -7504,6 +7535,8 @@ static bool check_expr_expected(CheckContext *ctx, const Program *program, const
         slice_source_is_mutable_storage(expr->left, scope, base_type) ? "MutSpan" : "Span",
         element_type
       );
+      if (expected && type_is_named_generic(expected, "MutSpan") && type_is_named_generic(slice_type, "MutSpan") &&
+          !check_mutating_fixed_storage_not_borrowed(ctx, program, expr, scope, diag)) return false;
       set_expr_resolved_type(expr, slice_type);
       return true;
     }

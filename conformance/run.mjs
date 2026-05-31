@@ -477,6 +477,8 @@ for (const fixture of [
   "conformance/native/pass/std-mem-collections.0",
   "conformance/native/pass/std-collections-algorithms.0",
   "conformance/native/pass/std-collections-u8.0",
+  "conformance/native/pass/std-collections-usize-memory.0",
+  "conformance/native/pass/std-collections-query-memory.0",
   "conformance/native/pass/std-search-sort-widths.0",
   "conformance/native/pass/owned-byte-buffer.0",
   "conformance/check/pass/generic-function-basic.0",
@@ -1807,11 +1809,23 @@ assert.match(checkJsonFailureBody.diagnostics[0].help, /cast only/);
 assert.equal(checkJsonFailureBody.diagnostics[0].fixSafety, "requires-human-review");
 assert.equal(checkJsonFailureBody.diagnostics[0].repair.id, "manual-review");
 
-const collectionsOverlapJson = await execFileAsync(zero, ["check", "--json", "conformance/native/fail/std-collections-append-overlap.0"]).catch((error) => error);
+const collectionsOverlapJson = await execFileAsync(zero, ["check", "--json", "conformance/native/fail/std-collections-append-mutspan-overlap.0"]).catch((error) => error);
 assert.notEqual(collectionsOverlapJson.code, 0);
 const collectionsOverlapBody = JSON.parse(collectionsOverlapJson.stdout);
 assert.equal(collectionsOverlapBody.diagnostics[0].code, "STD003");
 assert.match(collectionsOverlapBody.diagnostics[0].message, /append source must not overlap/);
+
+const collectionsUsizeMemory = await execFileAsync(zero, ["mem", "--json", "conformance/native/pass/std-collections-usize-memory.0"]);
+const collectionsUsizeMemoryBody = JSON.parse(collectionsUsizeMemory.stdout);
+assert.equal(collectionsUsizeMemoryBody.memoryBudgets.collectionCapacityBytes, 32);
+assert.equal(collectionsUsizeMemoryBody.collectionFacts.FixedStorage.capacityBytes, 32);
+
+const collectionsQueryMemory = await execFileAsync(zero, ["mem", "--json", "conformance/native/pass/std-collections-query-memory.0"]);
+const collectionsQueryMemoryBody = JSON.parse(collectionsQueryMemory.stdout);
+assert.equal(collectionsQueryMemoryBody.memoryBudgets.collectionCapacityBytes, 2);
+assert.equal(collectionsQueryMemoryBody.collectionFacts.FixedStorage.storageSites, 1);
+assert.equal(collectionsQueryMemoryBody.collectionFacts.FixedStorage.capacityBytes, 2);
+assert.equal(collectionsQueryMemoryBody.collectionFacts.FixedStorage.queryCalls, 1);
 
 for (const [fixture, message] of [
   ["conformance/check/fail/parse-missing-brace.0", /unbalanced expression delimiters/],
@@ -3938,13 +3952,15 @@ assert.match(memDropPrefixCountI32.stderr, /TYP022/);
 
 for (const [fixture, code] of [
   ["std-collections-append-mismatch.0", /STD003/],
-  ["std-collections-append-overlap.0", /STD003/],
+  ["std-collections-append-overlap.0", /BOR001/],
   ["std-collections-append-mutspan-overlap.0", /STD003/],
+  ["std-collections-push-borrowed.0", /BOR001/],
   ["std-collections-push-immutable.0", /TYP009/],
   ["std-collections-push-mismatch.0", /STD003/],
   ["std-collections-push-owned.0", /OWN001/],
   ["std-search-owned.0", /OWN001/],
   ["std-sort-immutable.0", /TYP009/],
+  ["std-sort-mutates-borrowed.0", /BOR001/],
 ]) {
   const result = await execFileAsync(zero, ["check", `conformance/native/fail/${fixture}`]).catch((error) => error);
   assert.notEqual(result.code, 0);
@@ -4397,9 +4413,9 @@ for (const [fixture, code] of [
   ["maybe-value-nested-mutspan-alias-invalidated.0", /MEM002/],
   ["maybe-value-mutspan-call-invalidated.0", /MEM002/],
   ["maybe-value-mutspan-condition-call-invalidated.0", /MEM002/],
-  ["maybe-value-mutspan-alias-guard-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-alias-guard-invalidated.0", /BOR001/],
   ["maybe-value-mutspan-call-shadow-invalidated.0", /MEM002/],
-  ["maybe-value-mutspan-assignment-shadow-invalidated.0", /MEM002/],
+  ["maybe-value-mutspan-assignment-shadow-invalidated.0", /BOR001/],
   ["maybe-value-match-guard-mutates-subject.0", /MEM002/],
   ["maybe-value-variant-match-guard-fallthrough.0", /MEM002/],
   ["maybe-value-scalar-match-guard-fallthrough.0", /MEM002/],
