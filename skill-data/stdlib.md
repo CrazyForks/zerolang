@@ -19,7 +19,7 @@ Call functions with their module path, such as `std.mem.len(value)`.
 
 ## Target-Neutral Helpers
 
-- `std.mem`: spans, byte copy/fill, non-owned generic item copy/fill/search, generic slicing, length, safe indexed `get`, fixed-buffer allocation, byte buffers, and caller-owned vectors.
+- `std.mem`: spans, byte copy/fill, non-owned scalar item copy/fill/search, scalar item slicing, length, safe indexed `get`, fixed-buffer allocation, byte buffers, and caller-owned vectors.
 - `std.math`: pure `u32` integer helpers, GCD/LCM, powers, modular power, primality, and divisor routines.
 - `std.path`: target-neutral lexical path basename, dirname, extension, join, normalize, and relative helpers.
 - `std.codec`: byte reads, varint sizing, CRC helpers, and byte checksums.
@@ -78,7 +78,9 @@ pub fn main() -> Void {
 }
 ```
 
-For non-byte item storage, use the generic item helpers:
+For non-byte scalar item storage, use the generic item helpers. Current direct
+targets support `Bool`, `u8`, `u16`, `usize`, `i32`, `u32`, `i64`, and `u64`
+elements for these helpers.
 
 ```zero
 pub fn main() -> Void {

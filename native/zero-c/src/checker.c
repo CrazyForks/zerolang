@@ -6427,11 +6427,21 @@ static bool stdlib_reject_owned_item_element(const Program *program, Scope *scop
   return set_diag_detail(diag, 3013, message, expr ? expr->line : 0, expr ? expr->column : 0, "item type without owned values", element_type ? element_type : "Unknown", help ? help : "write each owned element explicitly so ownership is transferred once");
 }
 
+static bool stdlib_require_supported_item_element(const Program *program, const char *display_name, const char *element_type, const Expr *expr, ZDiag *diag) {
+  const char *resolved = type_strip_const(resolve_alias_type(program, element_type));
+  char pattern[64];
+  snprintf(pattern, sizeof(pattern), "|%s|", resolved ? resolved : "");
+  if ((resolved && !strchr(resolved, '|') && strstr("|Bool|bool|u8|u16|usize|i32|u32|i64|u64|", pattern)) || type_is_named_generic(resolved, "ref") || type_is_named_generic(resolved, "mutref")) return true;
+  char message[256]; snprintf(message, sizeof(message), "%s item element type is not supported", display_name);
+  return set_diag_detail(diag, 3012, message, expr ? expr->line : 0, expr ? expr->column : 0, "Bool, u8, u16, usize, i32, u32, i64, or u64 item storage", element_type ? element_type : "Unknown", "use a supported scalar item type or write a specialized helper for this type");
+}
+
 static bool check_stdlib_mem_copy_items_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
   const char *dst_actual = NULL;
   char element_type[128];
-  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.mem.copyItems", element_type, sizeof(element_type), &dst_actual)) return false;
-  if (!stdlib_reject_owned_item_element(program, scope, "std.mem.copyItems", element_type, expr->args.items[0], diag, "copy", "move owned values explicitly so each destination receives one owner")) return false;
+  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.mem.copyItems", element_type, sizeof(element_type), &dst_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, "std.mem.copyItems", element_type, expr->args.items[0], diag, "copy", "move owned values explicitly so each destination receives one owner") ||
+      !stdlib_require_supported_item_element(program, "std.mem.copyItems", element_type, expr->args.items[0], diag)) return false;
   char expected_dst[160];
   char expected_src[160];
   stdlib_span_type_for_element(expected_dst, sizeof(expected_dst), element_type, true);
@@ -6452,8 +6462,9 @@ static bool check_stdlib_mem_copy_items_call_expected(CheckContext *ctx, const P
 static bool check_stdlib_mem_fill_items_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
   const char *dst_actual = NULL;
   char element_type[128];
-  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.mem.fillItems", element_type, sizeof(element_type), &dst_actual)) return false;
-  if (!stdlib_reject_owned_item_element(program, scope, "std.mem.fillItems", element_type, expr->args.items[0], diag, "duplicate", "write each owned element explicitly so ownership is transferred once")) return false;
+  if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.mem.fillItems", element_type, sizeof(element_type), &dst_actual) ||
+      !stdlib_reject_owned_item_element(program, scope, "std.mem.fillItems", element_type, expr->args.items[0], diag, "duplicate", "write each owned element explicitly so ownership is transferred once") ||
+      !stdlib_require_supported_item_element(program, "std.mem.fillItems", element_type, expr->args.items[0], diag)) return false;
   char expected_dst[160];
   stdlib_span_type_for_element(expected_dst, sizeof(expected_dst), element_type, true);
   record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_dst, dst_actual);
@@ -6473,8 +6484,9 @@ static bool check_stdlib_mem_contains_call_expected(CheckContext *ctx, const Pro
   const char *items_actual = NULL;
   char element_type[128];
   if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.contains", element_type, sizeof(element_type), &items_actual)) return false;
-  if (z_std_helper_kind(resolution ? resolution->std_helper : NULL) == Z_STD_HELPER_KIND_MEM_CONTAINS &&
-      !stdlib_reject_owned_item_element(program, scope, "std.mem.contains", element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly")) return false;
+  if ((z_std_helper_kind(resolution ? resolution->std_helper : NULL) == Z_STD_HELPER_KIND_MEM_CONTAINS &&
+       !stdlib_reject_owned_item_element(program, scope, "std.mem.contains", element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly")) ||
+      !stdlib_require_supported_item_element(program, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.contains", element_type, expr->args.items[0], diag)) return false;
   char expected_items[160];
   stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, false);
   record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
@@ -6495,7 +6507,8 @@ static bool check_stdlib_mem_contains_call_expected(CheckContext *ctx, const Pro
 static bool check_stdlib_mem_slice_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
   const char *items_actual = NULL;
   char element_type[128];
-  if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.prefix", element_type, sizeof(element_type), &items_actual)) return false;
+  if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.prefix", element_type, sizeof(element_type), &items_actual) ||
+      !stdlib_require_supported_item_element(program, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.prefix", element_type, expr->args.items[0], diag)) return false;
   char result_type[160];
   char expected_items[160];
   stdlib_span_type_for_element(result_type, sizeof(result_type), element_type, false);

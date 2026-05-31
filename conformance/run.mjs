@@ -3729,6 +3729,10 @@ const memContainsGenericOwned = await execFileAsync(zero, ["check", "conformance
 assert.notEqual(memContainsGenericOwned.code, 0);
 assert.match(memContainsGenericOwned.stderr, /OWN001/);
 
+const memContainsRecord = await execFileAsync(zero, ["check", "conformance/native/fail/std-mem-contains-record.0"]).catch((error) => error);
+assert.notEqual(memContainsRecord.code, 0);
+assert.match(memContainsRecord.stderr, /STD003/);
+
 const mutspanFromSpan = await execFileAsync(zero, ["check", "conformance/native/fail/mutspan-from-span.0"]).catch((error) => error);
 assert.notEqual(mutspanFromSpan.code, 0);
 assert.match(mutspanFromSpan.stderr, /TYP002/);
