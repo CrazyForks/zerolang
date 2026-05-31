@@ -330,6 +330,7 @@ for (const fixture of [
   "conformance/native/pass/std-mem-generic-items.0",
   "conformance/native/pass/std-mem-field-items.0",
   "conformance/native/pass/std-mem-u64-contains.0",
+  "conformance/native/pass/std-mem-u64-copy-items.0",
   "conformance/native/pass/array-repeat-literal.0",
   "conformance/native/pass/array-repeat-record-field.0",
   "conformance/native/pass/integer-widths.0",
@@ -902,6 +903,41 @@ assert.equal(coffDynamicSliceBuildBody.compiler, "zero-coff-x64");
 assert.equal(coffDynamicSliceBuildBody.generatedCBytes, 0);
 assert.equal(coffDynamicSliceBuildBody.objectBackend.objectEmission.path, "direct-coff-x64-object");
 await assertCoffX64Object(`${outDir}/coff-dynamic-byte-slice.obj`, "main");
+
+const coffU64CopyFixture = "conformance/native/pass/std-mem-u64-copy-items.0";
+const coffU64CopyReadiness = await execFileAsync(zero, [
+  "check",
+  "--json",
+  "--emit",
+  "obj",
+  "--target",
+  "win32-x64.exe",
+  coffU64CopyFixture,
+]);
+const coffU64CopyReadinessBody = JSON.parse(coffU64CopyReadiness.stdout);
+assert.equal(coffU64CopyReadinessBody.ok, true);
+assert.equal(coffU64CopyReadinessBody.targetReadiness.ok, true);
+assert.equal(coffU64CopyReadinessBody.targetReadiness.buildable, true);
+assert.equal(coffU64CopyReadinessBody.targetReadiness.backend, "zero-coff-x64");
+const coffU64CopyPath = `${outDir}/coff-u64-copy-items.obj`;
+const coffU64CopyBuild = await execFileAsync(zero, [
+  "build",
+  "--json",
+  "--emit",
+  "obj",
+  "--target",
+  "win32-x64.exe",
+  coffU64CopyFixture,
+  "--out",
+  coffU64CopyPath,
+]);
+const coffU64CopyBuildBody = JSON.parse(coffU64CopyBuild.stdout);
+assert.equal(coffU64CopyBuildBody.compiler, "zero-coff-x64");
+assert.equal(coffU64CopyBuildBody.generatedCBytes, 0);
+assert.equal(coffU64CopyBuildBody.objectBackend.objectEmission.path, "direct-coff-x64-object");
+const coffU64CopyBytes = await assertCoffX64Object(coffU64CopyPath, "main");
+assert(coffU64CopyBytes.includes(Buffer.from([0x48, 0x8b, 0x00])));
+assert(coffU64CopyBytes.includes(Buffer.from([0x48, 0x89, 0x02])));
 
 async function assertMachOObjectBuildabilityBlocked(fixture, outName, expectedMessage) {
   const readiness = await execFileAsync(zero, [
@@ -3518,6 +3554,7 @@ for (const runtimeFixture of [
   ["conformance/native/pass/std-mem-generic-items.0", "std-mem-generic-items", { stdout: "std mem generic items ok\n" }],
   ["conformance/native/pass/std-mem-field-items.0", "std-mem-field-items", { stdout: "std mem field items ok\n" }],
   ["conformance/native/pass/std-mem-u64-contains.0", "std-mem-u64-contains", { stdout: "std mem u64 contains ok\n" }],
+  ["conformance/native/pass/std-mem-u64-copy-items.0", "std-mem-u64-copy-items", { stdout: "std mem u64 copy items ok\n" }],
   ["conformance/native/pass/std-path-helper-name-collision.0", "std-path-helper-name-collision", { stdout: "std path helper collision ok\n" }],
   ["conformance/native/pass/byte-view-params.0", "byte-view-params", { stdout: "byte view params ok\n" }],
   ["conformance/native/pass/bool-arrays.0", "bool-arrays", { stdout: "bool arrays ok\n" }],

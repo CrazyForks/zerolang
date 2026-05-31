@@ -165,6 +165,16 @@ static void macho_emit_store_local_b(ZBuf *text, const IrFunction *fun, unsigned
   z_aarch64_emit_store_b_sp(text, reg, offset);
 }
 
+static void macho_emit_load_local_h(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
+  unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
+  z_aarch64_emit_load_h_imm(text, reg, 31, offset);
+}
+
+static void macho_emit_store_local_h(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned slot_offset, unsigned frame_size) {
+  unsigned offset = macho_local_slot_offset(fun, local_index, slot_offset, frame_size);
+  z_aarch64_emit_store_h_imm(text, reg, 31, offset);
+}
+
 static bool macho_scratch_slot(unsigned slot, unsigned *offset, const IrValue *value, ZDiag *diag) {
   if (slot >= MACHO_SCRATCH_SLOT_COUNT) {
     return macho_diag_at(diag, "direct AArch64 Mach-O expression nesting exceeds scratch register spill capacity", value ? value->line : 1, value ? value->column : 1, "expression too deep");
@@ -192,6 +202,10 @@ static bool macho_emit_load_scratch(ZBuf *text, unsigned reg, IrTypeKind type, u
 static void macho_emit_load_field(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned field_offset, IrTypeKind type, unsigned frame_size) {
   if (type == IR_TYPE_U8 || type == IR_TYPE_BOOL) {
     macho_emit_load_local_b(text, fun, reg, local_index, field_offset, frame_size);
+  } else if (type == IR_TYPE_U16) {
+    macho_emit_load_local_h(text, fun, reg, local_index, field_offset, frame_size);
+  } else if (macho_type_is_scalar64(type)) {
+    macho_emit_load_local_x(text, fun, reg, local_index, field_offset, frame_size);
   } else {
     macho_emit_load_local_w(text, fun, reg, local_index, field_offset, frame_size);
   }
@@ -200,6 +214,10 @@ static void macho_emit_load_field(ZBuf *text, const IrFunction *fun, unsigned re
 static void macho_emit_store_field(ZBuf *text, const IrFunction *fun, unsigned reg, unsigned local_index, unsigned field_offset, IrTypeKind type, unsigned frame_size) {
   if (type == IR_TYPE_U8 || type == IR_TYPE_BOOL) {
     macho_emit_store_local_b(text, fun, reg, local_index, field_offset, frame_size);
+  } else if (type == IR_TYPE_U16) {
+    macho_emit_store_local_h(text, fun, reg, local_index, field_offset, frame_size);
+  } else if (macho_type_is_scalar64(type)) {
+    macho_emit_store_local_x(text, fun, reg, local_index, field_offset, frame_size);
   } else {
     macho_emit_store_local_w(text, fun, reg, local_index, field_offset, frame_size);
   }

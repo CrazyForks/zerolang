@@ -38,8 +38,10 @@ static bool coff_diag_at(ZDiag *diag, const char *message, int line, int column,
 
 static bool coff_type_is_scalar32(IrTypeKind type) { return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_I32 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE; }
 
+static bool coff_type_is_i64(IrTypeKind type) { return type == IR_TYPE_I64 || type == IR_TYPE_U64; }
+
 static bool coff_type_is_unsigned(IrTypeKind type) {
-  return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE;
+  return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE || type == IR_TYPE_U64;
 }
 
 static IrTypeKind coff_view_element_type(const IrValue *view) {
@@ -49,7 +51,7 @@ static IrTypeKind coff_view_element_type(const IrValue *view) {
 static unsigned coff_type_byte_size(IrTypeKind type) {
   if (type == IR_TYPE_U8 || type == IR_TYPE_BOOL) return 1;
   if (type == IR_TYPE_U16) return 2;
-  if (type == IR_TYPE_I64 || type == IR_TYPE_U64) return 8;
+  if (coff_type_is_i64(type)) return 8;
   return 4;
 }
 
@@ -64,12 +66,14 @@ static bool coff_type_is_word_array_element(IrTypeKind type) {
 static void coff_emit_load_ptr_element(ZBuf *text, unsigned dst_reg, unsigned base_reg, IrTypeKind element_type) {
   if (element_type == IR_TYPE_BOOL || element_type == IR_TYPE_U8) z_x64_emit_movzx_reg32_ptr_reg_u8(text, dst_reg, base_reg);
   else if (element_type == IR_TYPE_U16) z_x64_emit_movzx_reg32_ptr_reg_disp_u16(text, dst_reg, base_reg, 0);
+  else if (coff_type_is_i64(element_type)) z_x64_emit_load_reg_ptr_reg(text, dst_reg, base_reg, true);
   else z_x64_emit_load_reg_ptr_reg(text, dst_reg, base_reg, false);
 }
 
 static void coff_emit_store_ptr_element(ZBuf *text, unsigned base_reg, unsigned src_reg, IrTypeKind element_type) {
   if (element_type == IR_TYPE_BOOL || element_type == IR_TYPE_U8) z_x64_emit_store_ptr_reg8_from_reg(text, base_reg, src_reg);
   else if (element_type == IR_TYPE_U16) z_x64_emit_store_ptr_reg16_from_reg(text, base_reg, src_reg);
+  else if (coff_type_is_i64(element_type)) z_x64_emit_store_ptr_reg_from_reg(text, base_reg, src_reg, true);
   else z_x64_emit_store_ptr_reg_from_reg(text, base_reg, src_reg, false);
 }
 
@@ -125,6 +129,11 @@ static void coff_emit_load_field_eax(ZBuf *text, const IrFunction *fun, unsigned
   if (type == IR_TYPE_U8 || type == IR_TYPE_BOOL) {
     z_x64_append_u8(text, 0x0f);
     z_x64_emit_rbp_disp_reg(text, 0xb6, 0, offset, false);
+  } else if (type == IR_TYPE_U16) {
+    z_x64_append_u8(text, 0x0f);
+    z_x64_emit_rbp_disp_reg(text, 0xb7, 0, offset, false);
+  } else if (coff_type_is_i64(type)) {
+    z_x64_emit_rbp_disp_reg(text, 0x8b, 0, offset, true);
   } else {
     z_x64_emit_rbp_disp_reg(text, 0x8b, 0, offset, false);
   }
@@ -134,6 +143,11 @@ static void coff_emit_store_field_from_eax(ZBuf *text, const IrFunction *fun, un
   unsigned offset = coff_local_slot_offset(fun, local_index, field_offset);
   if (type == IR_TYPE_U8 || type == IR_TYPE_BOOL) {
     z_x64_emit_rbp_disp_reg(text, 0x88, 0, offset, false);
+  } else if (type == IR_TYPE_U16) {
+    z_x64_append_u8(text, 0x66);
+    z_x64_emit_rbp_disp_reg(text, 0x89, 0, offset, false);
+  } else if (coff_type_is_i64(type)) {
+    z_x64_emit_rbp_disp_reg(text, 0x89, 0, offset, true);
   } else {
     z_x64_emit_rbp_disp_reg(text, 0x89, 0, offset, false);
   }
@@ -426,12 +440,13 @@ static bool coff_emit_binary_value(ZBuf *text, const IrFunction *fun, const IrVa
   if (!coff_emit_value(text, fun, value->left, ctx, diag)) return false;
   z_x64_emit_push_rax(text);
   if (!coff_emit_value(text, fun, value->right, ctx, diag)) return false;
-  z_x64_emit_mov_rcx_from_rax(text, false);
+  bool wide = coff_type_is_i64(value->type);
+  z_x64_emit_mov_rcx_from_rax(text, wide);
   z_x64_emit_pop_rax(text);
-  if (value->binary_op == IR_BIN_ADD) z_x64_emit_add_rax_rcx(text, false);
-  else if (value->binary_op == IR_BIN_SUB) z_x64_emit_sub_rax_rcx(text, false);
-  else if (value->binary_op == IR_BIN_MUL) z_x64_emit_imul_rax_rcx(text, false);
-  else z_x64_emit_div_rax_rcx(text, false, coff_type_is_unsigned(value->type), value->binary_op == IR_BIN_MOD);
+  if (value->binary_op == IR_BIN_ADD) z_x64_emit_add_rax_rcx(text, wide);
+  else if (value->binary_op == IR_BIN_SUB) z_x64_emit_sub_rax_rcx(text, wide);
+  else if (value->binary_op == IR_BIN_MUL) z_x64_emit_imul_rax_rcx(text, wide);
+  else z_x64_emit_div_rax_rcx(text, wide, coff_type_is_unsigned(value->type), value->binary_op == IR_BIN_MOD);
   return true;
 }
 
@@ -440,9 +455,10 @@ static bool coff_emit_compare_value(ZBuf *text, const IrFunction *fun, const IrV
   if (!coff_emit_value(text, fun, value->left, ctx, diag)) return false;
   z_x64_emit_push_rax(text);
   if (!coff_emit_value(text, fun, value->right, ctx, diag)) return false;
-  z_x64_emit_mov_rcx_from_rax(text, false);
+  bool wide = coff_type_is_i64(value->left ? value->left->type : value->type);
+  z_x64_emit_mov_rcx_from_rax(text, wide);
   z_x64_emit_pop_rax(text);
-  z_x64_emit_cmp_rax_rcx_to_bool(text, coff_setcc_opcode(value->compare_op, coff_type_is_unsigned(value->left ? value->left->type : value->type)), false);
+  z_x64_emit_cmp_rax_rcx_to_bool(text, coff_setcc_opcode(value->compare_op, coff_type_is_unsigned(value->left ? value->left->type : value->type)), wide);
   return true;
 }
 
@@ -615,8 +631,11 @@ static bool coff_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *va
   if (!value) return coff_diag_at(diag, "direct COFF expression is missing", 1, 1, "missing expression");
   switch (value->kind) {
     case IR_VALUE_BOOL:
-    case IR_VALUE_INT:
       z_x64_emit_mov_eax_u32(text, (uint32_t)value->int_value);
+      return true;
+    case IR_VALUE_INT:
+      if (coff_type_is_i64(value->type)) z_x64_emit_mov_rax_u64(text, (uint64_t)value->int_value);
+      else z_x64_emit_mov_eax_u32(text, (uint32_t)value->int_value);
       return true;
     case IR_VALUE_LOCAL: return coff_emit_local_value(text, fun, value, diag);
     case IR_VALUE_CAST:
