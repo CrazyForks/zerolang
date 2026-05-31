@@ -328,8 +328,8 @@ bool z_build_check_aarch64_function_shape(const ZBuildability *ctx, const IrFunc
   for (size_t i = 0; i < fun->param_count; i++) abi_slots += fun->locals[i].type == IR_TYPE_BYTE_VIEW ? 2u : 1u;
   if (abi_slots > 8) return z_build_diag(ctx, diag, "direct AArch64 buildability found too many ABI argument slots", fun->line, fun->column, fun->name);
   if (fun->return_type != IR_TYPE_VOID && !z_build_is_scalar32(fun->return_type) &&
-      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW) {
-    return z_build_diag(ctx, diag, "direct AArch64 buildability currently supports Void, 32-bit scalars, byte views, and Maybe byte views", fun->line, fun->column, z_build_type_name(fun->return_type));
+      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_SCALAR) {
+    return z_build_diag(ctx, diag, "direct AArch64 buildability currently supports Void, 32-bit scalars, byte views, Maybe byte views, and Maybe scalar returns", fun->line, fun->column, z_build_type_name(fun->return_type));
   }
   size_t frame_bytes = (fun->frame_bytes ? fun->frame_bytes : fun->local_len * 8u) + BUILD_AARCH64_SCRATCH_SLOT_COUNT * 8u;
   if (frame_bytes > 4095u) return z_build_diag(ctx, diag, "direct AArch64 stack frame exceeds current immediate-offset support", fun->line, fun->column, fun->name);
@@ -343,7 +343,7 @@ bool z_build_check_aarch64_function_shape(const ZBuildability *ctx, const IrFunc
       if (!array_ok) return z_build_diag(ctx, diag, "direct AArch64 object buildability does not support this fixed-array local", local->line, local->column, z_build_type_name(local->element_type));
       continue;
     }
-    if (local->type == IR_TYPE_MAYBE_BYTE_VIEW) continue;
+    if (local->type == IR_TYPE_MAYBE_BYTE_VIEW || local->type == IR_TYPE_MAYBE_SCALAR) continue;
     if (!z_build_is_elf_scalar(local->type)) {
       return z_build_diag(ctx, diag, "direct AArch64 object buildability does not support this local type", local->line, local->column, z_build_type_name(local->type));
     }

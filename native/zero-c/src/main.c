@@ -7269,13 +7269,16 @@ static int helper_estimated_direct_bytes(const ZStdHelperInfo *helper) {
 static const char *helper_module_name(const ZStdHelperInfo *helper) {
   const char *name = helper && helper->name ? helper->name : "";
   if (strncmp(name, "std.args.", strlen("std.args.")) == 0) return "std.args";
+  if (strncmp(name, "std.ascii.", strlen("std.ascii.")) == 0) return "std.ascii";
   if (strncmp(name, "std.collections.", strlen("std.collections.")) == 0) return "std.collections";
   if (strncmp(name, "std.env.", strlen("std.env.")) == 0) return "std.env";
+  if (strncmp(name, "std.fmt.", strlen("std.fmt.")) == 0) return "std.fmt";
   if (strncmp(name, "std.math.", strlen("std.math.")) == 0) return "std.math";
   if (strncmp(name, "std.path.", strlen("std.path.")) == 0) return "std.path";
   if (strncmp(name, "std.search.", strlen("std.search.")) == 0) return "std.search";
   if (strncmp(name, "std.sort.", strlen("std.sort.")) == 0) return "std.sort";
   if (strncmp(name, "std.str.", strlen("std.str.")) == 0) return "std.str";
+  if (strncmp(name, "std.text.", strlen("std.text.")) == 0) return "std.text";
   if (strncmp(name, "std.io.", strlen("std.io.")) == 0) return "std.io";
   if (strncmp(name, "std.codec.", strlen("std.codec.")) == 0) return "std.codec";
   if (strncmp(name, "std.mem.", strlen("std.mem.")) == 0) return "std.mem";
@@ -7315,10 +7318,13 @@ static const char *helper_ownership_notes(const ZStdHelperInfo *helper) {
 
 static const char *helper_example_path(const ZStdHelperInfo *helper) {
   const char *module = helper_module_name(helper);
+  if (strcmp(module, "std.ascii") == 0) return "conformance/native/pass/std-ascii.0";
   if (strcmp(module, "std.collections") == 0) return "conformance/native/pass/std-collections-algorithms.0";
+  if (strcmp(module, "std.fmt") == 0) return "conformance/native/pass/std-fmt.0";
   if (strcmp(module, "std.search") == 0 || strcmp(module, "std.sort") == 0) return "conformance/native/pass/std-search-sort-widths.0";
   if (strcmp(module, "std.mem") == 0) return "examples/memory-primitives.0";
   if (helper && helper->name && strncmp(helper->name, "std.str.", strlen("std.str.")) == 0) return "examples/std-str.0";
+  if (strcmp(module, "std.text") == 0) return "conformance/native/pass/std-text.0";
   if (helper && helper->name && strncmp(helper->name, "std.math.", strlen("std.math.")) == 0) return "examples/std-math.0";
   if (strcmp(module, "std.io") == 0 || strcmp(module, "std.path") == 0) return "examples/std-path-io.0";
   if (strcmp(module, "std.args") == 0 || strcmp(module, "std.env") == 0) return "examples/cli-file.0";

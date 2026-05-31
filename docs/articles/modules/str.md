@@ -4,12 +4,20 @@ Runnable today:
 
 | API | Return | Notes |
 | --- | --- | --- |
+| `std.str.copy(buffer, text)` | `Maybe<Span<u8>>` | Copies `text` into caller storage. |
+| `std.str.concat(buffer, left, right)` | `Maybe<Span<u8>>` | Writes `left` followed by `right`. |
+| `std.str.repeat(buffer, text, count)` | `Maybe<Span<u8>>` | Repeats `text` into caller storage. |
 | `std.str.reverse(buffer, text)` | `Maybe<Span<u8>>` | Writes reversed bytes into non-overlapping caller-provided storage. |
 | `std.str.countByte(text, byte)` | `usize` | Counts exact byte matches. |
+| `std.str.count(text, needle)` | `usize` | Counts non-overlapping byte substring matches; the empty needle returns `len + 1`. |
+| `std.str.indexOf(text, needle)` / `std.str.lastIndexOf(text, needle)` | `usize` | Returns a matching byte index or the input length when absent. |
 | `std.str.startsWith(text, prefix)` | `Bool` | Checks a byte prefix. |
 | `std.str.endsWith(text, suffix)` | `Bool` | Checks a byte suffix. |
 | `std.str.contains(text, needle)` | `Bool` | Checks for a byte substring; the empty needle is present. |
 | `std.str.trimAscii(text)` | `Span<u8>` | Borrows `text` without leading or trailing ASCII space bytes. |
+| `std.str.trimStartAscii(text)` / `std.str.trimEndAscii(text)` | `Span<u8>` | Borrows one-sided trimmed views. |
+| `std.str.toLowerAscii(buffer, text)` / `std.str.toUpperAscii(buffer, text)` | `Maybe<Span<u8>>` | Writes ASCII case-converted bytes into caller storage. |
+| `std.str.eqlIgnoreAsciiCase(left, right)` | `Bool` | Compares ASCII case-insensitively. |
 | `std.str.wordCountAscii(text)` | `usize` | Counts non-empty runs separated by ASCII space bytes. |
 
 Current scope:
@@ -24,8 +32,10 @@ Current scope:
 pub fn main(world: World) -> Void raises {
     var storage: [6]u8 = [0_u8; 6]
     let reversed: Maybe<Span<u8>> = std.str.reverse(storage, "drawer")
-    if reversed.has {
-        if std.mem.eql(reversed.value, "reward") {
+    var lower_storage: [4]u8 = [0_u8; 4]
+    let lower: Maybe<Span<u8>> = std.str.toLowerAscii(lower_storage, "ZERO")
+    if reversed.has && lower.has {
+        if std.mem.eql(reversed.value, "reward") && std.mem.eql(lower.value, "zero") {
             check world.out.write("string helper ok\n")
         }
     }

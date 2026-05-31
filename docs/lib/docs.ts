@@ -138,9 +138,17 @@ export const docs: Doc[] = [
     section: "Reference",
   },
   {
+    slug: "module-ascii",
+    title: "std.ascii",
+    description: "ASCII byte predicates, case conversion, and digit value helpers.",
+    path: "/modules/ascii",
+    sourcePath: "/articles/modules/ascii.md",
+    section: "Modules",
+  },
+  {
     slug: "module-parse",
     title: "std.parse",
-    description: "Allocation-free ASCII scanners and unsigned integer parsers.",
+    description: "Allocation-free byte scanners and integer/bool parsers.",
     path: "/modules/parse",
     sourcePath: "/articles/modules/parse.md",
     section: "Modules",
@@ -194,6 +202,14 @@ export const docs: Doc[] = [
     section: "Modules",
   },
   {
+    slug: "module-fmt",
+    title: "std.fmt",
+    description: "Caller-buffer formatting for booleans and integer text.",
+    path: "/modules/fmt",
+    sourcePath: "/articles/modules/fmt.md",
+    section: "Modules",
+  },
+  {
     slug: "module-math",
     title: "std.math",
     description: "Pure fixed-width integer helpers and small number-theory routines.",
@@ -215,6 +231,14 @@ export const docs: Doc[] = [
     description: "Allocation-free byte-string helpers over spans and caller-owned storage.",
     path: "/modules/str",
     sourcePath: "/articles/modules/str.md",
+    section: "Modules",
+  },
+  {
+    slug: "module-text",
+    title: "std.text",
+    description: "ASCII and UTF-8 byte-backed text validation.",
+    path: "/modules/text",
+    sourcePath: "/articles/modules/text.md",
     section: "Modules",
   },
   {

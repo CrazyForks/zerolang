@@ -301,6 +301,11 @@ static bool mir_verify_direct_function_contract(IrProgram *ir, const IrFunction 
     snprintf(actual, sizeof(actual), "return element %s", mir_type_kind_name(fun->return_element_type));
     mir_verify_mark_unsupported(ir, "MIR verifier found non-ABI byte-view return element type", fun->line, fun->column, actual);
     return false;
+  } else if (!fun->raises && fun->return_type == IR_TYPE_MAYBE_SCALAR && !mir_type_is_direct_abi(fun->return_element_type)) {
+    char actual[128];
+    snprintf(actual, sizeof(actual), "return element %s", mir_type_kind_name(fun->return_element_type));
+    mir_verify_mark_unsupported(ir, "MIR verifier found non-ABI Maybe scalar return element type", fun->line, fun->column, actual);
+    return false;
   }
   return true;
 }
@@ -326,6 +331,8 @@ static bool mir_verify_direct_call_contract(IrProgram *ir, const IrValue *value)
   if (expected_call_type == IR_TYPE_BYTE_VIEW) {
     actual_value_type = mir_view_element_or_u8(value->element_type);
     expected_value_type = mir_view_element_or_u8(callee->return_element_type);
+  } else if (expected_call_type == IR_TYPE_MAYBE_SCALAR) {
+    expected_value_type = callee->return_element_type;
   }
   bool element_matches = actual_value_type == expected_value_type;
   if (value->type != expected_call_type || !element_matches) {
@@ -649,6 +656,7 @@ static bool mir_verify_maybe_value_contract(IrProgram *ir, const IrFunction *fun
       return mir_verify_value_type(ir, value, IR_TYPE_BYTE_VIEW, "MIR verifier found maybe value type mismatch", "Maybe byte-view value");
     }
     if (local->type == IR_TYPE_MAYBE_SCALAR) {
+      if (value->type == IR_TYPE_BOOL) return true;
       return mir_verify_value_is_integer(ir, value, "MIR verifier found maybe scalar value type mismatch", "Maybe scalar value");
     }
   }
@@ -1054,7 +1062,7 @@ static bool mir_verify_direct_value_kind_contract(IrProgram *ir, const IrFunctio
       return mir_verify_maybe_byte_view_literal_contract(ir, value);
     case IR_VALUE_MAYBE_SCALAR_LITERAL:
       if (!mir_verify_helper_result_type(ir, value, IR_TYPE_MAYBE_SCALAR, "Maybe scalar literal")) return false;
-      if (!mir_type_is_integer_value(value->element_type) || value->data_len > 1) {
+      if (!(value->element_type == IR_TYPE_BOOL || mir_type_is_integer_value(value->element_type)) || value->data_len > 1) {
         char actual[160];
         snprintf(actual, sizeof(actual), "Maybe scalar literal value %s has flag %u", mir_type_kind_name(value->element_type), value->data_len);
         mir_verify_mark_unsupported(ir, "MIR verifier found invalid Maybe scalar literal", value->line, value->column, actual);
@@ -1151,9 +1159,15 @@ static bool mir_verify_direct_return_instr(IrProgram *ir, const IrFunction *fun,
         mir_verify_mark_unsupported(ir, "MIR verifier found return value mismatch", instr->line, instr->column, actual);
         return false;
       }
+    } else if (fun->return_type == IR_TYPE_MAYBE_SCALAR && value->element_type != fun->return_element_type) {
+      char actual[160];
+      snprintf(actual, sizeof(actual), "return element %s but function return element is %s", mir_type_kind_name(value->element_type), mir_type_kind_name(fun->return_element_type));
+      mir_verify_mark_unsupported(ir, "MIR verifier found return value mismatch", instr->line, instr->column, actual);
+      return false;
     }
     return true;
   }
+  if (fun->return_type == IR_TYPE_MAYBE_SCALAR && value && value->type == fun->return_element_type) return true;
   char actual[160];
   snprintf(actual, sizeof(actual), "return has %s but function returns %s", value ? mir_type_kind_name(value->type) : "missing", mir_type_kind_name(fun->return_type));
   mir_verify_mark_unsupported(ir, "MIR verifier found return value mismatch", instr->line, instr->column, actual);

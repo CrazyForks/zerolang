@@ -223,6 +223,7 @@ static IrTypeKind ir_type_kind(const char *type) {
   if (strcmp(type, "Maybe<MutSpan<u8>>") == 0 || strcmp(type, "Maybe<Span<u8>>") == 0 ||
       strcmp(type, "Maybe<String>") == 0 || strcmp(type, "Maybe<owned<ByteBuf>>") == 0) return IR_TYPE_MAYBE_BYTE_VIEW;
   if (strcmp(type, "Maybe<JsonDoc>") == 0 ||
+      strcmp(type, "Maybe<Bool>") == 0 ||
       strcmp(type, "Maybe<u8>") == 0 ||
       strcmp(type, "Maybe<u16>") == 0 ||
       strcmp(type, "Maybe<usize>") == 0 ||
@@ -283,7 +284,7 @@ static IrTypeKind ir_maybe_scalar_element_type(const char *type) {
   char *inner = z_strndup(type + prefix_len, len - prefix_len - 1);
   IrTypeKind element = ir_type_kind(inner);
   free(inner);
-  return ir_type_is_value(element) ? element : IR_TYPE_UNSUPPORTED;
+  return (ir_type_is_value(element) || element == IR_TYPE_BOOL) ? element : IR_TYPE_UNSUPPORTED;
 }
 
 static unsigned ir_error_code_for_name(const char *name) {
@@ -1301,6 +1302,7 @@ static bool ir_lower_named_direct_call(const Program *program, IrProgram *ir, co
   IrValue *value = ir_new_value(ir, IR_VALUE_CALL, callee->raises ? IR_TYPE_I64 : type, expr->line, expr->column);
   value->callee_index = callee_index;
   value->element_type = type == IR_TYPE_BYTE_VIEW ? ir_view_element_type_for_type(return_type_text) : type;
+  if (type == IR_TYPE_MAYBE_SCALAR) value->element_type = ir_maybe_scalar_element_type(return_type_text);
   for (size_t i = 0; i < expr->args.len; i++) {
     char *specialized_param_type = generic_call ? ir_specialize_type_text(callee->params.items[i].type, callee, type_args) : NULL;
     const char *param_type_text = generic_call ? specialized_param_type : callee->params.items[i].type;
@@ -1485,7 +1487,7 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
         const IrLocal *local = ir_function_find_local(fun, expr->left->text);
         if (local && local->type == IR_TYPE_MAYBE_SCALAR) {
           IrTypeKind value_type = ir_type_kind(expr->resolved_type);
-          if (!ir_type_is_value(value_type)) value_type = IR_TYPE_I32;
+          if (!(value_type == IR_TYPE_BOOL || ir_type_is_value(value_type))) value_type = IR_TYPE_I32;
           IrValue *value = ir_new_value(ir, IR_VALUE_MAYBE_VALUE, value_type, expr->line, expr->column);
           value->local_index = local->index;
           *out = value;
@@ -1641,63 +1643,60 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
       if (strncmp(callee_name, "std.parse.", strlen("std.parse.")) == 0 && expr->args.len == 1) {
         const unsigned char *bytes = NULL;
         size_t len = 0;
-        if (!ir_string_literal_bytes(expr->args.items[0], &bytes, &len)) {
-          free(callee_name);
-          ir_mark_unsupported(ir, "direct backend std.parse helpers currently require literal text", expr->line, expr->column, "non-literal parse input");
-          return false;
-        }
-        unsigned char first = len > 0 ? bytes[0] : 0;
-        if (strcmp(callee_name, "std.parse.isAsciiDigit") == 0) {
-          bool ok = first >= '0' && first <= '9';
-          free(callee_name);
-          *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
-          return true;
-        }
-        if (strcmp(callee_name, "std.parse.isAsciiAlpha") == 0) {
-          bool ok = (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z');
-          free(callee_name);
-          *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
-          return true;
-        }
-        if (strcmp(callee_name, "std.parse.isIdentifierStart") == 0) {
-          bool ok = (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_';
-          free(callee_name);
-          *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
-          return true;
-        }
-        if (strcmp(callee_name, "std.parse.isWhitespace") == 0) {
-          bool ok = first == ' ' || first == '\n' || first == '\r' || first == '\t';
-          free(callee_name);
-          *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
-          return true;
-        }
-        if (strcmp(callee_name, "std.parse.scanDigits") == 0) {
-          free(callee_name);
-          *out = ir_new_integer_literal_value(ir, IR_TYPE_USIZE, ir_scan_digits_bytes(bytes, len), expr->line, expr->column);
-          return true;
-        }
-        if (strcmp(callee_name, "std.parse.scanIdentifier") == 0) {
-          free(callee_name);
-          *out = ir_new_integer_literal_value(ir, IR_TYPE_USIZE, ir_scan_identifier_bytes(bytes, len), expr->line, expr->column);
-          return true;
-        }
-        if (strcmp(callee_name, "std.parse.parseU8") == 0 ||
-            strcmp(callee_name, "std.parse.parseU16") == 0 ||
-            strcmp(callee_name, "std.parse.parseU32") == 0) {
-          unsigned long long max = UINT32_MAX;
-          IrTypeKind element_type = IR_TYPE_U32;
-          if (strcmp(callee_name, "std.parse.parseU8") == 0) {
-            max = UINT8_MAX;
-            element_type = IR_TYPE_U8;
-          } else if (strcmp(callee_name, "std.parse.parseU16") == 0) {
-            max = UINT16_MAX;
-            element_type = IR_TYPE_U16;
+        if (ir_string_literal_bytes(expr->args.items[0], &bytes, &len)) {
+          unsigned char first = len > 0 ? bytes[0] : 0;
+          if (strcmp(callee_name, "std.parse.isAsciiDigit") == 0) {
+            bool ok = first >= '0' && first <= '9';
+            free(callee_name);
+            *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
+            return true;
           }
-          unsigned long long number = 0;
-          bool ok = ir_parse_decimal_bytes(bytes, len, max, &number);
-          free(callee_name);
-          *out = ir_new_maybe_scalar_literal(ir, ok, element_type, number, expr->line, expr->column);
-          return true;
+          if (strcmp(callee_name, "std.parse.isAsciiAlpha") == 0) {
+            bool ok = (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z');
+            free(callee_name);
+            *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
+            return true;
+          }
+          if (strcmp(callee_name, "std.parse.isIdentifierStart") == 0) {
+            bool ok = (first >= 'A' && first <= 'Z') || (first >= 'a' && first <= 'z') || first == '_';
+            free(callee_name);
+            *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
+            return true;
+          }
+          if (strcmp(callee_name, "std.parse.isWhitespace") == 0) {
+            bool ok = first == ' ' || first == '\n' || first == '\r' || first == '\t';
+            free(callee_name);
+            *out = ir_new_bool_literal(ir, ok, expr->line, expr->column);
+            return true;
+          }
+          if (strcmp(callee_name, "std.parse.scanDigits") == 0) {
+            free(callee_name);
+            *out = ir_new_integer_literal_value(ir, IR_TYPE_USIZE, ir_scan_digits_bytes(bytes, len), expr->line, expr->column);
+            return true;
+          }
+          if (strcmp(callee_name, "std.parse.scanIdentifier") == 0) {
+            free(callee_name);
+            *out = ir_new_integer_literal_value(ir, IR_TYPE_USIZE, ir_scan_identifier_bytes(bytes, len), expr->line, expr->column);
+            return true;
+          }
+          if (strcmp(callee_name, "std.parse.parseU8") == 0 ||
+              strcmp(callee_name, "std.parse.parseU16") == 0 ||
+              strcmp(callee_name, "std.parse.parseU32") == 0) {
+            unsigned long long max = UINT32_MAX;
+            IrTypeKind element_type = IR_TYPE_U32;
+            if (strcmp(callee_name, "std.parse.parseU8") == 0) {
+              max = UINT8_MAX;
+              element_type = IR_TYPE_U8;
+            } else if (strcmp(callee_name, "std.parse.parseU16") == 0) {
+              max = UINT16_MAX;
+              element_type = IR_TYPE_U16;
+            }
+            unsigned long long number = 0;
+            bool ok = ir_parse_decimal_bytes(bytes, len, max, &number);
+            free(callee_name);
+            *out = ir_new_maybe_scalar_literal(ir, ok, element_type, number, expr->line, expr->column);
+            return true;
+          }
         }
       }
       if (strcmp(callee_name, "std.mem.fixedBufAlloc") == 0 &&
@@ -3243,6 +3242,7 @@ static IrFunction *ir_program_push_function(IrProgram *ir, const Function *sourc
   IrTypeKind source_return_type = ir_type_kind(source->return_type);
   IrTypeKind mir_return_type = hosted_world_main ? IR_TYPE_I32 : (source->raises ? IR_TYPE_I64 : source_return_type);
   IrTypeKind return_element_type = source_return_type == IR_TYPE_BYTE_VIEW ? ir_view_element_type_for_type(source->return_type) : IR_TYPE_UNSUPPORTED;
+  if (source_return_type == IR_TYPE_MAYBE_SCALAR) return_element_type = ir_maybe_scalar_element_type(source->return_type);
   ZBuf stable_id;
   zbuf_init(&stable_id);
   zbuf_append(&stable_id, stable_id_text ? stable_id_text : "main.");
@@ -3326,6 +3326,7 @@ static bool ir_collect_stmt_locals(const Program *program, IrProgram *ir, IrFunc
       }
       bool mutable_byte_view = ir_type_name_is_mutable_byte_view(stmt_type);
       IrTypeKind view_element_type = type == IR_TYPE_BYTE_VIEW ? ir_view_element_type_for_type(stmt_type) : IR_TYPE_UNSUPPORTED;
+      if (type == IR_TYPE_MAYBE_SCALAR) view_element_type = ir_maybe_scalar_element_type(stmt_type);
       ir_function_push_local(ir, mir_fun, stmt->name, type, false, false, false, NULL, view_element_type, 0, 0, 0, stmt->mutable_binding || mutable_byte_view, stmt->line, stmt->column);
     } else if (stmt->kind == STMT_IF) {
       if (!ir_collect_stmt_locals(program, ir, mir_fun, &stmt->then_body) || !ir_collect_stmt_locals(program, ir, mir_fun, &stmt->else_body)) return false;

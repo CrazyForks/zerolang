@@ -2,14 +2,13 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { promisify } from "node:util";
 
 if (process.env.ZERO_NATIVE_TEST_SANDBOX !== "1" && process.env.ZERO_NATIVE_TEST_ALLOW_LOCAL !== "1") {
   console.error("conformance emits native test artifacts; run `pnpm run conformance` for Vercel Sandbox execution or set ZERO_NATIVE_TEST_ALLOW_LOCAL=1 to opt into local artifacts.");
   process.exit(1);
 }
 
-const execFileAsync = promisify(execFile);
+const execMaxBuffer = 16 * 1024 * 1024;
 const zero = "bin/zero";
 const outDir = ".zero/conformance";
 const canRunLinuxMuslX64 = process.platform === "linux" && process.arch === "x64";
@@ -25,6 +24,20 @@ function runnableExeArgs(input, out) {
 }
 
 await mkdir(outDir, { recursive: true });
+
+function execFileAsync(file, args = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { maxBuffer: execMaxBuffer, ...options }, (error, stdout, stderr) => {
+      if (error) {
+        error.stdout = stdout;
+        error.stderr = stderr;
+        reject(error);
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
 
 async function assertBoundsTrap(fixture, name) {
   const out = `${outDir}/${name}`;
@@ -3682,6 +3695,8 @@ const packageGraph = JSON.parse(packageGraphJson.stdout);
 assert.deepEqual(packageGraph.sourceFiles.sort(), [
   "conformance/check/pass/package/src/main.0",
   "conformance/check/pass/package/src/types.0",
+  "std/mem.0",
+  "std/parse.0",
 ]);
 assert(packageGraph.requiresCapabilities.includes("codec"));
 assert(packageGraph.requiresCapabilities.includes("parse"));

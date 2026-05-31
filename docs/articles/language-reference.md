@@ -722,7 +722,10 @@ Current native helpers include:
 - `std.mem`: allocation-free memory helpers, span construction, byte equality,
   explicit allocators, fixed-capacity `Vec`, and `ByteBuf`
 - `std.codec`: byte and checksum helpers such as `readU32`, `encodedVarintLen`, and `crc32`
-- `std.parse`: scanner helpers such as digit and identifier predicates
+- `std.ascii`: byte predicates, ASCII case conversion, and digit values
+- `std.parse`: byte scanners, integer parsers, and boolean parsers
+- `std.fmt`: caller-buffer formatting for boolean and integer text
+- `std.text`: ASCII and UTF-8 validation helpers
 - `std.time`: duration helpers such as `ms`, `seconds`, `add`, and `asMsFloor`
 - `std.args`: CLI helpers `len()` and `get(index) -> Maybe<String>`
 - `std.math`: pure fixed-width helpers such as `gcdU32`, `powU32`,

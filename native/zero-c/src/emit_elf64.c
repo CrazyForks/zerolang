@@ -1344,8 +1344,8 @@ static bool elf_validate_function(const IrFunction *fun, ZDiag *diag) {
   for (size_t i = 0; i < fun->param_count; i++) abi_slots += fun->locals[i].type == IR_TYPE_BYTE_VIEW ? 2 : 1;
   if (abi_slots > 6) return elf_diag(diag, "direct ELF64 object backend supports at most six ABI argument slots", fun->line, fun->column, fun->name);
   if (fun->return_type != IR_TYPE_VOID && !elf_type_is_supported_scalar(fun->return_type) &&
-      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW) {
-    return elf_diag(diag, "direct ELF64 object backend currently supports Void, primitive integer, byte-view, and Maybe byte-view returns", fun->line, fun->column, elf_type_name(fun->return_type));
+      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_SCALAR) {
+    return elf_diag(diag, "direct ELF64 object backend currently supports Void, primitive integer, byte-view, Maybe byte-view, and Maybe scalar returns", fun->line, fun->column, elf_type_name(fun->return_type));
   }
   for (size_t i = 0; i < fun->local_len; i++) {
     if (fun->locals[i].is_array) {
@@ -1751,6 +1751,27 @@ static bool elf_emit_maybe_scalar_local_set(ZBuf *text, const IrFunction *fun, c
     z_x64_patch_rel32(text, end, text->len);
     return true;
   }
+  if (instr->value->kind == IR_VALUE_CALL && instr->value->type == IR_TYPE_MAYBE_SCALAR) {
+    if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
+    elf_emit_store_local_slot_reg(text, local, 0, 0, false);
+    elf_emit_store_local_slot_reg(text, local, 8, 2, true);
+    return true;
+  }
+  if (instr->value->kind == IR_VALUE_LOCAL && instr->value->local_index < fun->local_len && fun->locals[instr->value->local_index].type == IR_TYPE_MAYBE_SCALAR) {
+    const IrLocal *source = &fun->locals[instr->value->local_index];
+    elf_emit_load_local_slot_reg(text, source, 0, 0, false);
+    elf_emit_store_local_slot_reg(text, local, 0, 0, false);
+    elf_emit_load_local_slot_reg(text, source, 8, 2, true);
+    elf_emit_store_local_slot_reg(text, local, 8, 2, true);
+    return true;
+  }
+  if (elf_type_is_supported_scalar(instr->value->type)) {
+    if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
+    elf_emit_store_local_slot_reg(text, local, 8, 0, true);
+    z_x64_emit_mov_eax_u32(text, 1);
+    elf_emit_store_local_slot_reg(text, local, 0, 0, false);
+    return true;
+  }
   if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
   z_x64_emit_test_rax_rax(text, true);
   size_t fail = elf_emit_js_placeholder(text);
@@ -1852,6 +1873,26 @@ static bool elf_emit_terminal_instr(ZBuf *text, const IrFunction *fun, const IrI
           }
         } else {
           return elf_diag(diag, "direct ELF64 Maybe byte-view return requires a Maybe byte-view value", instr->line, instr->column, "unsupported Maybe byte-view return");
+        }
+        elf_emit_epilogue(text, fun, ctx);
+        return true;
+      }
+      if (fun->return_type == IR_TYPE_MAYBE_SCALAR && instr->value) {
+        if (instr->value->kind == IR_VALUE_CALL && instr->value->type == IR_TYPE_MAYBE_SCALAR) {
+          if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
+        } else if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
+          z_x64_emit_mov_eax_u32(text, (uint32_t)instr->value->int_value);
+          z_x64_emit_mov_reg_from_rax(text, 2, true);
+          z_x64_emit_mov_eax_u32(text, instr->value->data_len ? 1u : 0u);
+        } else if (instr->value->kind == IR_VALUE_LOCAL && instr->value->local_index < fun->local_len && fun->locals[instr->value->local_index].type == IR_TYPE_MAYBE_SCALAR) {
+          elf_emit_load_local_slot_reg(text, &fun->locals[instr->value->local_index], 8, 2, true);
+          elf_emit_load_local_slot_reg(text, &fun->locals[instr->value->local_index], 0, 0, false);
+        } else if (elf_type_is_supported_scalar(instr->value->type)) {
+          if (!elf_emit_value(text, fun, instr->value, ctx, diag)) return false;
+          z_x64_emit_mov_reg_from_rax(text, 2, true);
+          z_x64_emit_mov_eax_u32(text, 1);
+        } else {
+          return elf_diag(diag, "direct ELF64 Maybe scalar return requires a Maybe scalar or scalar value", instr->line, instr->column, "unsupported Maybe scalar return");
         }
         elf_emit_epilogue(text, fun, ctx);
         return true;

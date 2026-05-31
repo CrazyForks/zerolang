@@ -1,16 +1,7 @@
 pub fn main(world: World) -> Void raises {
-    let text: Span<u8> = std.mem.span("ha")
     var out: [6]u8 = [0_u8; 6]
-    var repeat: usize = 0
-    while repeat < 3 {
-        var i: usize = 0
-        while i < std.mem.len(text) {
-            out[repeat * std.mem.len(text) + i] = text[i]
-            i = i + 1
-        }
-        repeat = repeat + 1
-    }
-    if out[0] == 104 && out[1] == 97 && (out[2] == 104 && out[3] == 97 && (out[4] == 104 && out[5] == 97)) {
+    let repeated: Maybe<Span<u8>> = std.str.repeat(out, "ha", 3)
+    if repeated.has && std.mem.eql(repeated.value, "hahaha") {
         check world.out.write("repeat string ok\n")
     }
 }

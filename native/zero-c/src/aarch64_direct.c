@@ -654,8 +654,18 @@ static bool a64_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const Ir
     case IR_VALUE_COMPARE: return a64_emit_compare_to_reg_at(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_CALL: return a64_emit_call_to_reg_at(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_MAYBE_HAS:
-      if (value->local_index >= fun->local_len || fun->locals[value->local_index].type != IR_TYPE_MAYBE_BYTE_VIEW) return a64_diag(diag, "direct AArch64 maybe helper requires a Maybe byte-view local", value->line, value->column, "invalid maybe local");
+      if (value->local_index >= fun->local_len ||
+          (fun->locals[value->local_index].type != IR_TYPE_MAYBE_BYTE_VIEW && fun->locals[value->local_index].type != IR_TYPE_MAYBE_SCALAR)) {
+        return a64_diag(diag, "direct AArch64 maybe helper requires a Maybe local", value->line, value->column, "invalid maybe local");
+      }
       a64_emit_load_local_w(text, fun, reg, value->local_index, 0, frame_size);
+      return true;
+    case IR_VALUE_MAYBE_VALUE:
+      if (value->local_index >= fun->local_len || fun->locals[value->local_index].type != IR_TYPE_MAYBE_SCALAR) {
+        return a64_diag(diag, "direct AArch64 maybe scalar value requires a Maybe scalar local", value->line, value->column, "invalid maybe value");
+      }
+      if (a64_type_is_scalar64(value->type)) a64_emit_load_local_x(text, fun, reg, value->local_index, 8, frame_size);
+      else a64_emit_load_local_w(text, fun, reg, value->local_index, 8, frame_size);
       return true;
     case IR_VALUE_BYTE_VIEW_LEN: return a64_emit_byte_view_len_at(text, fun, value->left, reg, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_BYTE_COPY: return a64_emit_byte_copy_to_reg_at(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
@@ -735,6 +745,37 @@ static bool a64_emit_local_set(ZBuf *text, const IrFunction *fun, const IrInstr 
       return true;
     }
     return a64_diag(diag, "direct AArch64 Maybe byte-view initializer is unsupported", instr->line, instr->column, "unsupported Maybe byte-view initializer");
+  }
+  if (local->type == IR_TYPE_MAYBE_SCALAR) {
+    if (!instr->value) return a64_diag(diag, "direct AArch64 Maybe scalar initializer is missing", instr->line, instr->column, "missing maybe value");
+    if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
+      z_aarch64_emit_movz_w(text, 8, instr->value->data_len ? 1u : 0u);
+      a64_emit_store_local_w(text, fun, 8, instr->local_index, 0, frame_size);
+      z_aarch64_emit_movz_x(text, 8, (uint64_t)instr->value->int_value);
+      a64_emit_store_local_x(text, fun, 8, instr->local_index, 8, frame_size);
+      return true;
+    }
+    if (instr->value->kind == IR_VALUE_CALL && instr->value->type == IR_TYPE_MAYBE_SCALAR) {
+      if (!a64_emit_value_to_reg_at(text, fun, instr->value, 0, frame_size, 0, ctx, diag)) return false;
+      a64_emit_store_local_w(text, fun, 0, instr->local_index, 0, frame_size);
+      a64_emit_store_local_x(text, fun, 1, instr->local_index, 8, frame_size);
+      return true;
+    }
+    if (instr->value->kind == IR_VALUE_LOCAL && instr->value->local_index < fun->local_len && fun->locals[instr->value->local_index].type == IR_TYPE_MAYBE_SCALAR) {
+      a64_emit_load_local_w(text, fun, 8, instr->value->local_index, 0, frame_size);
+      a64_emit_load_local_x(text, fun, 9, instr->value->local_index, 8, frame_size);
+      a64_emit_store_local_w(text, fun, 8, instr->local_index, 0, frame_size);
+      a64_emit_store_local_x(text, fun, 9, instr->local_index, 8, frame_size);
+      return true;
+    }
+    if (!a64_type_is_scalar(instr->value->type) && instr->value->type != IR_TYPE_BOOL) {
+      return a64_diag(diag, "direct AArch64 Maybe scalar initializer is unsupported", instr->line, instr->column, "unsupported Maybe scalar initializer");
+    }
+    if (!a64_emit_value_to_reg_at(text, fun, instr->value, 8, frame_size, 0, ctx, diag)) return false;
+    z_aarch64_emit_movz_w(text, 9, 1);
+    a64_emit_store_local_w(text, fun, 9, instr->local_index, 0, frame_size);
+    a64_emit_store_local_x(text, fun, 8, instr->local_index, 8, frame_size);
+    return true;
   }
   if (!a64_emit_value_to_reg_at(text, fun, instr->value, 8, frame_size, 0, ctx, diag)) return false;
   if (a64_type_is_scalar64(local->type)) a64_emit_store_local_x(text, fun, 8, instr->local_index, 0, frame_size);
@@ -836,6 +877,24 @@ static bool a64_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
       a64_emit_epilogue(text, frame_size);
       return true;
     }
+    if (fun->return_type == IR_TYPE_MAYBE_SCALAR && instr->value) {
+      if (instr->value->kind == IR_VALUE_CALL && instr->value->type == IR_TYPE_MAYBE_SCALAR) {
+        if (!a64_emit_value_to_reg_at(text, fun, instr->value, 0, frame_size, 0, ctx, diag)) return false;
+      } else if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
+        z_aarch64_emit_movz_w(text, 0, instr->value->data_len ? 1u : 0u);
+        z_aarch64_emit_movz_x(text, 1, (uint64_t)instr->value->int_value);
+      } else if (instr->value->kind == IR_VALUE_LOCAL && instr->value->local_index < fun->local_len && fun->locals[instr->value->local_index].type == IR_TYPE_MAYBE_SCALAR) {
+        a64_emit_load_local_w(text, fun, 0, instr->value->local_index, 0, frame_size);
+        a64_emit_load_local_x(text, fun, 1, instr->value->local_index, 8, frame_size);
+      } else if (a64_type_is_scalar(instr->value->type) || instr->value->type == IR_TYPE_BOOL) {
+        if (!a64_emit_value_to_reg_at(text, fun, instr->value, 1, frame_size, 0, ctx, diag)) return false;
+        z_aarch64_emit_movz_w(text, 0, 1);
+      } else {
+        return a64_diag(diag, "direct AArch64 Maybe scalar return requires a Maybe scalar or scalar value", instr->line, instr->column, "unsupported Maybe scalar return");
+      }
+      a64_emit_epilogue(text, frame_size);
+      return true;
+    }
     if (instr->value && !a64_emit_value_to_reg_at(text, fun, instr->value, 0, frame_size, 0, ctx, diag)) return false;
     a64_emit_void_result(text, fun);
     a64_emit_epilogue(text, frame_size);
@@ -881,12 +940,12 @@ static bool a64_validate_function(const IrFunction *fun, ZDiag *diag) {
   for (size_t i = 0; i < fun->param_count; i++) abi_slots += a64_abi_slots_for_param(&fun->locals[i]);
   if (abi_slots > 8) return a64_diag(diag, "direct AArch64 backend supports at most eight ABI parameter slots", fun->line, fun->column, fun->name);
   if (fun->return_type != IR_TYPE_VOID && !a64_type_is_scalar32(fun->return_type) &&
-      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW) {
-    return a64_diag(diag, "direct AArch64 backend supports Void, 32-bit scalars, byte-view, and Maybe byte-view returns", fun->line, fun->column, fun->name);
+      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_SCALAR) {
+    return a64_diag(diag, "direct AArch64 backend supports Void, 32-bit scalars, byte-view, Maybe byte-view, and Maybe scalar returns", fun->line, fun->column, fun->name);
   }
   for (size_t i = 0; i < fun->local_len; i++) {
     const IrLocal *local = &fun->locals[i];
-    if (local->type == IR_TYPE_BYTE_VIEW || local->type == IR_TYPE_MAYBE_BYTE_VIEW) continue;
+    if (local->type == IR_TYPE_BYTE_VIEW || local->type == IR_TYPE_MAYBE_BYTE_VIEW || local->type == IR_TYPE_MAYBE_SCALAR) continue;
     if (local->is_array && (local->element_type == IR_TYPE_U8 || local->element_type == IR_TYPE_BOOL || local->element_type == IR_TYPE_U16 ||
                             local->element_type == IR_TYPE_U32 || local->element_type == IR_TYPE_I32 || local->element_type == IR_TYPE_USIZE ||
                             a64_type_is_scalar64(local->element_type))) continue;
