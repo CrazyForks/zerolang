@@ -6401,7 +6401,18 @@ static void stdlib_record_single_type_arg(const Expr *expr, const char *type) {
   set_expr_checked_type_args(expr, &binding, 1);
 }
 
-static bool stdlib_reject_owned_item_element(const Program *program, const char *display_name, const char *element_type, const Expr *expr, ZDiag *diag, const char *action, const char *help) {
+static bool type_references_visible_type_param(Scope *scope, const char *type) {
+  for (Scope *cursor = scope; type && cursor; cursor = cursor->parent)
+    for (size_t i = 0; i < cursor->len; i++)
+      if (cursor->is_type_param && cursor->is_type_param[i] && type_text_references_name(type, cursor->names[i])) return true;
+  return false;
+}
+
+static bool stdlib_reject_owned_item_element(const Program *program, Scope *scope, const char *display_name, const char *element_type, const Expr *expr, ZDiag *diag, const char *action, const char *help) {
+  if (type_references_visible_type_param(scope, element_type)) {
+    char message[256]; snprintf(message, sizeof(message), "%s cannot %s potentially owned generic item elements", display_name, action ? action : "duplicate");
+    return set_diag_detail(diag, 3013, message, expr ? expr->line : 0, expr ? expr->column : 0, "concrete item type without owned values", element_type ? element_type : "Unknown", help ? help : "use a concrete non-owned item type or write each owned element explicitly");
+  }
   if (!type_contains_owned(program, element_type, 0)) return true;
   char message[256];
   snprintf(message, sizeof(message), "%s cannot %s owned item elements", display_name, action ? action : "duplicate");
@@ -6412,7 +6423,7 @@ static bool check_stdlib_mem_copy_items_call_expected(CheckContext *ctx, const P
   const char *dst_actual = NULL;
   char element_type[128];
   if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.mem.copyItems", element_type, sizeof(element_type), &dst_actual)) return false;
-  if (!stdlib_reject_owned_item_element(program, "std.mem.copyItems", element_type, expr->args.items[0], diag, "copy", "move owned values explicitly so each destination receives one owner")) return false;
+  if (!stdlib_reject_owned_item_element(program, scope, "std.mem.copyItems", element_type, expr->args.items[0], diag, "copy", "move owned values explicitly so each destination receives one owner")) return false;
   char expected_dst[160];
   char expected_src[160];
   stdlib_span_type_for_element(expected_dst, sizeof(expected_dst), element_type, true);
@@ -6434,7 +6445,7 @@ static bool check_stdlib_mem_fill_items_call_expected(CheckContext *ctx, const P
   const char *dst_actual = NULL;
   char element_type[128];
   if (!stdlib_mutable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, "std.mem.fillItems", element_type, sizeof(element_type), &dst_actual)) return false;
-  if (!stdlib_reject_owned_item_element(program, "std.mem.fillItems", element_type, expr->args.items[0], diag, "duplicate", "write each owned element explicitly so ownership is transferred once")) return false;
+  if (!stdlib_reject_owned_item_element(program, scope, "std.mem.fillItems", element_type, expr->args.items[0], diag, "duplicate", "write each owned element explicitly so ownership is transferred once")) return false;
   char expected_dst[160];
   stdlib_span_type_for_element(expected_dst, sizeof(expected_dst), element_type, true);
   record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_dst, dst_actual);
@@ -6455,7 +6466,7 @@ static bool check_stdlib_mem_contains_call_expected(CheckContext *ctx, const Pro
   char element_type[128];
   if (!stdlib_readable_items_arg_element(ctx, program, expr->args.items[0], scope, diag, resolution && resolution->callee_name ? resolution->callee_name : "std.mem.contains", element_type, sizeof(element_type), &items_actual)) return false;
   if (z_std_helper_kind(resolution ? resolution->std_helper : NULL) == Z_STD_HELPER_KIND_MEM_CONTAINS &&
-      !stdlib_reject_owned_item_element(program, "std.mem.contains", element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly")) return false;
+      !stdlib_reject_owned_item_element(program, scope, "std.mem.contains", element_type, expr->args.items[0], diag, "compare", "compare a non-owned key or move owned values explicitly")) return false;
   char expected_items[160];
   stdlib_span_type_for_element(expected_items, sizeof(expected_items), element_type, false);
   record_stdlib_arg_fact(resolution, 0, expr->args.items[0], expected_items, items_actual);
@@ -10535,19 +10546,8 @@ static bool validate_shape_layout(const Shape *shape, ZDiag *diag) {
 
 static bool type_references_generic_param(const char *type, const Shape *shape) {
   if (!type || !shape) return false;
-  for (size_t i = 0; i < shape->type_params.len; i++) {
-    const char *name = shape->type_params.items[i].name;
-    if (!name) continue;
-    if (strcmp(type, name) == 0) return true;
-    const char *cursor = type;
-    size_t name_len = strlen(name);
-    while ((cursor = strstr(cursor, name)) != NULL) {
-      bool left_ok = cursor == type || !(isalnum((unsigned char)cursor[-1]) || cursor[-1] == '_');
-      bool right_ok = !(isalnum((unsigned char)cursor[name_len]) || cursor[name_len] == '_');
-      if (left_ok && right_ok) return true;
-      cursor += name_len;
-    }
-  }
+  for (size_t i = 0; i < shape->type_params.len; i++)
+    if (type_text_references_name(type, shape->type_params.items[i].name)) return true;
   return false;
 }
 

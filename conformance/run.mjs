@@ -3609,6 +3609,10 @@ const memCopyItemsOwned = await execFileAsync(zero, ["check", "conformance/nativ
 assert.notEqual(memCopyItemsOwned.code, 0);
 assert.match(memCopyItemsOwned.stderr, /OWN001/);
 
+const memCopyItemsGenericOwned = await execFileAsync(zero, ["check", "conformance/native/fail/std-mem-copy-items-generic-owned.0"]).catch((error) => error);
+assert.notEqual(memCopyItemsGenericOwned.code, 0);
+assert.match(memCopyItemsGenericOwned.stderr, /OWN001/);
+
 const memFillItemsMismatch = await execFileAsync(zero, ["check", "conformance/native/fail/std-mem-fill-items-mismatch.0"]).catch((error) => error);
 assert.notEqual(memFillItemsMismatch.code, 0);
 assert.match(memFillItemsMismatch.stderr, /TYP002|STD003/);
@@ -3617,9 +3621,17 @@ const memFillItemsOwned = await execFileAsync(zero, ["check", "conformance/nativ
 assert.notEqual(memFillItemsOwned.code, 0);
 assert.match(memFillItemsOwned.stderr, /OWN001/);
 
+const memFillItemsGenericOwned = await execFileAsync(zero, ["check", "conformance/native/fail/std-mem-fill-items-generic-owned.0"]).catch((error) => error);
+assert.notEqual(memFillItemsGenericOwned.code, 0);
+assert.match(memFillItemsGenericOwned.stderr, /OWN001/);
+
 const memContainsOwned = await execFileAsync(zero, ["check", "conformance/native/fail/std-mem-contains-owned.0"]).catch((error) => error);
 assert.notEqual(memContainsOwned.code, 0);
 assert.match(memContainsOwned.stderr, /OWN001/);
+
+const memContainsGenericOwned = await execFileAsync(zero, ["check", "conformance/native/fail/std-mem-contains-generic-owned.0"]).catch((error) => error);
+assert.notEqual(memContainsGenericOwned.code, 0);
+assert.match(memContainsGenericOwned.stderr, /OWN001/);
 
 const mutspanFromSpan = await execFileAsync(zero, ["check", "conformance/native/fail/mutspan-from-span.0"]).catch((error) => error);
 assert.notEqual(mutspanFromSpan.code, 0);
