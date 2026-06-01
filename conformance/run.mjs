@@ -3727,7 +3727,6 @@ assert.deepEqual(packageGraph.sourceFiles.sort(), [
   "conformance/check/pass/package/src/types.0",
   "std/ascii.0",
   "std/codec.0",
-  "std/mem.0",
   "std/parse.0",
   "std/time.0",
 ]);
