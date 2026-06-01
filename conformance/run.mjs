@@ -456,6 +456,7 @@ for (const fixture of [
   "conformance/native/pass/type-alias-basic.0",
   "conformance/native/pass/static-method-namespace.0",
   "conformance/native/pass/c-import-type-shadowing.0",
+  "conformance/native/pass/c-import-alias-later-local.0",
   "conformance/native/pass/match-fallback.0",
   "conformance/native/pass/memory-types.0",
   "conformance/native/pass/owned-transfer.0",
@@ -3496,6 +3497,12 @@ const cImportTypeShadowReadinessBody = JSON.parse(cImportTypeShadowReadiness.std
 assert.equal(cImportTypeShadowReadinessBody.ok, true);
 assert.equal(cImportTypeShadowReadinessBody.targetReadiness.buildable, false);
 assert.equal(cImportTypeShadowReadinessBody.targetReadiness.diagnostics[0].backendBlocker.unsupportedFeature, "Counter.zero_c_add");
+const cImportLaterLocalReadiness = await execFileAsync(zero, ["check", "--json", "--emit", "obj", "conformance/native/pass/c-import-alias-later-local.0"]);
+const cImportLaterLocalReadinessBody = JSON.parse(cImportLaterLocalReadiness.stdout);
+assert.equal(cImportLaterLocalReadinessBody.ok, true);
+assert.equal(cImportLaterLocalReadinessBody.targetReadiness.ok, true);
+assert.equal(cImportLaterLocalReadinessBody.targetReadiness.buildable, true);
+assert.equal(cImportLaterLocalReadinessBody.targetReadiness.diagnostics.length, 0);
 
 const externCallRoot = `/tmp/zero-extern-c-call-${process.pid}`;
 await rm(externCallRoot, { recursive: true, force: true });
@@ -3599,6 +3606,11 @@ assert.notEqual(cHeaderUnsupportedJson.code, 0);
 const cHeaderUnsupportedBody = JSON.parse(cHeaderUnsupportedJson.stdout);
 assert.equal(cHeaderUnsupportedBody.diagnostics[0].code, "CIMP002");
 assert.match(cHeaderUnsupportedBody.diagnostics[0].actual, /variadic/);
+const cImportMissingSymbolJson = await execFileAsync(zero, ["check", "--json", "conformance/check/fail/c-import-missing-symbol.0"]).catch((error) => error);
+assert.notEqual(cImportMissingSymbolJson.code, 0);
+const cImportMissingSymbolBody = JSON.parse(cImportMissingSymbolJson.stdout);
+assert.equal(cImportMissingSymbolBody.diagnostics[0].code, "CIMP004");
+assert.match(cImportMissingSymbolBody.diagnostics[0].message, /not declared/);
 
 const errorSetFixPlan = await execFileAsync(zero, ["fix", "--plan", "--json", "conformance/native/fail/std-fs-error-set-mismatch.0"]);
 const errorSetFixPlanBody = JSON.parse(errorSetFixPlan.stdout);

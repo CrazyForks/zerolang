@@ -815,6 +815,31 @@ static const IrLocal *ir_function_find_local(const IrFunction *fun, const char *
   return NULL;
 }
 
+static size_t ir_active_local_mark(const IrProgram *ir) {
+  return ir ? ir->active_local_len : 0;
+}
+
+static void ir_active_local_restore(IrProgram *ir, size_t mark) {
+  if (!ir) return;
+  while (ir->active_local_len > mark) {
+    free(ir->active_local_names[--ir->active_local_len]);
+    ir->active_local_names[ir->active_local_len] = NULL;
+  }
+}
+
+static void ir_active_local_push(IrProgram *ir, const char *name) {
+  if (!ir || !name) return;
+  ir->active_local_names = ir_grow_items(ir->active_local_names, ir->active_local_len, &ir->active_local_cap, 8, sizeof(char *));
+  ir->active_local_names[ir->active_local_len++] = z_strdup(name);
+}
+
+static bool ir_active_local_has(const IrProgram *ir, const char *name) {
+  for (size_t i = ir ? ir->active_local_len : 0; i > 0; i--) {
+    if (ir->active_local_names[i - 1] && name && strcmp(ir->active_local_names[i - 1], name) == 0) return true;
+  }
+  return false;
+}
+
 static const IrLocal *ir_find_mutable_rand_source_local(IrProgram *ir, const IrFunction *fun, const Expr *arg, const char *helper_name) {
   if (!arg || arg->kind != EXPR_BORROW || !arg->mutable_borrow || !arg->left || arg->left->kind != EXPR_IDENT) {
     ir_mark_unsupported(ir, "direct backend std.rand helper expects a mutable RandSource local", arg ? arg->line : 1, arg ? arg->column : 1, helper_name ? helper_name : "std.rand");
@@ -1449,7 +1474,7 @@ static bool ir_lower_c_import_call(const Program *program, IrProgram *ir, const 
   }
   const char *alias = expr->left->left->text;
   const char *symbol = expr->left->text;
-  if (ir_function_find_local(fun, alias)) return false;
+  if (ir_active_local_has(ir, alias)) return false;
   if (ir_program_scope_name_shadows_c_import_alias(program, alias)) return false;
   if (!z_c_import_alias_exists(program, alias)) return false;
   ZCImportFunction function = {0};
@@ -3265,7 +3290,10 @@ static bool ir_lower_enum_match(const Program *program, IrProgram *ir, IrFunctio
         ir_mark_unsupported(ir, "direct backend enum match fallback must be the final arm", arm->line, arm->column, "fallback before concrete arms");
         return false;
       }
-      if (!ir_lower_stmt_vec(program, ir, mir_fun, &arm->body, &nested_items, &nested_len, &nested_cap, saw_return)) {
+      size_t scope_mark = ir_active_local_mark(ir);
+      bool body_ok = ir_lower_stmt_vec(program, ir, mir_fun, &arm->body, &nested_items, &nested_len, &nested_cap, saw_return);
+      ir_active_local_restore(ir, scope_mark);
+      if (!body_ok) {
         ir_free_instrs(nested_items, nested_len);
         free(nested_items);
         return false;
@@ -3300,7 +3328,10 @@ static bool ir_lower_enum_match(const Program *program, IrProgram *ir, IrFunctio
     cond->right = case_literal;
 
     IrInstr instr = {.kind = IR_INSTR_IF, .value = cond, .else_instrs = nested_items, .else_len = nested_len, .else_cap = nested_cap, .line = arm->line, .column = arm->column};
-    if (!ir_lower_stmt_vec(program, ir, mir_fun, &arm->body, &instr.then_instrs, &instr.then_len, &instr.then_cap, saw_return)) {
+    size_t scope_mark = ir_active_local_mark(ir);
+    bool body_ok = ir_lower_stmt_vec(program, ir, mir_fun, &arm->body, &instr.then_instrs, &instr.then_len, &instr.then_cap, saw_return);
+    ir_active_local_restore(ir, scope_mark);
+    if (!body_ok) {
       ir_free_value(cond);
       ir_free_instrs(nested_items, nested_len);
       free(nested_items);
@@ -3345,15 +3376,20 @@ static bool ir_lower_stmt_to_vec(const Program *program, IrProgram *ir, IrFuncti
   if (stmt->kind == STMT_LET) {
     const IrLocal *local = ir_function_find_local(mir_fun, stmt->name);
     if (local && local->is_array) {
-      return ir_lower_array_initializer(program, ir, mir_fun, local, stmt->expr, out_items, out_len, out_cap, stmt->line, stmt->column);
+      if (!ir_lower_array_initializer(program, ir, mir_fun, local, stmt->expr, out_items, out_len, out_cap, stmt->line, stmt->column)) return false;
+      ir_active_local_push(ir, stmt->name);
+      return true;
     }
     if (local && local->is_record) {
-      return ir_lower_shape_initializer(program, ir, mir_fun, local, stmt->expr, out_items, out_len, out_cap, stmt->line, stmt->column);
+      if (!ir_lower_shape_initializer(program, ir, mir_fun, local, stmt->expr, out_items, out_len, out_cap, stmt->line, stmt->column)) return false;
+      ir_active_local_push(ir, stmt->name);
+      return true;
     }
     IrValue *value = NULL;
     if (!local) return false;
     if (!ir_lower_expr_for_type(program, ir, mir_fun, stmt->expr, local->type, false, stmt->line, stmt->column, &value)) return false;
     ir_instr_vec_push(ir, out_items, out_len, out_cap, (IrInstr){.kind = IR_INSTR_LOCAL_SET, .local_index = local->index, .value = value, .line = stmt->line, .column = stmt->column});
+    ir_active_local_push(ir, stmt->name);
     return true;
   }
   if (stmt->kind == STMT_ASSIGN) {
@@ -3459,8 +3495,12 @@ static bool ir_lower_stmt_to_vec(const Program *program, IrProgram *ir, IrFuncti
       return false;
     }
     IrInstr instr = {.kind = IR_INSTR_IF, .value = cond, .line = stmt->line, .column = stmt->column};
-    if (!ir_lower_stmt_vec(program, ir, mir_fun, &stmt->then_body, &instr.then_instrs, &instr.then_len, &instr.then_cap, saw_return) ||
-        !ir_lower_stmt_vec(program, ir, mir_fun, &stmt->else_body, &instr.else_instrs, &instr.else_len, &instr.else_cap, saw_return)) {
+    size_t scope_mark = ir_active_local_mark(ir);
+    bool then_ok = ir_lower_stmt_vec(program, ir, mir_fun, &stmt->then_body, &instr.then_instrs, &instr.then_len, &instr.then_cap, saw_return);
+    ir_active_local_restore(ir, scope_mark);
+    bool else_ok = then_ok && ir_lower_stmt_vec(program, ir, mir_fun, &stmt->else_body, &instr.else_instrs, &instr.else_len, &instr.else_cap, saw_return);
+    ir_active_local_restore(ir, scope_mark);
+    if (!then_ok || !else_ok) {
       ir_free_value(cond);
       ir_free_instrs(instr.then_instrs, instr.then_len);
       ir_free_instrs(instr.else_instrs, instr.else_len);
@@ -3480,7 +3520,10 @@ static bool ir_lower_stmt_to_vec(const Program *program, IrProgram *ir, IrFuncti
       return false;
     }
     IrInstr instr = {.kind = IR_INSTR_WHILE, .value = cond, .line = stmt->line, .column = stmt->column};
-    if (!ir_lower_stmt_vec(program, ir, mir_fun, &stmt->then_body, &instr.then_instrs, &instr.then_len, &instr.then_cap, saw_return)) {
+    size_t scope_mark = ir_active_local_mark(ir);
+    bool body_ok = ir_lower_stmt_vec(program, ir, mir_fun, &stmt->then_body, &instr.then_instrs, &instr.then_len, &instr.then_cap, saw_return);
+    ir_active_local_restore(ir, scope_mark);
+    if (!body_ok) {
       ir_free_value(cond);
       ir_free_instrs(instr.then_instrs, instr.then_len);
       free(instr.then_instrs);
@@ -3621,8 +3664,14 @@ static bool ir_lower_function_body(const Program *program, IrProgram *ir, IrFunc
     return false;
   }
   if (!ir_collect_function_locals(program, ir, mir_fun, source)) return false;
+  size_t scope_mark = ir_active_local_mark(ir);
+  for (size_t i = 0; i < source->params.len; i++) {
+    ir_active_local_push(ir, source->params.items[i].name);
+  }
   bool saw_return = false;
-  if (!ir_lower_stmt_vec(program, ir, mir_fun, &source->body, &mir_fun->instrs, &mir_fun->instr_len, &mir_fun->instr_cap, &saw_return)) return false;
+  bool lowered = ir_lower_stmt_vec(program, ir, mir_fun, &source->body, &mir_fun->instrs, &mir_fun->instr_len, &mir_fun->instr_cap, &saw_return);
+  ir_active_local_restore(ir, scope_mark);
+  if (!lowered) return false;
   if (hosted_world_main && !saw_return) {
     IrValue *exit_code = ir_new_value(ir, IR_VALUE_INT, IR_TYPE_I32, source->line, source->column);
     exit_code->int_value = 0;
@@ -4136,6 +4185,8 @@ void z_free_ir_program(IrProgram *program) {
     free(program->external_functions[i].param_types);
   }
   free(program->external_functions);
+  ir_active_local_restore(program, 0);
+  free(program->active_local_names);
   for (size_t i = 0; i < program->data_segment_len; i++) {
     free(program->data_segments[i].bytes);
   }

@@ -616,6 +616,9 @@ typedef struct {
   size_t direct_host_runtime_import_count;
   size_t direct_http_runtime_import_count;
   size_t direct_c_import_call_count;
+  char **active_local_names;
+  size_t active_local_len;
+  size_t active_local_cap;
 } IrProgram;
 
 typedef struct {

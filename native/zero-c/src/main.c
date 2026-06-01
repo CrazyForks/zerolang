@@ -179,6 +179,7 @@ static const char *diag_code(int code) {
     case 8001: return "CIMP001";
     case 8002: return "CIMP002";
     case 8003: return "CIMP003";
+    case 8004: return "CIMP004";
     case 9001: return "PKG001";
     case 9002: return "PKG002";
     case 9003: return "PKG003";
@@ -2667,6 +2668,7 @@ static const char *diag_fix_safety(int code) {
     case 2003:
     case 6002:
     case 8003:
+    case 8004:
     case 9001:
     case 9002:
     case 9003:
@@ -2753,6 +2755,7 @@ static const char *diag_repair_id(int code) {
     case 4004: return "choose-supported-direct-backend";
     case 6002: return "choose-target-with-required-capability";
     case 8003: return "configure-target-c-dependency";
+    case 8004: return "fix-c-import-call";
     case 9001: return "fix-package-dependency-path";
     case 9002: return "break-package-dependency-cycle";
     case 9003: return "choose-one-package-version";
@@ -2806,6 +2809,7 @@ static const char *diag_repair_summary(int code) {
     case 4004: return "Use zero targets --json to choose a direct-supported target, or request --emit obj when only object emission exists.";
     case 6002: return "Build for a target that provides the required capability, or move that capability behind a target-specific entry point.";
     case 8003: return "Use package-relative vendored headers/libraries or set the target sysroot instead of relying on host include, lib, or pkg-config discovery.";
+    case 8004: return "Call a function declared by the imported C header, or wrap unsupported C ABI types behind a scalar C shim.";
     case 9001: return "Create the local dependency package or update the path in zero.json.";
     case 9002: return "Remove the package cycle or move shared code into an acyclic dependency.";
     case 9003: return "Resolve the graph to one version of each package name.";
