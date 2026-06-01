@@ -26,7 +26,7 @@ const fileBudgets = {
   "native/zero-c/src/buildability_internal.h": { maxLines: 40, maxStrcmpCalls: 0 },
   "native/zero-c/src/buildability_context.c": { maxLines: 185, maxStrcmpCalls: 1 },
   "native/zero-c/src/buildability_targets.c": { maxLines: 190, maxStrcmpCalls: 0 },
-  "native/zero-c/src/buildability_value_targets.c": { maxLines: 355, maxStrcmpCalls: 0 },
+  "native/zero-c/src/buildability_value_targets.c": { maxLines: 371, maxStrcmpCalls: 0 },
   "native/zero-c/src/call_resolve.c": { maxLines: 200, maxStrcmpCalls: 2 },
   "native/zero-c/src/call_resolve.h": { maxLines: 100, maxStrcmpCalls: 0 },
   "native/zero-c/src/canonical_text.c": { maxLines: 1508, maxStrcmpCalls: 0 },
@@ -46,17 +46,17 @@ const fileBudgets = {
   "native/zero-c/src/elf_emit_state.h": { maxLines: 90, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_format.c": { maxLines: 470, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_format.h": { maxLines: 90, maxStrcmpCalls: 0 },
-  "native/zero-c/src/aarch64_direct.c": { maxLines: 1057, maxStrcmpCalls: 1 },
+  "native/zero-c/src/aarch64_direct.c": { maxLines: 1065, maxStrcmpCalls: 1 },
   "native/zero-c/src/aarch64_direct.h": { maxLines: 40, maxStrcmpCalls: 0 },
-  "native/zero-c/src/aarch64_emit.c": { maxLines: 388, maxStrcmpCalls: 0 },
-  "native/zero-c/src/aarch64_emit.h": { maxLines: 82, maxStrcmpCalls: 0 },
-  "native/zero-c/src/emit_macho64.c": { maxLines: 1817, maxStrcmpCalls: 2 },
-  "native/zero-c/src/emit_macho_x64.c": { maxLines: 1426, maxStrcmpCalls: 1 },
+  "native/zero-c/src/aarch64_emit.c": { maxLines: 437, maxStrcmpCalls: 0 },
+  "native/zero-c/src/aarch64_emit.h": { maxLines: 87, maxStrcmpCalls: 0 },
+  "native/zero-c/src/emit_macho64.c": { maxLines: 1826, maxStrcmpCalls: 2 },
+  "native/zero-c/src/emit_macho_x64.c": { maxLines: 1434, maxStrcmpCalls: 1 },
   "native/zero-c/src/macho_emit_state.c": { maxLines: 210, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_emit_state.h": { maxLines: 90, maxStrcmpCalls: 0 },
   "native/zero-c/src/emit_elf64.c": { maxLines: 2308, maxStrcmpCalls: 3 },
   "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 330, maxStrcmpCalls: 1 },
-  "native/zero-c/src/emit_coff.c": { maxLines: 1290, maxStrcmpCalls: 1 },
+  "native/zero-c/src/emit_coff.c": { maxLines: 1298, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff_aarch64.c": { maxLines: 380, maxStrcmpCalls: 0 },
   "native/zero-c/src/fs.c": { maxLines: 1255, maxStrcmpCalls: 33 },
   "native/zero-c/src/mir_verify.c": { maxLines: 1391, maxStrcmpCalls: 0 },
@@ -99,8 +99,8 @@ const fileBudgets = {
   "native/zero-c/src/type_core.h": { maxLines: 150, maxStrcmpCalls: 0 },
   "native/zero-c/src/unify.c": { maxLines: 500, maxStrcmpCalls: 14 },
   "native/zero-c/src/unify.h": { maxLines: 75, maxStrcmpCalls: 0 },
-  "native/zero-c/src/x64_emit.c": { maxLines: 825, maxStrcmpCalls: 0 },
-  "native/zero-c/src/x64_emit.h": { maxLines: 115, maxStrcmpCalls: 0 },
+  "native/zero-c/src/x64_emit.c": { maxLines: 850, maxStrcmpCalls: 0 },
+  "native/zero-c/src/x64_emit.h": { maxLines: 116, maxStrcmpCalls: 0 },
 };
 
 const knownLargeFunctionLimits = new Map([
@@ -116,7 +116,7 @@ const knownLargeFunctionLimits = new Map([
   ["native/zero-c/src/checker.c|static bool expr_reference_provenance(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ValueProvenance *origins) {", 175],
   ["native/zero-c/src/main.c|static int run_tests_direct(const Command *command, const SourceInput *input, const Program *program, const ZTargetInfo *target) {", 151],
   ["native/zero-c/src/checker.c|static bool check_scalar_match(CheckContext *ctx, const Program *program, const Function *fun, const Stmt *stmt, Scope *scope, ZDiag *diag, int loop_depth, const char *match_type) {", 127],
-  ["native/zero-c/src/emit_macho64.c|static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const IrValue *value, unsigned reg, unsigned frame_size, unsigned scratch_slot, MachOEmitContext *ctx, ZDiag *diag) {", 127],
+  ["native/zero-c/src/emit_macho64.c|static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const IrValue *value, unsigned reg, unsigned frame_size, unsigned scratch_slot, MachOEmitContext *ctx, ZDiag *diag) {", 129],
 ]);
 
 const knownReturnTypeDivergences = new Map();

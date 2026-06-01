@@ -580,6 +580,13 @@ static bool coff_emit_byte_view_eq_value(ZBuf *text, const IrFunction *fun, cons
   return true;
 }
 
+static bool coff_emit_crc32_bytes_value(ZBuf *text, const IrFunction *fun, const IrValue *value, CoffEmitContext *ctx, ZDiag *diag) {
+  if (!value->left) return coff_diag_at(diag, "direct COFF CRC32 requires a byte view", value->line, value->column, "missing byte view");
+  if (!coff_emit_byte_view_pair(text, fun, value->left, 11, 9, ctx, diag)) return false;
+  z_x64_emit_crc32_bytes_loop(text, 11, 9);
+  return true;
+}
+
 static bool coff_emit_index_load_value(ZBuf *text, const IrFunction *fun, const IrValue *value, CoffEmitContext *ctx, ZDiag *diag) {
   if (value->array_index >= fun->local_len) return coff_diag_at(diag, "direct COFF indexed load array is out of range", value->line, value->column, "invalid array local");
   const IrLocal *local = &fun->locals[value->array_index];
@@ -655,6 +662,7 @@ static bool coff_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *va
     case IR_VALUE_BYTE_COPY: return coff_emit_byte_copy_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_FILL: return coff_emit_byte_fill_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_VIEW_EQ: return coff_emit_byte_view_eq_value(text, fun, value, ctx, diag);
+    case IR_VALUE_CRC32_BYTES: return coff_emit_crc32_bytes_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_VIEW_INDEX_LOAD: return coff_emit_byte_view_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_INDEX_LOAD: return coff_emit_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_FIELD_LOAD: return coff_emit_field_load_value(text, fun, value, diag);

@@ -634,6 +634,13 @@ static bool machx64_emit_byte_view_eq_value(ZBuf *text, const IrFunction *fun, c
   return true;
 }
 
+static bool machx64_emit_crc32_bytes_value(ZBuf *text, const IrFunction *fun, const IrValue *value, MachOEmitContext *ctx, ZDiag *diag) {
+  if (!value->left) return machx64_diag_at(diag, "direct x86_64 Mach-O CRC32 requires a byte view", value->line, value->column, "missing byte view");
+  if (!machx64_emit_byte_view_pair(text, fun, value->left, 11, 9, ctx, diag)) return false;
+  z_x64_emit_crc32_bytes_loop(text, 11, 9);
+  return true;
+}
+
 static bool machx64_emit_index_load_value(ZBuf *text, const IrFunction *fun, const IrValue *value, MachOEmitContext *ctx, ZDiag *diag) {
   if (value->array_index >= fun->local_len) return machx64_diag_at(diag, "direct x86_64 Mach-O indexed load array is out of range", value->line, value->column, "invalid array local");
   const IrLocal *local = &fun->locals[value->array_index];
@@ -703,6 +710,7 @@ static bool machx64_emit_value(ZBuf *text, const IrFunction *fun, const IrValue 
     case IR_VALUE_BYTE_COPY: return machx64_emit_byte_copy_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_FILL: return machx64_emit_byte_fill_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_VIEW_EQ: return machx64_emit_byte_view_eq_value(text, fun, value, ctx, diag);
+    case IR_VALUE_CRC32_BYTES: return machx64_emit_crc32_bytes_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_VIEW_INDEX_LOAD: return machx64_emit_byte_view_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_INDEX_LOAD: return machx64_emit_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_FIELD_LOAD: return machx64_emit_field_load_value(text, fun, value, diag);

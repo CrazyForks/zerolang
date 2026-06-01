@@ -218,8 +218,24 @@ void z_aarch64_emit_add_x_reg_lsl(ZBuf *text, unsigned dst, unsigned lhs, unsign
   z_aarch64_append_u32(text, 0x8b000000u | ((rhs & 31u) << 16) | ((shift & 0x3fu) << 10) | ((lhs & 31u) << 5) | (dst & 31u));
 }
 
+void z_aarch64_emit_and_w_reg(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs) {
+  z_aarch64_append_u32(text, 0x0a000000u | ((rhs & 31u) << 16) | ((lhs & 31u) << 5) | (dst & 31u));
+}
+
+void z_aarch64_emit_eor_w_reg(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs) {
+  z_aarch64_append_u32(text, 0x4a000000u | ((rhs & 31u) << 16) | ((lhs & 31u) << 5) | (dst & 31u));
+}
+
 void z_aarch64_emit_lsr_x_imm(ZBuf *text, unsigned dst, unsigned src, unsigned shift) {
   z_aarch64_append_u32(text, 0xd340fc00u | ((shift & 0x3fu) << 16) | ((src & 31u) << 5) | (dst & 31u));
+}
+
+void z_aarch64_emit_lsr_w_imm(ZBuf *text, unsigned dst, unsigned src, unsigned shift) {
+  z_aarch64_append_u32(text, 0x53007c00u | ((shift & 0x1fu) << 16) | ((src & 31u) << 5) | (dst & 31u));
+}
+
+void z_aarch64_emit_neg_w(ZBuf *text, unsigned dst, unsigned src) {
+  z_aarch64_append_u32(text, 0x4b0003e0u | ((src & 31u) << 16) | (dst & 31u));
 }
 
 void z_aarch64_emit_sub_w_reg(ZBuf *text, unsigned dst, unsigned lhs, unsigned rhs) {
@@ -324,6 +340,39 @@ void z_aarch64_emit_byte_eq_loop(ZBuf *text, unsigned result_reg) {
   z_aarch64_patch_cond19(text, equal, text->len);
   z_aarch64_emit_movz_w(text, result_reg, 1);
   z_aarch64_patch_branch26(text, after_false, text->len);
+}
+
+void z_aarch64_emit_crc32_bytes_loop(ZBuf *text, unsigned result_reg) {
+  z_aarch64_emit_movz_w(text, 8, 0xffffffffu);
+  z_aarch64_emit_movz_w(text, 9, 0);
+  size_t byte_loop = text->len;
+  z_aarch64_emit_cmp_w(text, 9, 10);
+  size_t done = z_aarch64_emit_b_cond_placeholder(text, 2);
+  z_aarch64_emit_add_x_reg(text, 12, 11, 9);
+  z_aarch64_emit_load_b_imm(text, 12, 12, 0);
+  z_aarch64_emit_eor_w_reg(text, 8, 8, 12);
+  z_aarch64_emit_movz_w(text, 13, 8);
+  size_t bit_loop = text->len;
+  z_aarch64_emit_mov_w(text, 14, 8);
+  z_aarch64_emit_movz_w(text, 15, 1);
+  z_aarch64_emit_and_w_reg(text, 14, 14, 15);
+  z_aarch64_emit_neg_w(text, 14, 14);
+  z_aarch64_emit_movz_w(text, 15, 0xedb88320u);
+  z_aarch64_emit_and_w_reg(text, 14, 14, 15);
+  z_aarch64_emit_lsr_w_imm(text, 8, 8, 1);
+  z_aarch64_emit_eor_w_reg(text, 8, 8, 14);
+  z_aarch64_emit_sub_w_imm(text, 13, 13, 1);
+  size_t byte_next = z_aarch64_emit_cbz_w_placeholder(text, 13);
+  size_t bit_back = z_aarch64_emit_b_placeholder(text);
+  z_aarch64_patch_branch26(text, bit_back, bit_loop);
+  z_aarch64_patch_cond19(text, byte_next, text->len);
+  z_aarch64_emit_add_w_imm(text, 9, 9, 1);
+  size_t byte_back = z_aarch64_emit_b_placeholder(text);
+  z_aarch64_patch_branch26(text, byte_back, byte_loop);
+  z_aarch64_patch_cond19(text, done, text->len);
+  z_aarch64_emit_movz_w(text, 14, 0xffffffffu);
+  z_aarch64_emit_eor_w_reg(text, 8, 8, 14);
+  if (result_reg != 8) z_aarch64_emit_mov_w(text, result_reg, 8);
 }
 
 size_t z_aarch64_emit_bl_placeholder(ZBuf *text) {

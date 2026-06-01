@@ -479,6 +479,33 @@ void z_x64_emit_byte_eq_loop(ZBuf *buf) {
   z_x64_patch_rel32(buf, after_false, buf->len);
 }
 
+void z_x64_emit_crc32_bytes_loop(ZBuf *buf, unsigned ptr_reg, unsigned len_reg) {
+  z_x64_emit_mov_eax_u32(buf, 0xffffffffu);
+  z_x64_emit_xor_ecx_ecx(buf);
+  size_t byte_loop = buf->len;
+  z_x64_emit_cmp_reg_reg(buf, 1, len_reg, false);
+  size_t done = z_x64_emit_jcc32_placeholder(buf, 0x83);
+  z_x64_emit_movzx_reg32_base_index_u8(buf, 2, ptr_reg, 1);
+  z_x64_emit_xor_reg_from_reg(buf, 0, 2, false);
+  z_x64_emit_mov_reg_u32(buf, 8, 8);
+  size_t bit_loop = buf->len;
+  z_x64_emit_mov_reg_from_reg(buf, 2, 0, false);
+  z_x64_emit_and_reg_i8(buf, 2, 1, false);
+  z_x64_emit_neg_reg(buf, 2, false);
+  z_x64_emit_and_reg_u32(buf, 2, 0xedb88320u, false);
+  z_x64_emit_shr_reg_one(buf, 0, false);
+  z_x64_emit_xor_reg_from_reg(buf, 0, 2, false);
+  z_x64_emit_dec_r8d(buf);
+  size_t bit_back = z_x64_emit_jcc32_placeholder(buf, 0x85);
+  z_x64_patch_rel32(buf, bit_back, bit_loop);
+  z_x64_emit_inc_ecx(buf);
+  size_t byte_back = z_x64_emit_jmp32_placeholder(buf, 0xe9);
+  z_x64_patch_rel32(buf, byte_back, byte_loop);
+  z_x64_patch_rel32(buf, done, buf->len);
+  z_x64_append_u8(buf, 0x35);
+  z_x64_append_u32(buf, 0xffffffffu);
+}
+
 void z_x64_emit_load_base_index_scale_disp_reg(ZBuf *buf, unsigned dst_reg, unsigned base_reg, unsigned index_reg, unsigned scale, unsigned disp, bool wide) {
   z_x64_emit_base_index_scale_disp_op(buf, 0x8b, dst_reg, base_reg, index_reg, scale, disp, wide, false);
 }

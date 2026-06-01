@@ -1222,30 +1222,7 @@ static bool elf_emit_byte_bulk_value(ZBuf *code, const IrFunction *fun, const Ir
     case IR_VALUE_CRC32_BYTES: {
       if (!value->left) return elf_diag(diag, "direct ELF64 CRC32 requires a byte view", value->line, value->column, "missing byte view");
       if (!elf_emit_byte_view_pair(code, fun, value->left, 6, 9, ctx, diag)) return false;
-      z_x64_emit_mov_eax_u32(code, 0xffffffffu);
-      z_x64_emit_xor_ecx_ecx(code);
-      size_t byte_loop = code->len;
-      z_x64_emit_cmp_reg_reg(code, 1, 9, true);
-      size_t done = z_x64_emit_jcc32_placeholder(code, 0x83);
-      z_x64_emit_movzx_reg32_base_index_u8(code, 2, 6, 1);
-      z_x64_emit_xor_reg_from_reg(code, 0, 2, false);
-      z_x64_emit_mov_reg_u32(code, 8, 8);
-      size_t bit_loop = code->len;
-      z_x64_emit_mov_reg_from_reg(code, 2, 0, false);
-      z_x64_emit_and_reg_i8(code, 2, 1, false);
-      z_x64_emit_neg_reg(code, 2, false);
-      z_x64_emit_and_reg_u32(code, 2, 0xedb88320u, false);
-      z_x64_emit_shr_reg_one(code, 0, false);
-      z_x64_emit_xor_reg_from_reg(code, 0, 2, false);
-      z_x64_emit_dec_r8d(code);
-      size_t bit_back = z_x64_emit_jcc32_placeholder(code, 0x85);
-      z_x64_patch_rel32(code, bit_back, bit_loop);
-      z_x64_emit_inc_rcx(code);
-      size_t byte_back = z_x64_emit_jmp32_placeholder(code, 0xe9);
-      z_x64_patch_rel32(code, byte_back, byte_loop);
-      z_x64_patch_rel32(code, done, code->len);
-      z_x64_append_u8(code, 0x35);
-      z_x64_append_u32(code, 0xffffffffu);
+      z_x64_emit_crc32_bytes_loop(code, 6, 9);
       return true;
     }
     case IR_VALUE_BYTE_COPY: {
