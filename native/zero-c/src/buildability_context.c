@@ -110,7 +110,7 @@ bool z_build_is_elf_scalar(IrTypeKind type) {
 }
 
 bool z_build_is_scalar32(IrTypeKind type) {
-  return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_USIZE ||
+  return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 ||
          type == IR_TYPE_I32 || type == IR_TYPE_U32;
 }
 

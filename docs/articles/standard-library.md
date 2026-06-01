@@ -11,6 +11,9 @@ Runnable modules:
 - `std.collections`: fixed-capacity collection operations over caller-owned storage and explicit lengths.
 - `std.search`: scalar span search, lower-bound, and binary-search helpers.
 - `std.sort`: in-place insertion sort and sortedness checks over caller-owned scalar storage.
+- `std.ascii`: byte predicates, ASCII case conversion, and digit value helpers.
+- `std.fmt`: caller-buffer formatting for booleans and integer text.
+- `std.text`: byte-backed ASCII and UTF-8 validation and counting.
 - `std.io`: buffered reader/writer metadata and byte copy helpers over caller-owned storage.
 - `std.args`: hosted process argument count and indexed lookup.
 - `std.env`: hosted environment variable lookup.
@@ -18,7 +21,7 @@ Runnable modules:
 - `std.math`: pure fixed-width integer helpers and small number-theory routines.
 - `std.path`: fixed-buffer lexical path helpers.
 - `std.str`: allocation-free byte-string helpers over spans and caller-owned storage.
-- `std.parse`: allocation-free ASCII scanners and unsigned integer parsers.
+- `std.parse`: allocation-free byte scanners and integer/bool parsers.
 - `std.codec`: byte-oriented integer encoding, varint length, and CRC-32 helpers.
 - `std.json`: string and byte-span validation, streaming token counts, explicit-allocator parsing, and caller-buffer string writing.
 - `std.time`: duration math plus target-gated monotonic and wall-clock helpers.

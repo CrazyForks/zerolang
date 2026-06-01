@@ -23,10 +23,13 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.collections`: fixed-capacity push, append, live-prefix view, count, contains, swap-remove, and move-to-front helpers over caller-owned storage plus explicit lengths.
 - `std.search`: generic scalar index search plus typed lower-bound and binary-search helpers.
 - `std.sort`: in-place insertion sort and sortedness checks for `i32`, `u32`, and `usize` storage.
+- `std.ascii`: ASCII byte predicates, case conversion, and digit value helpers.
+- `std.fmt`: caller-buffer formatting for booleans and integer text.
+- `std.text`: ASCII and UTF-8 byte-backed text validation.
 - `std.math`: pure `u32` integer helpers, GCD/LCM, powers, modular power, primality, and divisor routines.
 - `std.path`: target-neutral lexical path basename, dirname, extension, join, normalize, and relative helpers.
 - `std.codec`: byte reads, varint sizing, CRC helpers, and byte checksums.
-- `std.parse`: ASCII predicates and decimal integer parsers returning `Maybe<T>`.
+- `std.parse`: byte scanners and integer/bool parsers returning `Maybe<T>`.
 - `std.time`: duration construction and conversion helpers.
 - `std.rand`: explicit deterministic random sources.
 - `std.crypto`: small hash and byte-oriented crypto helpers.
@@ -130,6 +133,20 @@ pub fn main() -> Void {
     let out: Maybe<Span<u8>> = std.str.reverse(reversed, "zero")
     if out.has {
         expect std.mem.eql(out.value, "orez")
+    }
+}
+```
+
+Use `std.parse` and `std.fmt` instead of hand-rolled decimal loops in ordinary
+CLIs and examples:
+
+```zero
+pub fn main() -> Void {
+    let parsed: Maybe<i32> = std.parse.parseI32("-42")
+    var out: [12]u8 = [0_u8; 12]
+    if parsed.has {
+        let formatted: Maybe<Span<u8>> = std.fmt.i32(out, parsed.value)
+        expect formatted.has && std.mem.eql(formatted.value, "-42")
     }
 }
 ```

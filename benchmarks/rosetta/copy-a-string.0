@@ -1,7 +1,7 @@
 pub fn main(world: World) -> Void raises {
-    let source: String = "zero"
-    let copy: String = source
-    if std.mem.len(copy) == 4 {
+    var buffer: [4]u8 = [0_u8; 4]
+    let copy: Maybe<Span<u8>> = std.str.copy(buffer, "zero")
+    if copy.has && std.mem.eql(copy.value, "zero") {
         check world.out.write("copy string ok\n")
     }
 }

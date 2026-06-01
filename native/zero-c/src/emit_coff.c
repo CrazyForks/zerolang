@@ -36,9 +36,9 @@ static bool coff_diag_at(ZDiag *diag, const char *message, int line, int column,
   return false;
 }
 
-static bool coff_type_is_scalar32(IrTypeKind type) { return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_I32 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE; }
+static bool coff_type_is_scalar32(IrTypeKind type) { return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_I32 || type == IR_TYPE_U32; }
 
-static bool coff_type_is_i64(IrTypeKind type) { return type == IR_TYPE_I64 || type == IR_TYPE_U64; }
+static bool coff_type_is_i64(IrTypeKind type) { return type == IR_TYPE_I64 || type == IR_TYPE_USIZE || type == IR_TYPE_U64; }
 
 static bool coff_type_is_unsigned(IrTypeKind type) {
   return type == IR_TYPE_BOOL || type == IR_TYPE_U8 || type == IR_TYPE_U16 || type == IR_TYPE_U32 || type == IR_TYPE_USIZE || type == IR_TYPE_U64;
@@ -60,7 +60,7 @@ static bool coff_type_is_array_element(IrTypeKind type) {
 }
 
 static bool coff_type_is_word_array_element(IrTypeKind type) {
-  return type == IR_TYPE_U32 || type == IR_TYPE_I32 || type == IR_TYPE_USIZE;
+  return type == IR_TYPE_U32 || type == IR_TYPE_I32;
 }
 
 static void coff_emit_load_ptr_element(ZBuf *text, unsigned dst_reg, unsigned base_reg, IrTypeKind element_type) {
@@ -97,7 +97,6 @@ static void coff_emit_cast_normalize_rax(ZBuf *text, IrTypeKind target) {
       return;
     case IR_TYPE_I32:
     case IR_TYPE_U32:
-    case IR_TYPE_USIZE:
       z_x64_emit_mov_reg_from_reg(text, 0, 0, false);
       return;
     default:
@@ -375,6 +374,7 @@ static bool coff_emit_byte_view_pair(ZBuf *text, const IrFunction *fun, const Ir
 static bool coff_emit_local_value(ZBuf *text, const IrFunction *fun, const IrValue *value, ZDiag *diag) {
   if (value->local_index >= fun->local_len) return coff_diag_at(diag, "direct COFF local index is out of range", value->line, value->column, "invalid local");
   if (fun->locals[value->local_index].type == IR_TYPE_BYTE_VIEW) return coff_diag_at(diag, "direct COFF byte-view local cannot be used as a scalar", value->line, value->column, "byte-view local");
+  if (fun->locals[value->local_index].type == IR_TYPE_MAYBE_SCALAR) return coff_diag_at(diag, "direct COFF Maybe scalar local cannot be used as a scalar", value->line, value->column, "Maybe scalar local");
   coff_emit_load_local_scalar_rax(text, fun, value->local_index, fun->locals[value->local_index].type);
   return true;
 }
@@ -632,8 +632,17 @@ static bool coff_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *va
       return true;
     case IR_VALUE_VEC_PUSH: return coff_emit_vec_push_value(text, fun, value, ctx, diag);
     case IR_VALUE_MAYBE_HAS:
-      if (value->local_index >= fun->local_len || fun->locals[value->local_index].type != IR_TYPE_MAYBE_BYTE_VIEW) return coff_diag_at(diag, "direct COFF maybe helper requires a Maybe<MutSpan<u8>> local", value->line, value->column, "invalid maybe local");
+      if (value->local_index >= fun->local_len ||
+          (fun->locals[value->local_index].type != IR_TYPE_MAYBE_BYTE_VIEW && fun->locals[value->local_index].type != IR_TYPE_MAYBE_SCALAR)) {
+        return coff_diag_at(diag, "direct COFF maybe helper requires a Maybe local", value->line, value->column, "invalid maybe local");
+      }
       coff_emit_load_local_slot_eax(text, fun, value->local_index, 0);
+      return true;
+    case IR_VALUE_MAYBE_VALUE:
+      if (value->local_index >= fun->local_len || fun->locals[value->local_index].type != IR_TYPE_MAYBE_SCALAR) {
+        return coff_diag_at(diag, "direct COFF maybe scalar value requires a Maybe scalar local", value->line, value->column, "invalid maybe value");
+      }
+      coff_emit_load_local_slot_rax(text, fun, value->local_index, 8);
       return true;
     case IR_VALUE_BYTE_VIEW_LEN: return coff_emit_byte_view_len(text, fun, value->left, ctx, diag);
     case IR_VALUE_BYTE_COPY: return coff_emit_byte_copy_value(text, fun, value, ctx, diag);
@@ -741,6 +750,38 @@ static bool coff_emit_local_set_maybe_byte_view(ZBuf *text, const IrFunction *fu
   return true;
 }
 
+static bool coff_emit_local_set_maybe_scalar(ZBuf *text, const IrFunction *fun, const IrInstr *instr, CoffEmitContext *ctx, ZDiag *diag) {
+  if (!instr->value) return coff_diag_at(diag, "direct COFF Maybe scalar initializer is missing", instr->line, instr->column, "missing maybe value");
+  if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
+    z_x64_emit_mov_eax_u32(text, instr->value->data_len ? 1u : 0u);
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 0, false);
+    z_x64_emit_mov_rax_u64(text, (uint64_t)instr->value->int_value);
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 8, true);
+    return true;
+  }
+  if (instr->value->kind == IR_VALUE_CALL && instr->value->type == IR_TYPE_MAYBE_SCALAR) {
+    if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 0, false);
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 2, 8, true);
+    return true;
+  }
+  if (instr->value->kind == IR_VALUE_LOCAL && instr->value->local_index < fun->local_len && fun->locals[instr->value->local_index].type == IR_TYPE_MAYBE_SCALAR) {
+    coff_emit_load_local_slot_eax(text, fun, instr->value->local_index, 0);
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 0, false);
+    coff_emit_load_local_slot_rax(text, fun, instr->value->local_index, 8);
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 8, true);
+    return true;
+  }
+  if (coff_type_is_scalar32(instr->value->type) || coff_type_is_i64(instr->value->type)) {
+    if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 8, true);
+    z_x64_emit_mov_eax_u32(text, 1);
+    coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 0, false);
+    return true;
+  }
+  return coff_diag_at(diag, "direct COFF Maybe scalar initializer is unsupported", instr->line, instr->column, "unsupported Maybe scalar initializer");
+}
+
 static bool coff_emit_local_set_instr(ZBuf *text, const IrFunction *fun, const IrInstr *instr, CoffEmitContext *ctx, ZDiag *diag) {
   if (instr->local_index >= fun->local_len) return coff_diag_at(diag, "direct COFF local store is out of range", instr->line, instr->column, "invalid local");
   switch (fun->locals[instr->local_index].type) {
@@ -748,6 +789,7 @@ static bool coff_emit_local_set_instr(ZBuf *text, const IrFunction *fun, const I
     case IR_TYPE_ALLOC: return coff_emit_local_set_alloc(text, fun, instr, ctx, diag);
     case IR_TYPE_VEC: return coff_emit_local_set_vec(text, fun, instr, ctx, diag);
     case IR_TYPE_MAYBE_BYTE_VIEW: return coff_emit_local_set_maybe_byte_view(text, fun, instr, ctx, diag);
+    case IR_TYPE_MAYBE_SCALAR: return coff_emit_local_set_maybe_scalar(text, fun, instr, ctx, diag);
     default: if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false; coff_emit_store_local_scalar_from_reg(text, fun, instr->local_index, 0, fun->locals[instr->local_index].type); return true;
   }
 }
@@ -868,6 +910,27 @@ static bool coff_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *in
         coff_emit_epilogue(text);
         return true;
       }
+      if (fun->return_type == IR_TYPE_MAYBE_SCALAR && instr->value) {
+        if (instr->value->kind == IR_VALUE_CALL && instr->value->type == IR_TYPE_MAYBE_SCALAR) {
+          if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
+        } else if (instr->value->kind == IR_VALUE_MAYBE_SCALAR_LITERAL) {
+          z_x64_emit_mov_rax_u64(text, (uint64_t)instr->value->int_value);
+          z_x64_emit_mov_reg_from_rax(text, 2, true);
+          z_x64_emit_mov_eax_u32(text, instr->value->data_len ? 1u : 0u);
+        } else if (instr->value->kind == IR_VALUE_LOCAL && instr->value->local_index < fun->local_len && fun->locals[instr->value->local_index].type == IR_TYPE_MAYBE_SCALAR) {
+          coff_emit_load_local_slot_rax(text, fun, instr->value->local_index, 8);
+          z_x64_emit_mov_reg_from_rax(text, 2, true);
+          coff_emit_load_local_slot_eax(text, fun, instr->value->local_index, 0);
+        } else if (coff_type_is_scalar32(instr->value->type) || coff_type_is_i64(instr->value->type)) {
+          if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
+          z_x64_emit_mov_reg_from_rax(text, 2, true);
+          z_x64_emit_mov_eax_u32(text, 1);
+        } else {
+          return coff_diag_at(diag, "direct COFF Maybe scalar return requires a Maybe scalar or scalar value", instr->line, instr->column, "unsupported Maybe scalar return");
+        }
+        coff_emit_epilogue(text);
+        return true;
+      }
       if (instr->value && !coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
       coff_emit_epilogue(text);
       return true;
@@ -893,8 +956,8 @@ static bool coff_validate_function(const IrFunction *fun, ZDiag *diag) {
   for (size_t i = 0; i < fun->param_count; i++) abi_slots += fun->locals[i].type == IR_TYPE_BYTE_VIEW ? 2u : 1u;
   if (abi_slots > 8) return coff_diag_at(diag, "direct COFF object backend supports at most eight ABI parameter slots", fun->line, fun->column, fun->name);
   if (fun->return_type != IR_TYPE_VOID && !coff_type_is_scalar32(fun->return_type) && !coff_type_is_i64(fun->return_type) &&
-      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW) {
-    return coff_diag_at(diag, "direct COFF object backend currently supports Void, integer, byte-view, and Maybe byte-view returns", fun->line, fun->column, fun->name);
+      fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_SCALAR) {
+    return coff_diag_at(diag, "direct COFF object backend currently supports Void, integer, byte-view, Maybe byte-view, and Maybe scalar returns", fun->line, fun->column, fun->name);
   }
   for (size_t i = 0; i < fun->local_len; i++) {
     if (fun->locals[i].type == IR_TYPE_BYTE_VIEW) {
@@ -902,7 +965,7 @@ static bool coff_validate_function(const IrFunction *fun, ZDiag *diag) {
     }
     if (fun->locals[i].is_array && coff_type_is_array_element(fun->locals[i].element_type)) continue;
     if (fun->locals[i].is_record) continue;
-    if (fun->locals[i].type == IR_TYPE_ALLOC || fun->locals[i].type == IR_TYPE_MAYBE_BYTE_VIEW) continue;
+    if (fun->locals[i].type == IR_TYPE_ALLOC || fun->locals[i].type == IR_TYPE_MAYBE_BYTE_VIEW || fun->locals[i].type == IR_TYPE_MAYBE_SCALAR) continue;
     if (fun->locals[i].type == IR_TYPE_VEC) continue;
     if (fun->locals[i].is_array || (!coff_type_is_scalar32(fun->locals[i].type) && !coff_type_is_i64(fun->locals[i].type))) {
       return coff_diag_at(diag, "direct COFF object backend currently supports only primitive scalar locals", fun->locals[i].line, fun->locals[i].column, fun->locals[i].name);
@@ -1089,8 +1152,8 @@ static const IrFunction *coff_find_executable_main(const IrProgram *program, ZDi
     coff_diag_at(diag, "direct COFF x64 executable main must not take parameters", fun->line, fun->column, fun->name);
     return NULL;
   }
-  if (fun->return_type != IR_TYPE_VOID && !coff_type_is_scalar32(fun->return_type)) {
-    coff_diag_at(diag, "direct COFF x64 executable main must return Void or a 32-bit-or-smaller scalar", fun->line, fun->column, fun->name);
+  if (fun->return_type != IR_TYPE_VOID && !coff_type_is_scalar32(fun->return_type) && !coff_type_is_i64(fun->return_type)) {
+    coff_diag_at(diag, "direct COFF x64 executable main must return Void or a primitive scalar", fun->line, fun->column, fun->name);
     return NULL;
   }
   if (out_index) *out_index = index;
