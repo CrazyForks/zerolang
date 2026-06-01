@@ -12,6 +12,19 @@ Runnable today:
 | `std.json.streamTokensBytes(bytes)` | `usize` | Counts stream tokens from a `Span<u8>` payload. |
 | `std.json.writeString(buffer, text)` | `Maybe<String>` | Writes an escaped JSON string into caller storage. |
 | `std.json.decodeBoundary()` | `String` | Documents the typed decode boundary exposed by current metadata. |
+| `std.json.errorNone()` | `u32` | Validation status for a clean payload. |
+| `std.json.errorInvalid()` | `u32` | Validation status for malformed JSON. |
+| `std.json.errorTrailing()` | `u32` | Validation status for trailing non-whitespace bytes. |
+| `std.json.validateError(bytes)` | `u32` | Validates a byte span and returns a structured status code. |
+| `std.json.field(bytes, key)` | `Maybe<Span<u8>>` | Returns the raw top-level object field value. |
+| `std.json.stringDecode(buffer, value)` | `Maybe<Span<u8>>` | Decodes a JSON string value into caller storage. |
+| `std.json.string(buffer, bytes, key)` | `Maybe<Span<u8>>` | Looks up and decodes a top-level string field. |
+| `std.json.u32(bytes, key)` | `Maybe<u32>` | Looks up and decodes a top-level unsigned integer field. |
+| `std.json.bool(bytes, key)` | `Maybe<Bool>` | Looks up and decodes a top-level boolean field. |
+| `std.json.writeStringBytes(buffer, text)` | `Maybe<Span<u8>>` | Writes an escaped JSON string from byte input. |
+| `std.json.writeObject1String(buffer, key, value)` | `Maybe<Span<u8>>` | Writes a one-field object with a string value. |
+| `std.json.writeObject1U32(buffer, key, value)` | `Maybe<Span<u8>>` | Writes a one-field object with a `u32` value. |
+| `std.json.writeObject1Bool(buffer, key, value)` | `Maybe<Span<u8>>` | Writes a one-field object with a bool value. |
 
 Metadata labels:
 
@@ -20,7 +33,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: `Maybe` helpers return null on failure
 - ownership notes: parsed documents are owned by explicit allocator storage in this compiler slice
-- examples: `examples/std-data-formats.0`, `examples/std-json-bytes.0`
+- examples: `examples/std-data-formats.0`, `examples/std-json-bytes.0`, `conformance/native/pass/std-codec-json-url.0`
 
 ## Example
 
@@ -53,12 +66,28 @@ pub fn main(world: World) -> Void raises {
 }
 ```
 
+Top-level object lookup and caller-buffer writing:
+
+```zero
+pub fn main(world: World) -> Void raises {
+    let input: Span<u8> = "{\"name\":\"zero\",\"count\":42,\"ok\":true}"
+    var name_buf: [8]u8 = [0_u8; 8]
+    let name: Maybe<Span<u8>> = std.json.string(name_buf, input, "name")
+    let count: Maybe<u32> = std.json.u32(input, "count")
+    var out: [24]u8 = [0_u8; 24]
+    let written: Maybe<Span<u8>> = std.json.writeObject1U32(out, "count", 42_u32)
+    if name.has && count.has && written.has && std.json.validateError(written.value) == std.json.errorNone() {
+        check world.out.write("json lookup ok\n")
+    }
+}
+```
+
 ## Design Notes
 
-JSON should not fake allocation-free semantics. Validation and streaming stay
-allocation-free.
+JSON should not fake allocation-free semantics. Validation, field lookup,
+string decode, and writing stay allocation-free.
 
 Parsing into an owned document requires an explicit allocator. The current
 `JsonDoc` value is opaque; examples inspect `Maybe.has` and use token streaming
-for allocation-free summaries. String and byte-span entry points share the same
-JSON subset.
+for allocation-free summaries. Field lookup is intentionally shallow: it reads
+top-level object fields and returns raw slices or typed scalar decodes.

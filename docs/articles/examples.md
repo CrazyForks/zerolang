@@ -71,7 +71,7 @@ Core examples:
 - `examples/std-path-io.0`: fixed-buffer `std.path` helpers and caller-owned `std.io` buffers.
 - `examples/std-str.0`: allocation-free byte-string helpers over spans and caller-owned storage.
 - `examples/std-text-format-parse.0`: ASCII helpers, runtime parsing, caller-buffer formatting, and UTF-8 validation.
-- `examples/std-data-formats.0`: `std.codec` encoders and basic explicit-allocator `std.json` helpers.
+- `examples/std-data-formats.0`: codec encode/decode, JSON lookup/writing, and URL query helpers over caller-owned buffers.
 - `examples/std-json-bytes.0`: byte-span JSON validation, parsing, and token streaming.
 - `examples/std-http-json.0`: hosted HTTP request envelope into caller-owned storage followed by byte-span JSON parsing.
 - `examples/std-http-request.0`: hosted HTTP request envelope with custom method, headers, and request body.

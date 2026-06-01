@@ -28,12 +28,13 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.text`: ASCII and UTF-8 byte-backed text validation.
 - `std.math`: fixed-width min/max/clamp, checked and saturating integer arithmetic, GCD/LCM, powers, modular power, roots, combinatorics, primality, and divisor routines.
 - `std.path`: target-neutral lexical path basename, dirname, extension, join, normalize, and relative helpers.
-- `std.codec`: byte reads, varint sizing, CRC helpers, and byte checksums.
+- `std.codec`: byte reads, endian reads/writes, varint sizing/encode/decode, base64/hex encode/decode, CRC helpers, and byte checksums.
 - `std.parse`: byte scanners and integer/bool parsers returning `Maybe<T>`.
 - `std.time`: duration construction, conversion, comparison, clamp, and target-gated clock helpers.
 - `std.rand`: explicit deterministic random sources, random bits, and target entropy helpers.
 - `std.crypto`: small hash and byte-oriented crypto helpers.
-- `std.json`: explicit-buffer JSON parsing and string writing helpers.
+- `std.json`: explicit-buffer JSON validation, structured status codes, shallow field lookup, typed scalar decode, parsing, and string/object writing helpers.
+- `std.url`: target-neutral URL splitting, percent/query encoding and decoding, query lookup, and query append helpers.
 - `std.str`: byte-span string helpers, including non-overlapping reverse, prefix/suffix, substring, trim, and word counts.
 - `std.io`: buffered reader/writer surfaces over caller-owned storage.
 
@@ -148,6 +149,29 @@ pub fn main() -> Void {
         let formatted: Maybe<Span<u8>> = std.fmt.i32(out, parsed.value)
         expect formatted.has && std.mem.eql(formatted.value, "-42")
     }
+}
+```
+
+Use codec, JSON, and URL helpers for common wire-format work instead of
+hand-rolled loops:
+
+```zero
+pub fn main() -> Void {
+    var decoded: [4]u8 = [0_u8; 4]
+    let text: Maybe<Span<u8>> = std.codec.base64Decode(decoded, "emVybw==")
+
+    let input: Span<u8> = "{\"count\":42,\"ok\":true}"
+    let count: Maybe<u32> = std.json.u32(input, "count")
+
+    var url_buf: [48]u8 = [0_u8; 48]
+    var param_buf: [16]u8 = [0_u8; 16]
+    let param: Maybe<Span<u8>> = std.url.writeQueryParam(param_buf, "q", "zero lang")
+    var url: Maybe<Span<u8>> = null
+    if param.has {
+        url = std.url.appendQuery(url_buf, "https://example.com/path", param.value)
+    }
+
+    expect text.has && count.has && url.has
 }
 ```
 

@@ -817,10 +817,9 @@ typedef struct {
   bool world;
 } CapabilitySummary;
 
-#define STD_HELPER_MAX 192
-
 typedef struct {
-  bool used[STD_HELPER_MAX];
+  bool *used;
+  size_t len;
 } HelperUseSummary;
 
 typedef struct {
@@ -925,8 +924,25 @@ static const CompilerRuntimeHelperInfo compiler_runtime_helpers[] = {
 };
 
 static void helper_summary_mark(HelperUseSummary *helpers, const char *name) {
-  int index = z_std_helper_index(name, STD_HELPER_MAX);
-  if (helpers && index >= 0) helpers->used[index] = true;
+  int index = helpers ? z_std_helper_index(name, helpers->len) : -1;
+  if (helpers && helpers->used && index >= 0) helpers->used[index] = true;
+}
+
+static HelperUseSummary helper_summary_new(void) {
+  HelperUseSummary helpers = {.len = z_std_helper_count()};
+  helpers.used = z_checked_calloc(helpers.len ? helpers.len : 1, sizeof(bool));
+  return helpers;
+}
+
+static void helper_summary_free(HelperUseSummary *helpers) {
+  if (!helpers) return;
+  free(helpers->used);
+  helpers->used = NULL;
+  helpers->len = 0;
+}
+
+static bool helper_summary_used(const HelperUseSummary *helpers, size_t index) {
+  return helpers && helpers->used && index < helpers->len && helpers->used[index];
 }
 
 static void capability_summary_set(CapabilitySummary *caps, const char *capability) {
@@ -1404,7 +1420,7 @@ static CapabilitySummary program_capabilities(const Program *program) {
 }
 
 static HelperUseSummary program_used_helpers(const Program *program) {
-  HelperUseSummary helpers = {0};
+  HelperUseSummary helpers = helper_summary_new();
   for (size_t i = 0; program && i < program->functions.len; i++) {
     collect_helpers_from_stmt_vec(&program->functions.items[i].body, &helpers);
   }
@@ -5804,6 +5820,7 @@ static void append_direct_memory_json(ZBuf *buf, const SourceInput *input, const
   zbuf_append(buf, ",\n  \"incrementalInvalidation\": ");
   append_incremental_invalidations_json(buf, input, target, command ? command->profile : "release");
   zbuf_append(buf, "\n}\n");
+  helper_summary_free(&used_helpers);
 }
 
 static void print_build_json(const Command *command, const SourceInput *input, const Program *program, const ZTargetInfo *target, const char *emit_kind, const char *artifact_path, long long artifact_bytes, long long generated_c_bytes, long long elapsed_ms) {
@@ -7383,8 +7400,8 @@ static void append_std_helper_object_json(ZBuf *buf, const ZStdHelperInfo *helpe
 static void append_used_stdlib_helpers_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
   bool wrote = false;
-  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (!helpers || !helpers->used[i]) continue;
+  for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+    if (!helper_summary_used(helpers, i)) continue;
     if (wrote) zbuf_append(buf, ", ");
     append_std_helper_object_json(buf, &z_std_helpers[i], true);
     wrote = true;
@@ -7394,13 +7411,13 @@ static void append_used_stdlib_helpers_json(ZBuf *buf, const HelperUseSummary *h
 
 static void append_top_emitted_helpers_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
-  bool emitted[STD_HELPER_MAX] = {0};
+  bool *emitted = z_checked_calloc(helpers && helpers->len ? helpers->len : 1, sizeof(bool));
   bool wrote = false;
   for (int rank = 0; rank < 5; rank++) {
     int best_index = -1;
     int best_bytes = -1;
-    for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-      if (!helpers || !helpers->used[i] || emitted[i] || !z_std_helpers[i].emits_runtime_helper) continue;
+    for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+      if (!helper_summary_used(helpers, i) || emitted[i] || !z_std_helpers[i].emits_runtime_helper) continue;
       int bytes = helper_estimated_direct_bytes(&z_std_helpers[i]);
       if (bytes > best_bytes) {
         best_bytes = bytes;
@@ -7413,6 +7430,7 @@ static void append_top_emitted_helpers_json(ZBuf *buf, const HelperUseSummary *h
     append_std_helper_object_json(buf, &z_std_helpers[best_index], true);
     wrote = true;
   }
+  free(emitted);
   zbuf_append(buf, "]");
 }
 
@@ -7498,8 +7516,8 @@ static void append_size_literals_json(ZBuf *buf, const SourceInput *input) {
 static void append_size_helper_breakdown_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
   bool wrote = false;
-  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (!helpers || !helpers->used[i]) continue;
+  for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+    if (!helper_summary_used(helpers, i)) continue;
     if (wrote) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"name\":");
     append_json_string(buf, z_std_helpers[i].name);
@@ -7554,8 +7572,8 @@ static void append_retention_reasons_json(ZBuf *buf, const SourceInput *input, c
     zbuf_append(buf, "}");
     wrote = true;
   }
-  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (!helpers || !helpers->used[i]) continue;
+  for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+    if (!helper_summary_used(helpers, i)) continue;
     if (wrote) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"kind\":\"stdlibHelper\",\"name\":");
     append_json_string(buf, z_std_helpers[i].name);
@@ -7593,8 +7611,8 @@ static void append_optimization_hints_json(ZBuf *buf, const SourceInput *input, 
   if (caps && caps->fs) APPEND_HINT("hosted-fs-runtime", "std.fs retains hosted filesystem capability shims; move file I/O out of target-neutral paths for smaller cross artifacts");
   if (input && input->direct_readonly_data_bytes > 0) APPEND_HINT("readonly-literals", "string and byte literals are retained by referenced code; inspect literal-heavy output before optimizing code");
   if (helpers) {
-    for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-      if (helpers->used[i] && z_std_helpers[i].emits_runtime_helper) {
+    for (size_t i = 0; z_std_helpers[i].name && i < helpers->len; i++) {
+      if (helper_summary_used(helpers, i) && z_std_helpers[i].emits_runtime_helper) {
         APPEND_HINT("pay-as-used-helper", "topLargestEmittedHelpers identifies the retained stdlib helper budget");
         break;
       }
@@ -7607,8 +7625,8 @@ static void append_optimization_hints_json(ZBuf *buf, const SourceInput *input, 
 
 static size_t helper_count_used(const HelperUseSummary *helpers) {
   size_t count = 0;
-  for (size_t i = 0; helpers && z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (helpers->used[i]) count++;
+  for (size_t i = 0; helpers && z_std_helpers[i].name && i < helpers->len; i++) {
+    if (helper_summary_used(helpers, i)) count++;
   }
   return count;
 }
@@ -8462,6 +8480,7 @@ static int run_size_report_command(const Command *command, SourceInput *input, P
     if (command && command->json) print_diag_json(path, diag);
     else print_diag(path, diag);
     free(artifact_path);
+    helper_summary_free(&used_helpers);
     return 1;
   }
 
@@ -8472,6 +8491,7 @@ static int run_size_report_command(const Command *command, SourceInput *input, P
   fputs(json.data, stdout);
   zbuf_free(&json);
   free(artifact_path);
+  helper_summary_free(&used_helpers);
   return 0;
 }
 

@@ -3336,6 +3336,67 @@ for (const { target, compiler, emissionPath, magic } of directByteCopyFillTarget
   assert.equal(directStdTimeRandReport.objectBackend.objectEmission.path, emissionPath);
   assert(directStdTimeRandBytes.subarray(0, magic.length).equals(magic));
 }
+const directStdDataSource = join(outDir, "direct-std-codec-json-url-matrix.0");
+writeFileSync(directStdDataSource, `export c fn main() -> u8 {
+    var ok: Bool = true
+    var b64_buf: [4]u8 = [0_u8; 4]
+    let b64: Maybe<Span<u8>> = std.codec.base64Decode(b64_buf, "emVybw==")
+    if !b64.has || !std.mem.eql(b64.value, "zero") {
+        ok = false
+    }
+    var hex_buf: [2]u8 = [0_u8; 2]
+    let hex: Maybe<Span<u8>> = std.codec.hexDecode(hex_buf, "417a")
+    if !hex.has || !std.mem.eql(hex.value, "Az") {
+        ok = false
+    }
+    var word_buf: [4]u8 = [0_u8; 4]
+    let word: Maybe<Span<u8>> = std.codec.writeU32Be(word_buf, 0x41424344_u32)
+    if !word.has {
+        ok = false
+    }
+    if word.has {
+        let read_word: Maybe<u32> = std.codec.readU32Be(word.value)
+        if !read_word.has || read_word.value != 0x41424344_u32 {
+            ok = false
+        }
+    }
+    let json: Span<u8> = "{\\"name\\":\\"zero\\",\\"count\\":42,\\"ok\\":true}"
+    var name_buf: [8]u8 = [0_u8; 8]
+    let name: Maybe<Span<u8>> = std.json.string(name_buf, json, "name")
+    let count: Maybe<u32> = std.json.u32(json, "count")
+    let flag: Maybe<Bool> = std.json.bool(json, "ok")
+    var json_out_buf: [16]u8 = [0_u8; 16]
+    let json_out: Maybe<Span<u8>> = std.json.writeObject1U32(json_out_buf, "count", 42_u32)
+    if !name.has || !std.mem.eql(name.value, "zero") || !count.has || count.value != 42_u32 || !flag.has || !flag.value || !json_out.has || std.json.validateError(json_out.value) != std.json.errorNone() {
+        ok = false
+    }
+    var query_param_buf: [16]u8 = [0_u8; 16]
+    let query_param: Maybe<Span<u8>> = std.url.writeQueryParam(query_param_buf, "q", "zero lang")
+    var url_buf: [48]u8 = [0_u8; 48]
+    var url: Maybe<Span<u8>> = null
+    if query_param.has {
+        url = std.url.appendQuery(url_buf, "https://example.com/path", query_param.value)
+    }
+    if !url.has || !std.mem.eql(url.value, "https://example.com/path?q=zero+lang") {
+        ok = false
+    }
+    if ok {
+        return 1_u8
+    }
+    return 0_u8
+}
+`);
+for (const { target, compiler, emissionPath, magic } of directByteCopyFillTargets) {
+  const directStdDataPath = join(outDir, `direct-std-codec-json-url-${target.replace(/[^a-z0-9]+/gi, "-")}.o`);
+  rmSync(directStdDataPath, { force: true });
+  const directStdDataReport = json(["build", "--json", "--emit", "obj", "--target", target, directStdDataSource, "--out", directStdDataPath]).body;
+  const directStdDataBytes = readFileSync(directStdDataPath);
+  assert.equal(directStdDataReport.compiler, compiler);
+  assert.equal(directStdDataReport.generatedCBytes, 0);
+  assert.equal(directStdDataReport.objectBackend.objectEmission.path, emissionPath);
+  assert(directStdDataBytes.subarray(0, magic.length).equals(magic));
+  assert(directStdDataBytes.includes(Buffer.from("zero+lang")));
+}
 const directMachOPath = join(outDir, "direct-darwin-arm64.o");
 rmSync(directMachOPath, { force: true });
 const directMachOReport = json(["build", "--json", "--emit", "obj", "--target", "darwin-arm64", "examples/direct-call-add.0", "--out", directMachOPath]).body;
