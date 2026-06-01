@@ -2156,18 +2156,24 @@ static const IrFunction *elf_find_executable_main(const IrProgram *ir, ZDiag *di
   return fun;
 }
 
-static size_t elf_emit_start_stub(ZBuf *text) {
+static size_t elf_emit_start_stub(ZBuf *text, const IrFunction *main_fun) {
   z_x64_emit_mov_reg_from_reg(text, 15, 4, true);
   size_t patch = z_x64_emit_call32_placeholder(text);
-  z_x64_emit_mov_rcx_from_rax(text, true);
-  z_x64_emit_shr_rcx_imm8(text, 32);
-  z_x64_emit_test_ecx_ecx(text);
-  size_t success_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
-  z_x64_emit_mov_reg_u32(text, 7, 1);
-  size_t exit_patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
-  z_x64_patch_rel32(text, success_patch, text->len);
-  z_x64_emit_mov_reg_from_reg(text, 7, 0, false);
-  z_x64_patch_rel32(text, exit_patch, text->len);
+  if (elf_function_propagates_to_process_exit(main_fun)) {
+    z_x64_emit_mov_rcx_from_rax(text, true);
+    z_x64_emit_shr_rcx_imm8(text, 32);
+    z_x64_emit_test_ecx_ecx(text);
+    size_t success_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
+    z_x64_emit_mov_reg_u32(text, 7, 1);
+    size_t exit_patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
+    z_x64_patch_rel32(text, success_patch, text->len);
+    z_x64_emit_mov_reg_from_reg(text, 7, 0, false);
+    z_x64_patch_rel32(text, exit_patch, text->len);
+  } else if (main_fun && main_fun->return_type == IR_TYPE_VOID) {
+    z_x64_emit_mov_reg_u32(text, 7, 0);
+  } else {
+    z_x64_emit_mov_reg_from_reg(text, 7, 0, false);
+  }
   z_x64_emit_mov_eax_u32(text, 60);
   z_x64_emit_syscall(text);
   return patch;
@@ -2248,7 +2254,7 @@ bool z_emit_elf64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag) {
   elf_exe_build_start_context(&build, ir);
   const uint64_t base_addr = 0x400000;
   const size_t text_offset = 64 + 56;
-  size_t start_call_patch = elf_emit_start_stub(&build.text);
+  size_t start_call_patch = elf_emit_start_stub(&build.text, &ir->functions[build.main_index]);
   if (!elf_emit_executable_functions(&build, ir, z_elf_align(3 + 5 + 2 + 5 + 2, 16), diag)) { elf_exe_build_free(&build); return false; }
   bool ok = elf_finish_executable_image(&build, out, start_call_patch, text_offset, base_addr, base_addr + text_offset, diag);
   elf_exe_build_free(&build);

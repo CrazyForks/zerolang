@@ -234,15 +234,14 @@ static bool build_check_executable_shape(const ZBuildability *ctx, const IrProgr
                             "direct AArch64 Mach-O executable main must not take parameters"))));
     return z_build_diag(ctx, diag, message, main_fun->line, main_fun->column, main_fun->name);
   }
-  bool return_ok = ctx->backend == Z_DIRECT_BACKEND_ELF64 ? z_build_is_scalar32(main_fun->return_type)
-                                                         : (main_fun->return_type == IR_TYPE_VOID || z_build_is_scalar32(main_fun->return_type));
+  bool return_ok = main_fun->return_type == IR_TYPE_VOID || z_build_is_elf_scalar(main_fun->return_type);
   if (!return_ok) {
-    const char *message = ctx->backend == Z_DIRECT_BACKEND_ELF64 ? "direct ELF64 executable main must return a 32-bit-or-smaller scalar" :
-                          (ctx->backend == Z_DIRECT_BACKEND_ELF_AARCH64 ? "direct AArch64 ELF executable main must return Void or a 32-bit-or-smaller scalar" :
-                          (ctx->backend == Z_DIRECT_BACKEND_COFF_AARCH64 ? "direct COFF AArch64 executable main must return Void or a 32-bit-or-smaller scalar" :
-                          (ctx->backend == Z_DIRECT_BACKEND_COFF_X64 ? "direct COFF x64 executable main must return Void or a 32-bit-or-smaller scalar" :
-                           (ctx->backend == Z_DIRECT_BACKEND_MACHO_X64 ? "direct x86_64 Mach-O executable main must return Void or a 32-bit-or-smaller scalar" :
-                            "direct AArch64 Mach-O executable main must return Void or a 32-bit-or-smaller scalar"))));
+    const char *message = ctx->backend == Z_DIRECT_BACKEND_ELF64 ? "direct ELF64 executable main must return Void or a primitive scalar" :
+                          (ctx->backend == Z_DIRECT_BACKEND_ELF_AARCH64 ? "direct AArch64 ELF executable main must return Void or a primitive scalar" :
+                          (ctx->backend == Z_DIRECT_BACKEND_COFF_AARCH64 ? "direct COFF AArch64 executable main must return Void or a primitive scalar" :
+                          (ctx->backend == Z_DIRECT_BACKEND_COFF_X64 ? "direct COFF x64 executable main must return Void or a primitive scalar" :
+                           (ctx->backend == Z_DIRECT_BACKEND_MACHO_X64 ? "direct x86_64 Mach-O executable main must return Void or a primitive scalar" :
+                            "direct AArch64 Mach-O executable main must return Void or a primitive scalar"))));
     return z_build_diag(ctx, diag, message, main_fun->line, main_fun->column, z_build_type_name(main_fun->return_type));
   }
   return true;

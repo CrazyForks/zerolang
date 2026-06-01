@@ -1761,6 +1761,31 @@ assert.equal(directI64ObjBody.objectBackend.objectEmission.path, "direct-elf64-o
 assert(directI64ObjBytes.includes(Buffer.from([0x48, 0xb8, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f])));
 assert(directI64ObjBytes.includes(Buffer.from([0x48, 0x01, 0xc8])));
 
+const directWideMainSource = `${outDir}/direct-exe-wide-main.0`;
+const directWideMainOut = `${outDir}/direct-exe-wide-main`;
+await writeFile(directWideMainSource, `export c fn main() -> usize {
+    return 8589934590
+}
+`);
+const directWideMainJson = await execFileAsync(zero, ["build", "--json", "--emit", "exe", "--target", "linux-musl-x64", directWideMainSource, "--out", directWideMainOut]);
+const directWideMainBody = JSON.parse(directWideMainJson.stdout);
+const directWideMainBytes = await readFile(directWideMainOut);
+assert.equal(directWideMainBody.compiler, "zero-elf64");
+assert.equal(directWideMainBody.objectBackend.objectEmission.path, "direct-elf64-exe");
+assert(!directWideMainBytes.includes(Buffer.from([0x48, 0xc1, 0xe9, 0x20])));
+assert(directWideMainBytes.includes(Buffer.from([0x89, 0xc7, 0xb8, 0x3c, 0x00, 0x00, 0x00, 0x0f, 0x05])));
+
+const directI64MainSource = `${outDir}/direct-exe-i64-main.0`;
+const directI64MainOut = `${outDir}/direct-exe-i64-main`;
+await writeFile(directI64MainSource, `export c fn main() -> i64 {
+    return 8589934590_i64
+}
+`);
+const directI64MainJson = await execFileAsync(zero, ["build", "--json", "--emit", "exe", "--target", "linux-musl-x64", directI64MainSource, "--out", directI64MainOut]);
+const directI64MainBody = JSON.parse(directI64MainJson.stdout);
+assert.equal(directI64MainBody.compiler, "zero-elf64");
+assert.equal(directI64MainBody.objectBackend.objectEmission.path, "direct-elf64-exe");
+
 const directMachOU64LiteralSource = `${outDir}/direct-macho-u64-literal.0`;
 const directMachOU64LiteralOut = `${outDir}/direct-macho-u64-literal.o`;
 await writeFile(directMachOU64LiteralSource, `export c fn main() -> u64 {
@@ -1768,6 +1793,9 @@ await writeFile(directMachOU64LiteralSource, `export c fn main() -> u64 {
     return value
 }
 `);
+const directMachOU64LiteralReadinessJson = await execFileAsync(zero, ["check", "--json", "--emit", "obj", "--target", "darwin-arm64", directMachOU64LiteralSource]);
+const directMachOU64LiteralReadinessBody = JSON.parse(directMachOU64LiteralReadinessJson.stdout);
+assert.equal(directMachOU64LiteralReadinessBody.targetReadiness.buildable, true);
 const directMachOU64LiteralJson = await execFileAsync(zero, ["build", "--json", "--emit", "obj", "--target", "darwin-arm64", directMachOU64LiteralSource, "--out", directMachOU64LiteralOut]);
 const directMachOU64LiteralBody = JSON.parse(directMachOU64LiteralJson.stdout);
 const directMachOU64LiteralBytes = await readFile(directMachOU64LiteralOut);
