@@ -36,6 +36,36 @@ fn __zero_std_time_clamp(value: Duration, low: Duration, high: Duration) -> Dura
     return value
 }
 
+fn __zero_std_time_as_us_floor(value: Duration) -> i64 {
+    let ns: i64 = std.time.asNs(value)
+    let quotient: i64 = ns / 1000_i64
+    let remainder: i64 = ns % 1000_i64
+    if ns < 0_i64 && remainder != 0_i64 {
+        return quotient - 1_i64
+    }
+    return quotient
+}
+
+fn __zero_std_time_as_ms_floor(value: Duration) -> i32 {
+    let ns: i64 = std.time.asNs(value)
+    let quotient: i64 = ns / 1000000_i64
+    let remainder: i64 = ns % 1000000_i64
+    if ns < 0_i64 && remainder != 0_i64 {
+        return (quotient - 1_i64) as i32
+    }
+    return quotient as i32
+}
+
+fn __zero_std_time_as_seconds_floor(value: Duration) -> i64 {
+    let ns: i64 = std.time.asNs(value)
+    let quotient: i64 = ns / 1000000000_i64
+    let remainder: i64 = ns % 1000000000_i64
+    if ns < 0_i64 && remainder != 0_i64 {
+        return quotient - 1_i64
+    }
+    return quotient
+}
+
 fn __zero_std_time_is_zero(value: Duration) -> Bool {
     return std.time.asNs(value) == 0
 }

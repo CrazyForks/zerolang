@@ -3226,6 +3226,14 @@ writeFileSync(directStdMathSource, `export c fn main() -> u8 {
     if !factorial.has || !binomial.has {
         ok = false
     }
+    let larger_binomial: Maybe<u32> = std.math.binomialU32(31_u32, 15_u32)
+    if !larger_binomial.has {
+        ok = false
+    } else {
+        if larger_binomial.value != 300540195_u32 {
+            ok = false
+        }
+    }
     if std.math.divisorCountU32(28) != 6 {
         ok = false
     }
@@ -3274,6 +3282,16 @@ writeFileSync(directStdTimeRandSource, `export c fn main() -> u8 {
         ok = false
     }
     if std.time.asSecondsFloor(clamped) != 600_i64 {
+        ok = false
+    }
+    let negative_tick: Duration = std.time.sub(std.time.zero(), std.time.ns(1_i64))
+    if std.time.asUsFloor(negative_tick) != 0_i64 - 1_i64 {
+        ok = false
+    }
+    if std.time.asMsFloor(negative_tick) != 0 - 1 {
+        ok = false
+    }
+    if std.time.asSecondsFloor(negative_tick) != 0_i64 - 1_i64 {
         ok = false
     }
     if !std.time.lessThan(zero, duration) || !std.time.isZero(zero) {

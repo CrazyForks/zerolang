@@ -1065,9 +1065,6 @@ static bool ir_std_time_duration_scale(const char *name, unsigned long long *out
 static bool ir_std_time_conversion(const char *name, unsigned long long *out_divisor, IrTypeKind *out_type) {
   static const struct { const char *name; unsigned long long divisor; IrTypeKind type; } entries[] = {
     {"std.time.asNs", 1ull, IR_TYPE_I64},
-    {"std.time.asUsFloor", 1000ull, IR_TYPE_I64},
-    {"std.time.asMsFloor", 1000000ull, IR_TYPE_I32},
-    {"std.time.asSecondsFloor", 1000000000ull, IR_TYPE_I64},
   };
   for (size_t i = 0; i < sizeof(entries) / sizeof(entries[0]); i++) {
     if (strcmp(name, entries[i].name) == 0) {

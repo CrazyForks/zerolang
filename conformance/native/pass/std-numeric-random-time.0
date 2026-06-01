@@ -18,6 +18,16 @@ pub fn main(world: World) -> Void raises {
     if std.time.asSecondsFloor(clamped) != 2_i64 {
         ok = false
     }
+    let negative_tick: Duration = std.time.sub(std.time.zero(), std.time.ns(1_i64))
+    if std.time.asUsFloor(negative_tick) != 0_i64 - 1_i64 {
+        ok = false
+    }
+    if std.time.asMsFloor(negative_tick) != 0 - 1 {
+        ok = false
+    }
+    if std.time.asSecondsFloor(negative_tick) != 0_i64 - 1_i64 {
+        ok = false
+    }
     if !std.time.lessThan(std.time.zero(), duration) {
         ok = false
     }
@@ -42,6 +52,14 @@ pub fn main(world: World) -> Void raises {
     let binomial: Maybe<u32> = std.math.binomialU32(6_u32, 2_u32)
     if binomial.has {
         if binomial.value != 15_u32 {
+            ok = false
+        }
+    } else {
+        ok = false
+    }
+    let larger_binomial: Maybe<u32> = std.math.binomialU32(31_u32, 15_u32)
+    if larger_binomial.has {
+        if larger_binomial.value != 300540195_u32 {
             ok = false
         }
     } else {

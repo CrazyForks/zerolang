@@ -237,6 +237,14 @@ pub fn main(world: World) -> Void raises {
     if binomial_invalid.has {
         ok = false
     }
+    let larger_binomial: Maybe<u32> = std.math.binomialU32(31_u32, 15_u32)
+    if larger_binomial.has {
+        if larger_binomial.value != 300540195_u32 {
+            ok = false
+        }
+    } else {
+        ok = false
+    }
     if std.math.divisorCountU32(28) != 6 {
         ok = false
     }
