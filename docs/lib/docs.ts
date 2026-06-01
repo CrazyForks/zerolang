@@ -260,9 +260,17 @@ export const docs: Doc[] = [
   {
     slug: "module-json",
     title: "std.json",
-    description: "Validation, token counting, explicit-allocator parsing, and caller-buffer string writing.",
+    description: "Validation, field lookup, explicit-allocator parsing, and caller-buffer writing.",
     path: "/modules/json",
     sourcePath: "/articles/modules/json.md",
+    section: "Modules",
+  },
+  {
+    slug: "module-url",
+    title: "std.url",
+    description: "Lexical URL splitting, percent/query encoding, and query helpers.",
+    path: "/modules/url",
+    sourcePath: "/articles/modules/url.md",
     section: "Modules",
   },
   {

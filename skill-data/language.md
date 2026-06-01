@@ -211,6 +211,8 @@ pub fn main() -> Void {
 
     let checksum: u32 = std.codec.crc32("zero")
     let crc: u32 = std.codec.crc32Bytes(bytes)
+    var decoded: [4]u8 = [0_u8; 4]
+    let base64: Maybe<Span<u8>> = std.codec.base64Decode(decoded, "emVybw==")
     let hash: u32 = std.crypto.hash32(bytes)
     let hmac: u32 = std.crypto.hmac32(std.mem.span("key"), std.mem.span("message"))
 
@@ -225,7 +227,10 @@ pub fn main() -> Void {
     let bit: Bool = std.rand.nextBool(&mut rng)
 
     let duration: Duration = std.time.add(std.time.ms(250), std.time.seconds(1))
-    expect random == 1025555898_u32 && bit && std.time.asMsFloor(duration) == 1250
+    let count: Maybe<u32> = std.json.u32("{\"count\":42}", "count")
+    let host: Maybe<Span<u8>> = std.url.host("https://example.com/path")
+
+    expect random == 1025555898_u32 && bit && std.time.asMsFloor(duration) == 1250 && base64.has && count.has && host.has
 }
 ```
 

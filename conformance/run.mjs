@@ -355,6 +355,7 @@ for (const fixture of [
   "conformance/native/pass/std-http-errors.0",
   "conformance/native/pass/std-http-response-helpers.0",
   "conformance/native/pass/std-data-formats.0",
+  "conformance/native/pass/std-codec-json-url.0",
   "conformance/native/pass/std-json-bytes.0",
   "conformance/native/pass/std-json-inline-bytes.0",
   "conformance/native/pass/std-json-duplicate-keys.0",
@@ -3724,7 +3725,7 @@ const packageGraph = JSON.parse(packageGraphJson.stdout);
 assert.deepEqual(packageGraph.sourceFiles.sort(), [
   "conformance/check/pass/package/src/main.0",
   "conformance/check/pass/package/src/types.0",
-  "std/mem.0",
+  "std/codec.0",
   "std/parse.0",
   "std/time.0",
 ]);
@@ -3747,6 +3748,7 @@ for (const runtimeFixture of [
   ["conformance/native/pass/std-fs-resource.0", "std-fs-resource", { stdout: "fs resource ok\n", file: { name: "std-fs-resource.txt", text: "zero file\n" } }],
   ["conformance/native/pass/integer-widths.0", "integer-widths", { stdout: "integer widths ok\n" }],
   ["conformance/native/pass/std-codec-widths.0", "std-codec-widths", { stdout: "codec widths ok\n" }],
+  ["conformance/native/pass/std-codec-json-url.0", "std-codec-json-url", { stdout: "std codec json url ok\n" }],
   ["conformance/native/pass/std-crypto-hmac32.0", "std-crypto-hmac32", { stdout: "crypto hmac32 ok\n" }],
   ["conformance/native/pass/parse-integers.0", "parse-integers", { stdout: "parse integers ok\n" }],
   ["conformance/native/pass/std-parse-text.0", "std-parse-text", { stdout: "std parse text ok\n" }],

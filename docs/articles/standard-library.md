@@ -22,8 +22,9 @@ Runnable modules:
 - `std.path`: fixed-buffer lexical path helpers.
 - `std.str`: allocation-free byte-string helpers over spans and caller-owned storage.
 - `std.parse`: allocation-free byte scanners and integer/bool parsers.
-- `std.codec`: byte-oriented integer encoding, varint length, and CRC-32 helpers.
-- `std.json`: string and byte-span validation, streaming token counts, explicit-allocator parsing, and caller-buffer string writing.
+- `std.codec`: byte-oriented integer encoding, endian reads/writes, varint, base64, hex, and CRC-32 helpers.
+- `std.json`: validation, structured status codes, field lookup, explicit-allocator parsing, and caller-buffer writing.
+- `std.url`: lexical URL splitting, percent/query encoding, query lookup, and append helpers.
 - `std.time`: duration construction, conversion, comparison, and target-gated clock helpers.
 - `std.rand`: explicit deterministic random sources, random bits, and target entropy helpers.
 - `std.proc`: host process status helpers behind the process capability.

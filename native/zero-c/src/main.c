@@ -817,10 +817,9 @@ typedef struct {
   bool world;
 } CapabilitySummary;
 
-#define STD_HELPER_MAX 192
-
 typedef struct {
-  bool used[STD_HELPER_MAX];
+  bool *used;
+  size_t len;
 } HelperUseSummary;
 
 typedef struct {
@@ -925,8 +924,25 @@ static const CompilerRuntimeHelperInfo compiler_runtime_helpers[] = {
 };
 
 static void helper_summary_mark(HelperUseSummary *helpers, const char *name) {
-  int index = z_std_helper_index(name, STD_HELPER_MAX);
-  if (helpers && index >= 0) helpers->used[index] = true;
+  int index = helpers ? z_std_helper_index(name, helpers->len) : -1;
+  if (helpers && helpers->used && index >= 0) helpers->used[index] = true;
+}
+
+static HelperUseSummary helper_summary_new(void) {
+  HelperUseSummary helpers = {.len = z_std_helper_count()};
+  helpers.used = z_checked_calloc(helpers.len ? helpers.len : 1, sizeof(bool));
+  return helpers;
+}
+
+static void helper_summary_free(HelperUseSummary *helpers) {
+  if (!helpers) return;
+  free(helpers->used);
+  helpers->used = NULL;
+  helpers->len = 0;
+}
+
+static bool helper_summary_used(const HelperUseSummary *helpers, size_t index) {
+  return helpers && helpers->used && index < helpers->len && helpers->used[index];
 }
 
 static void capability_summary_set(CapabilitySummary *caps, const char *capability) {
@@ -1404,7 +1420,7 @@ static CapabilitySummary program_capabilities(const Program *program) {
 }
 
 static HelperUseSummary program_used_helpers(const Program *program) {
-  HelperUseSummary helpers = {0};
+  HelperUseSummary helpers = helper_summary_new();
   for (size_t i = 0; program && i < program->functions.len; i++) {
     collect_helpers_from_stmt_vec(&program->functions.items[i].body, &helpers);
   }
@@ -3790,6 +3806,7 @@ static const char *emit_kind_name(EmitKind emit) {
 static long long now_ms(void);
 static bool has_suffix(const char *path, const char *suffix);
 static bool direct_source_reserved_word(const char *text);
+static size_t source_line_count(const char *source);
 static void direct_source_append(SourceInput *input, ZBuf *combined, const char *path, const char *source);
 
 typedef struct { const char *path; const char *source; } DirectSourceReplacement;
@@ -4046,139 +4063,179 @@ static bool direct_input_add_program_symbols(SourceInput *input, const Program *
   return !diag || diag->code == 0;
 }
 
-static bool direct_canonical_append_std_source_recursive(SourceInput *input, ZBuf *combined, const ZStdSourceModule *module, ZDiag *diag, const ZStdSourceModule **stack, size_t *stack_len);
-static bool direct_canonical_append_referenced_std_sources_recursive(SourceInput *input, ZBuf *combined, const Program *program, const ZStdSourceModule *owner, ZDiag *diag, const ZStdSourceModule **stack, size_t *stack_len);
+static bool direct_canonical_append_std_source_function(SourceInput *input, ZBuf *combined, const ZStdSourceModule *module, const char *target_name, ZDiag *diag);
 
-static bool direct_std_module_name_matches(const char *qualified, const char *name) {
-  if (!qualified || !name || strncmp(qualified, "std.", strlen("std.")) != 0) return false;
-  const char *module = qualified + strlen("std.");
-  size_t len = strlen(name);
-  return strncmp(module, name, len) == 0 && (module[len] == 0 || module[len] == '.');
+static bool direct_input_has_function_symbol(const SourceInput *input, const char *module, const char *name) {
+  for (size_t i = 0; input && i < input->symbol_count; i++) {
+    if (strcmp(input->symbol_modules[i], module ? module : "") == 0 &&
+        strcmp(input->symbol_kinds[i], "function") == 0 &&
+        strcmp(input->symbol_names[i], name ? name : "") == 0) return true;
+  }
+  return false;
 }
 
-static bool direct_expr_references_std_module(const Expr *expr, const char *name) {
-  if (!expr) return false;
-  if (expr->kind == EXPR_MEMBER) {
-    char *member = expr_callee_name(expr);
-    bool matches = direct_std_module_name_matches(member, name);
-    free(member);
-    if (matches) return true;
+static void direct_input_ensure_std_source_module(SourceInput *input, const ZStdSourceModule *module) {
+  if (!input || !module || direct_input_has_file(input, module->path)) return;
+  direct_input_push_string(&input->source_files, &input->source_file_count, module->path);
+  direct_input_push_module(input, module->module, module->path);
+}
+
+static const Function *direct_program_find_function_index(const Program *program, const char *name, size_t *out_index) {
+  for (size_t i = 0; program && i < program->functions.len; i++) {
+    if (strcmp(program->functions.items[i].name ? program->functions.items[i].name : "", name ? name : "") == 0) {
+      if (out_index) *out_index = i;
+      return &program->functions.items[i];
+    }
   }
-  if (direct_expr_references_std_module(expr->left, name) || direct_expr_references_std_module(expr->right, name)) return true;
+  return NULL;
+}
+
+static int direct_program_function_end_line(const Program *program, size_t function_index, const char *source) {
+  if (!program || function_index >= program->functions.len) return 1;
+  int start = program->functions.items[function_index].line > 0 ? program->functions.items[function_index].line : 1;
+  int end = (int)source_line_count(source);
+  if (end < start) end = start;
+  for (size_t i = 0; i < program->functions.len; i++) {
+    int line = program->functions.items[i].line;
+    if (line > start && line - 1 < end) end = line - 1;
+  }
+  return end;
+}
+
+static void direct_source_append_line_range(SourceInput *input, ZBuf *combined, const char *path, const char *source, int start_line, int end_line) {
+  if (!source || start_line <= 0 || end_line < start_line) return;
+  const char *line = source;
+  int original_line = 1;
+  while (*line && original_line <= end_line) {
+    const char *end = strchr(line, '\n');
+    size_t len = end ? (size_t)(end - line) : strlen(line);
+    if (original_line >= start_line) {
+      zbuf_appendf(combined, "%.*s\n", (int)len, line);
+      direct_input_push_source_line(input, path, original_line);
+    }
+    if (!end) break;
+    line = end + 1;
+    original_line++;
+  }
+  zbuf_append_char(combined, '\n');
+  direct_input_push_source_line(input, path, end_line > 0 ? end_line : 1);
+}
+
+static bool direct_expr_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const Expr *expr, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag);
+static bool direct_stmt_vec_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const StmtVec *body, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag);
+
+static bool direct_params_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const ParamVec *params, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag) {
+  for (size_t i = 0; params && i < params->len; i++) {
+    if (!direct_expr_append_referenced_std_sources(input, combined, params->items[i].default_value, owner, current_module, diag)) return false;
+  }
+  return !diag || diag->code == 0;
+}
+
+static bool direct_function_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const Function *fun, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag) {
+  return fun &&
+         direct_params_append_referenced_std_sources(input, combined, &fun->type_params, owner, current_module, diag) &&
+         direct_params_append_referenced_std_sources(input, combined, &fun->params, owner, current_module, diag) &&
+         direct_params_append_referenced_std_sources(input, combined, &fun->errors, owner, current_module, diag) &&
+         direct_stmt_vec_append_referenced_std_sources(input, combined, &fun->body, owner, current_module, diag);
+}
+
+static bool direct_function_vec_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const FunctionVec *functions, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag) {
+  for (size_t i = 0; functions && i < functions->len; i++) {
+    if (!direct_function_append_referenced_std_sources(input, combined, &functions->items[i], owner, current_module, diag)) return false;
+  }
+  return !diag || diag->code == 0;
+}
+
+static bool direct_expr_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const Expr *expr, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag) {
+  if (!expr || (diag && diag->code != 0)) return !diag || diag->code == 0;
+  if (expr->kind == EXPR_CALL) {
+    char *callee = expr_callee_name(expr->left);
+    const ZStdSourceModule *callee_module = z_std_source_module_for_public_call(callee);
+    const char *target_name = z_std_source_target_for_public_call(callee);
+    bool skip_owner = owner && !current_module && callee_module && strcmp(owner->module, callee_module->module) == 0;
+    if (callee_module && target_name && !skip_owner) {
+      bool ok = direct_canonical_append_std_source_function(input, combined, callee_module, target_name, diag);
+      free(callee);
+      if (!ok) return false;
+    } else if (current_module && callee && strncmp(callee, "__zero_", strlen("__zero_")) == 0) {
+      bool ok = direct_canonical_append_std_source_function(input, combined, current_module, callee, diag);
+      free(callee);
+      if (!ok) return false;
+    } else {
+      free(callee);
+    }
+  }
+  if (!direct_expr_append_referenced_std_sources(input, combined, expr->left, owner, current_module, diag) ||
+      !direct_expr_append_referenced_std_sources(input, combined, expr->right, owner, current_module, diag)) return false;
   for (size_t i = 0; i < expr->args.len; i++) {
-    if (direct_expr_references_std_module(expr->args.items[i], name)) return true;
+    if (!direct_expr_append_referenced_std_sources(input, combined, expr->args.items[i], owner, current_module, diag)) return false;
   }
   for (size_t i = 0; i < expr->fields.len; i++) {
-    if (direct_expr_references_std_module(expr->fields.items[i].value, name)) return true;
+    if (!direct_expr_append_referenced_std_sources(input, combined, expr->fields.items[i].value, owner, current_module, diag)) return false;
   }
-  return false;
+  return !diag || diag->code == 0;
 }
 
-static bool direct_stmt_vec_references_std_module(const StmtVec *body, const char *name);
-
-static bool direct_stmt_references_std_module(const Stmt *stmt, const char *name) {
-  if (!stmt) return false;
-  if (direct_expr_references_std_module(stmt->target, name) ||
-      direct_expr_references_std_module(stmt->expr, name) ||
-      direct_expr_references_std_module(stmt->range_end, name) ||
-      direct_stmt_vec_references_std_module(&stmt->then_body, name) ||
-      direct_stmt_vec_references_std_module(&stmt->else_body, name)) return true;
+static bool direct_stmt_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const Stmt *stmt, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag) {
+  if (!stmt) return true;
+  if (!direct_expr_append_referenced_std_sources(input, combined, stmt->target, owner, current_module, diag) ||
+      !direct_expr_append_referenced_std_sources(input, combined, stmt->expr, owner, current_module, diag) ||
+      !direct_expr_append_referenced_std_sources(input, combined, stmt->range_end, owner, current_module, diag) ||
+      !direct_stmt_vec_append_referenced_std_sources(input, combined, &stmt->then_body, owner, current_module, diag) ||
+      !direct_stmt_vec_append_referenced_std_sources(input, combined, &stmt->else_body, owner, current_module, diag)) return false;
   for (size_t i = 0; i < stmt->match_arms.len; i++) {
-    if (direct_expr_references_std_module(stmt->match_arms.items[i].guard, name) ||
-        direct_stmt_vec_references_std_module(&stmt->match_arms.items[i].body, name)) return true;
+    if (!direct_expr_append_referenced_std_sources(input, combined, stmt->match_arms.items[i].guard, owner, current_module, diag) ||
+        !direct_stmt_vec_append_referenced_std_sources(input, combined, &stmt->match_arms.items[i].body, owner, current_module, diag)) return false;
   }
-  return false;
+  return !diag || diag->code == 0;
 }
 
-static bool direct_stmt_vec_references_std_module(const StmtVec *body, const char *name) {
+static bool direct_stmt_vec_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const StmtVec *body, const ZStdSourceModule *owner, const ZStdSourceModule *current_module, ZDiag *diag) {
   for (size_t i = 0; body && i < body->len; i++) {
-    if (direct_stmt_references_std_module(body->items[i], name)) return true;
+    if (!direct_stmt_append_referenced_std_sources(input, combined, body->items[i], owner, current_module, diag)) return false;
   }
-  return false;
+  return !diag || diag->code == 0;
 }
 
-static bool direct_params_reference_std_module(const ParamVec *params, const char *name) {
-  for (size_t i = 0; params && i < params->len; i++) {
-    if (direct_expr_references_std_module(params->items[i].default_value, name)) return true;
-  }
-  return false;
-}
-
-static bool direct_function_references_std_module(const Function *fun, const char *name) {
-  return fun && (direct_params_reference_std_module(&fun->type_params, name) ||
-                 direct_params_reference_std_module(&fun->params, name) ||
-                 direct_params_reference_std_module(&fun->errors, name) ||
-                 direct_stmt_vec_references_std_module(&fun->body, name));
-}
-
-static bool direct_function_vec_references_std_module(const FunctionVec *functions, const char *name) {
-  for (size_t i = 0; functions && i < functions->len; i++) {
-    if (direct_function_references_std_module(&functions->items[i], name)) return true;
-  }
-  return false;
-}
-
-static bool direct_program_references_std_module(const Program *program, const char *name) {
-  for (size_t i = 0; program && i < program->use_imports.len; i++) {
-    if (direct_std_module_name_matches(program->use_imports.items[i].module, name)) return true;
-  }
+static bool direct_program_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const Program *program, const ZStdSourceModule *owner, ZDiag *diag) {
   for (size_t i = 0; program && i < program->consts.len; i++) {
-    if (direct_expr_references_std_module(program->consts.items[i].expr, name)) return true;
+    if (!direct_expr_append_referenced_std_sources(input, combined, program->consts.items[i].expr, owner, NULL, diag)) return false;
   }
   for (size_t i = 0; program && i < program->shapes.len; i++) {
-    if (direct_params_reference_std_module(&program->shapes.items[i].type_params, name) ||
-        direct_params_reference_std_module(&program->shapes.items[i].fields, name) ||
-        direct_function_vec_references_std_module(&program->shapes.items[i].methods, name)) return true;
+    if (!direct_params_append_referenced_std_sources(input, combined, &program->shapes.items[i].type_params, owner, NULL, diag) ||
+        !direct_params_append_referenced_std_sources(input, combined, &program->shapes.items[i].fields, owner, NULL, diag) ||
+        !direct_function_vec_append_referenced_std_sources(input, combined, &program->shapes.items[i].methods, owner, NULL, diag)) return false;
   }
   for (size_t i = 0; program && i < program->interfaces.len; i++) {
-    if (direct_params_reference_std_module(&program->interfaces.items[i].type_params, name) ||
-        direct_function_vec_references_std_module(&program->interfaces.items[i].methods, name)) return true;
+    if (!direct_params_append_referenced_std_sources(input, combined, &program->interfaces.items[i].type_params, owner, NULL, diag) ||
+        !direct_function_vec_append_referenced_std_sources(input, combined, &program->interfaces.items[i].methods, owner, NULL, diag)) return false;
   }
-  return direct_function_vec_references_std_module(program ? &program->functions : NULL, name);
+  return direct_function_vec_append_referenced_std_sources(input, combined, program ? &program->functions : NULL, owner, NULL, diag);
 }
 
-static bool direct_std_source_stack_contains(const ZStdSourceModule **stack, size_t stack_len, const ZStdSourceModule *module) {
-  for (size_t i = 0; stack && module && i < stack_len; i++) {
-    if (stack[i] && strcmp(stack[i]->module, module->module) == 0) return true;
-  }
-  return false;
-}
-
-static void direct_std_source_set_cycle_diag(ZDiag *diag, const ZStdSourceModule **stack, size_t stack_len, const ZStdSourceModule *module) {
+static void direct_std_source_set_missing_helper_diag(ZDiag *diag, const ZStdSourceModule *module, const char *target_name) {
   if (!diag || diag->code != 0) return;
-  ZBuf chain;
-  zbuf_init(&chain);
-  for (size_t i = 0; stack && i < stack_len; i++) {
-    if (chain.len > 0) zbuf_append(&chain, " -> ");
-    zbuf_append(&chain, stack[i] && stack[i]->module ? stack[i]->module : "<unknown>");
-  }
-  if (chain.len > 0) zbuf_append(&chain, " -> ");
-  zbuf_append(&chain, module && module->module ? module->module : "<unknown>");
-  diag->code = 7002;
+  diag->code = 7001;
   diag->path = z_strdup(module && module->path ? module->path : "");
   diag->line = 1;
   diag->column = 1;
   diag->length = 1;
-  snprintf(diag->message, sizeof(diag->message), "source-backed stdlib import cycle detected");
-  snprintf(diag->actual, sizeof(diag->actual), "%s", chain.data ? chain.data : "");
-  snprintf(diag->help, sizeof(diag->help), "move shared stdlib code into an acyclic lower-level module");
-  zbuf_free(&chain);
+  snprintf(diag->message, sizeof(diag->message), "source-backed stdlib helper is missing");
+  snprintf(diag->expected, sizeof(diag->expected), "function %s in %s", target_name ? target_name : "", module && module->path ? module->path : "");
+  snprintf(diag->actual, sizeof(diag->actual), "helper function was not found");
+  snprintf(diag->help, sizeof(diag->help), "keep std_source.c target mappings aligned with embedded stdlib source");
 }
 
-static bool direct_canonical_append_std_source_recursive(SourceInput *input, ZBuf *combined, const ZStdSourceModule *module, ZDiag *diag, const ZStdSourceModule **stack, size_t *stack_len) {
-  if (!module) return true;
-  if (direct_input_has_file(input, module->path)) return true;
+static bool direct_canonical_append_std_source_function(SourceInput *input, ZBuf *combined, const ZStdSourceModule *module, const char *target_name, ZDiag *diag) {
+  if (!module || !target_name || !target_name[0]) return true;
   if (input && input->source_file &&
       direct_source_path_has_module_suffix(input->source_file, module->path) &&
       direct_source_is_embedded_std_source_file(input->source_file, input->source)) {
     return true;
   }
-  if (direct_std_source_stack_contains(stack, stack_len ? *stack_len : 0, module)) {
-    direct_std_source_set_cycle_diag(diag, stack, stack_len ? *stack_len : 0, module);
-    return false;
-  }
+  if (direct_input_has_function_symbol(input, module->module, target_name)) return true;
+
   char *source = z_std_source_module_copy_source(module);
-  if (stack && stack_len) stack[(*stack_len)++] = module;
   ZCanonicalTokenVec tokens = z_canonical_text_tokenize(source, diag);
   Program program = {0};
   if (diag->code == 0) program = z_parse_canonical_text_program(&tokens, diag);
@@ -4186,46 +4243,36 @@ static bool direct_canonical_append_std_source_recursive(SourceInput *input, ZBu
     if (!diag->path) diag->path = z_strdup(module->path);
     z_free_program(&program);
     z_free_canonical_text_tokens(&tokens);
-    if (stack && stack_len) (*stack_len)--;
     free(source);
     return false;
   }
-  if (!direct_canonical_append_referenced_std_sources_recursive(input, combined, &program, module, diag, stack, stack_len)) {
-    if (!diag->path) diag->path = z_strdup(module->path);
+
+  size_t function_index = 0;
+  const Function *fun = direct_program_find_function_index(&program, target_name, &function_index);
+  if (!fun) {
+    direct_std_source_set_missing_helper_diag(diag, module, target_name);
     z_free_program(&program);
     z_free_canonical_text_tokens(&tokens);
-    if (stack && stack_len) (*stack_len)--;
     free(source);
     return false;
   }
-  direct_input_push_string(&input->source_files, &input->source_file_count, module->path);
-  direct_input_push_module(input, module->module, module->path);
-  bool ok = diag->code == 0 && direct_input_add_program_symbols(input, &program, module->module, true, diag);
-  if (ok) direct_source_append(input, combined, module->path, source);
+
+  direct_input_ensure_std_source_module(input, module);
+  bool ok = direct_input_add_program_symbol(input, module->module, "function", fun->name, false, true, fun->line, fun->column, diag);
+  if (ok) {
+    int end_line = direct_program_function_end_line(&program, function_index, source);
+    direct_source_append_line_range(input, combined, module->path, source, fun->line > 0 ? fun->line : 1, end_line);
+    ok = direct_function_append_referenced_std_sources(input, combined, fun, NULL, module, diag);
+  }
+
   z_free_program(&program);
   z_free_canonical_text_tokens(&tokens);
-  if (stack && stack_len) (*stack_len)--;
   free(source);
   return ok && (!diag || diag->code == 0);
 }
 
 static bool direct_canonical_append_referenced_std_sources(SourceInput *input, ZBuf *combined, const Program *program, const ZStdSourceModule *owner, ZDiag *diag) {
-  const ZStdSourceModule **stack = z_checked_calloc(z_std_source_module_count(), sizeof(ZStdSourceModule *));
-  size_t stack_len = 0;
-  bool ok = direct_canonical_append_referenced_std_sources_recursive(input, combined, program, owner, diag, stack, &stack_len);
-  free(stack);
-  return ok;
-}
-
-static bool direct_canonical_append_referenced_std_sources_recursive(SourceInput *input, ZBuf *combined, const Program *program, const ZStdSourceModule *owner, ZDiag *diag, const ZStdSourceModule **stack, size_t *stack_len) {
-  for (size_t i = 0; i < z_std_source_module_count(); i++) {
-    const ZStdSourceModule *module = z_std_source_module_at(i);
-    if (!module || strncmp(module->module, "std.", strlen("std.")) != 0) continue;
-    if (owner && strcmp(owner->module, module->module) == 0) continue;
-    const char *name = module->module + strlen("std.");
-    if (direct_program_references_std_module(program, name) && !direct_canonical_append_std_source_recursive(input, combined, module, diag, stack, stack_len)) return false;
-  }
-  return !diag || diag->code == 0;
+  return direct_program_append_referenced_std_sources(input, combined, program, owner, diag);
 }
 
 static char *direct_canonical_module_path(const char *root, const char *module) {
@@ -5804,6 +5851,7 @@ static void append_direct_memory_json(ZBuf *buf, const SourceInput *input, const
   zbuf_append(buf, ",\n  \"incrementalInvalidation\": ");
   append_incremental_invalidations_json(buf, input, target, command ? command->profile : "release");
   zbuf_append(buf, "\n}\n");
+  helper_summary_free(&used_helpers);
 }
 
 static void print_build_json(const Command *command, const SourceInput *input, const Program *program, const ZTargetInfo *target, const char *emit_kind, const char *artifact_path, long long artifact_bytes, long long generated_c_bytes, long long elapsed_ms) {
@@ -7294,6 +7342,7 @@ static const char *helper_module_name(const ZStdHelperInfo *helper) {
   if (strncmp(name, "std.mem.", strlen("std.mem.")) == 0) return "std.mem";
   if (strncmp(name, "std.parse.", strlen("std.parse.")) == 0) return "std.parse";
   if (strncmp(name, "std.json.", strlen("std.json.")) == 0) return "std.json";
+  if (strncmp(name, "std.url.", strlen("std.url.")) == 0) return "std.url";
   if (strncmp(name, "std.time.", strlen("std.time.")) == 0) return "std.time";
   if (strncmp(name, "std.rand.", strlen("std.rand.")) == 0) return "std.rand";
   if (strncmp(name, "std.proc.", strlen("std.proc.")) == 0) return "std.proc";
@@ -7340,6 +7389,7 @@ static const char *helper_example_path(const ZStdHelperInfo *helper) {
   if (strcmp(module, "std.args") == 0 || strcmp(module, "std.env") == 0) return "examples/cli-file.0";
   if (strcmp(module, "std.fs") == 0) return "examples/zero-hash/";
   if (strcmp(module, "std.codec") == 0 || strcmp(module, "std.json") == 0) return "examples/std-data-formats.0";
+  if (helper && helper->name && strncmp(helper->name, "std.url.", strlen("std.url.")) == 0) return "conformance/native/pass/std-codec-json-url.0";
   if (strcmp(module, "std.parse") == 0) return "examples/parse-cursor.0";
   if (strcmp(module, "std.time") == 0 || strcmp(module, "std.rand") == 0 || strcmp(module, "std.proc") == 0 || strcmp(module, "std.crypto") == 0) return "examples/std-platform.0";
   if (strcmp(module, "std.net") == 0) return "conformance/native/pass/std-net-http-breadth.0";
@@ -7383,8 +7433,8 @@ static void append_std_helper_object_json(ZBuf *buf, const ZStdHelperInfo *helpe
 static void append_used_stdlib_helpers_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
   bool wrote = false;
-  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (!helpers || !helpers->used[i]) continue;
+  for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+    if (!helper_summary_used(helpers, i)) continue;
     if (wrote) zbuf_append(buf, ", ");
     append_std_helper_object_json(buf, &z_std_helpers[i], true);
     wrote = true;
@@ -7394,13 +7444,13 @@ static void append_used_stdlib_helpers_json(ZBuf *buf, const HelperUseSummary *h
 
 static void append_top_emitted_helpers_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
-  bool emitted[STD_HELPER_MAX] = {0};
+  bool *emitted = z_checked_calloc(helpers && helpers->len ? helpers->len : 1, sizeof(bool));
   bool wrote = false;
   for (int rank = 0; rank < 5; rank++) {
     int best_index = -1;
     int best_bytes = -1;
-    for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-      if (!helpers || !helpers->used[i] || emitted[i] || !z_std_helpers[i].emits_runtime_helper) continue;
+    for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+      if (!helper_summary_used(helpers, i) || emitted[i] || !z_std_helpers[i].emits_runtime_helper) continue;
       int bytes = helper_estimated_direct_bytes(&z_std_helpers[i]);
       if (bytes > best_bytes) {
         best_bytes = bytes;
@@ -7413,6 +7463,7 @@ static void append_top_emitted_helpers_json(ZBuf *buf, const HelperUseSummary *h
     append_std_helper_object_json(buf, &z_std_helpers[best_index], true);
     wrote = true;
   }
+  free(emitted);
   zbuf_append(buf, "]");
 }
 
@@ -7498,8 +7549,8 @@ static void append_size_literals_json(ZBuf *buf, const SourceInput *input) {
 static void append_size_helper_breakdown_json(ZBuf *buf, const HelperUseSummary *helpers) {
   zbuf_append(buf, "[");
   bool wrote = false;
-  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (!helpers || !helpers->used[i]) continue;
+  for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+    if (!helper_summary_used(helpers, i)) continue;
     if (wrote) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"name\":");
     append_json_string(buf, z_std_helpers[i].name);
@@ -7554,8 +7605,8 @@ static void append_retention_reasons_json(ZBuf *buf, const SourceInput *input, c
     zbuf_append(buf, "}");
     wrote = true;
   }
-  for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (!helpers || !helpers->used[i]) continue;
+  for (size_t i = 0; z_std_helpers[i].name && helpers && i < helpers->len; i++) {
+    if (!helper_summary_used(helpers, i)) continue;
     if (wrote) zbuf_append(buf, ", ");
     zbuf_append(buf, "{\"kind\":\"stdlibHelper\",\"name\":");
     append_json_string(buf, z_std_helpers[i].name);
@@ -7593,8 +7644,8 @@ static void append_optimization_hints_json(ZBuf *buf, const SourceInput *input, 
   if (caps && caps->fs) APPEND_HINT("hosted-fs-runtime", "std.fs retains hosted filesystem capability shims; move file I/O out of target-neutral paths for smaller cross artifacts");
   if (input && input->direct_readonly_data_bytes > 0) APPEND_HINT("readonly-literals", "string and byte literals are retained by referenced code; inspect literal-heavy output before optimizing code");
   if (helpers) {
-    for (size_t i = 0; z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-      if (helpers->used[i] && z_std_helpers[i].emits_runtime_helper) {
+    for (size_t i = 0; z_std_helpers[i].name && i < helpers->len; i++) {
+      if (helper_summary_used(helpers, i) && z_std_helpers[i].emits_runtime_helper) {
         APPEND_HINT("pay-as-used-helper", "topLargestEmittedHelpers identifies the retained stdlib helper budget");
         break;
       }
@@ -7607,8 +7658,8 @@ static void append_optimization_hints_json(ZBuf *buf, const SourceInput *input, 
 
 static size_t helper_count_used(const HelperUseSummary *helpers) {
   size_t count = 0;
-  for (size_t i = 0; helpers && z_std_helpers[i].name && i < STD_HELPER_MAX; i++) {
-    if (helpers->used[i]) count++;
+  for (size_t i = 0; helpers && z_std_helpers[i].name && i < helpers->len; i++) {
+    if (helper_summary_used(helpers, i)) count++;
   }
   return count;
 }
@@ -8462,6 +8513,7 @@ static int run_size_report_command(const Command *command, SourceInput *input, P
     if (command && command->json) print_diag_json(path, diag);
     else print_diag(path, diag);
     free(artifact_path);
+    helper_summary_free(&used_helpers);
     return 1;
   }
 
@@ -8472,6 +8524,7 @@ static int run_size_report_command(const Command *command, SourceInput *input, P
   fputs(json.data, stdout);
   zbuf_free(&json);
   free(artifact_path);
+  helper_summary_free(&used_helpers);
   return 0;
 }
 

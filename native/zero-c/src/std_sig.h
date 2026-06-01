@@ -48,6 +48,7 @@ typedef struct ZStdHelperInfo {
 
 extern const ZStdHelperInfo z_std_helpers[];
 
+size_t z_std_helper_count(void);
 const ZStdHelperInfo *z_std_helper_find(const char *name);
 int z_std_helper_index(const char *name, size_t max_helpers);
 ZStdHelperKind z_std_helper_kind(const ZStdHelperInfo *helper);

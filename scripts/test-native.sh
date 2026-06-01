@@ -201,6 +201,7 @@ run_native_or_gap conformance/native/pass/std-collections-mutspan-memory.0 .zero
 run_native_or_gap conformance/native/pass/std-collections-usize-memory.0 .zero/native-test/std-collections-usize-memory "std collections usize memory ok"
 run_native_or_gap conformance/native/pass/std-collections-query-memory.0 .zero/native-test/std-collections-query-memory "std collections query memory ok"
 run_native_or_gap conformance/native/pass/std-search-sort-widths.0 .zero/native-test/std-search-sort-widths "std search sort widths ok"
+run_native_or_gap conformance/native/pass/std-codec-json-url.0 .zero/native-test/std-codec-json-url "std codec json url ok"
 run_native_or_gap conformance/native/pass/memory-types.0 .zero/native-test/memory-types "native memory types"
 run_native_or_gap conformance/native/pass/recursive-fibonacci.0 .zero/native-test/recursive-fibonacci "recursive fibonacci ok"
 run_native_or_gap conformance/native/pass/scratch-nested-index.0 .zero/native-test/scratch-nested-index "scratch nested index ok"

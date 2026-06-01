@@ -3336,6 +3336,67 @@ for (const { target, compiler, emissionPath, magic } of directByteCopyFillTarget
   assert.equal(directStdTimeRandReport.objectBackend.objectEmission.path, emissionPath);
   assert(directStdTimeRandBytes.subarray(0, magic.length).equals(magic));
 }
+const directStdDataSource = join(outDir, "direct-std-codec-json-url-matrix.0");
+writeFileSync(directStdDataSource, `export c fn main() -> u8 {
+    var ok: Bool = true
+    var b64_buf: [4]u8 = [0_u8; 4]
+    let b64: Maybe<Span<u8>> = std.codec.base64Decode(b64_buf, "emVybw==")
+    if !b64.has || !std.mem.eql(b64.value, "zero") {
+        ok = false
+    }
+    var hex_buf: [2]u8 = [0_u8; 2]
+    let hex: Maybe<Span<u8>> = std.codec.hexDecode(hex_buf, "417a")
+    if !hex.has || !std.mem.eql(hex.value, "Az") {
+        ok = false
+    }
+    var word_buf: [4]u8 = [0_u8; 4]
+    let word: Maybe<Span<u8>> = std.codec.writeU32Be(word_buf, 0x41424344_u32)
+    if !word.has {
+        ok = false
+    }
+    if word.has {
+        let read_word: Maybe<u32> = std.codec.readU32Be(word.value)
+        if !read_word.has || read_word.value != 0x41424344_u32 {
+            ok = false
+        }
+    }
+    let json: Span<u8> = "{\\"name\\":\\"zero\\",\\"count\\":42,\\"ok\\":true}"
+    var name_buf: [8]u8 = [0_u8; 8]
+    let name: Maybe<Span<u8>> = std.json.string(name_buf, json, "name")
+    let count: Maybe<u32> = std.json.u32(json, "count")
+    let flag: Maybe<Bool> = std.json.bool(json, "ok")
+    var json_out_buf: [16]u8 = [0_u8; 16]
+    let json_out: Maybe<Span<u8>> = std.json.writeObject1U32(json_out_buf, "count", 42_u32)
+    if !name.has || !std.mem.eql(name.value, "zero") || !count.has || count.value != 42_u32 || !flag.has || !flag.value || !json_out.has || std.json.validateError(json_out.value) != std.json.errorNone() {
+        ok = false
+    }
+    var query_param_buf: [16]u8 = [0_u8; 16]
+    let query_param: Maybe<Span<u8>> = std.url.writeQueryParam(query_param_buf, "q", "zero lang")
+    var url_buf: [48]u8 = [0_u8; 48]
+    var url: Maybe<Span<u8>> = null
+    if query_param.has {
+        url = std.url.appendQuery(url_buf, "https://example.com/path", query_param.value)
+    }
+    if !url.has || !std.mem.eql(url.value, "https://example.com/path?q=zero+lang") {
+        ok = false
+    }
+    if ok {
+        return 1_u8
+    }
+    return 0_u8
+}
+`);
+for (const { target, compiler, emissionPath, magic } of directByteCopyFillTargets) {
+  const directStdDataPath = join(outDir, `direct-std-codec-json-url-${target.replace(/[^a-z0-9]+/gi, "-")}.o`);
+  rmSync(directStdDataPath, { force: true });
+  const directStdDataReport = json(["build", "--json", "--emit", "obj", "--target", target, directStdDataSource, "--out", directStdDataPath]).body;
+  const directStdDataBytes = readFileSync(directStdDataPath);
+  assert.equal(directStdDataReport.compiler, compiler);
+  assert.equal(directStdDataReport.generatedCBytes, 0);
+  assert.equal(directStdDataReport.objectBackend.objectEmission.path, emissionPath);
+  assert(directStdDataBytes.subarray(0, magic.length).equals(magic));
+  assert(directStdDataBytes.includes(Buffer.from("zero+lang")));
+}
 const directMachOPath = join(outDir, "direct-darwin-arm64.o");
 rmSync(directMachOPath, { force: true });
 const directMachOReport = json(["build", "--json", "--emit", "obj", "--target", "darwin-arm64", "examples/direct-call-add.0", "--out", directMachOPath]).body;
@@ -3769,7 +3830,7 @@ const machOMemoryPackageBytes = readFileSync(machOMemoryPackagePath);
 assert.equal(machOMemoryPackageReport.compiler, "zero-macho64");
 assert.equal(machOMemoryPackageReport.generatedCBytes, 0);
 assert.equal(machOMemoryPackageReport.objectBackend.objectEmission.path, "direct-macho64-object");
-assert.equal(machOMemoryPackageReport.objectBackend.directFacts.moduleCount, 4);
+assert.equal(machOMemoryPackageReport.objectBackend.directFacts.moduleCount, 3);
 assert.equal(machOMemoryPackageReport.objectBackend.directFacts.runtimeHelperCount, 1);
 assert.equal(machOMemoryPackageBytes.readUInt32LE(0), 0xfeedfacf);
 assert(machOMemoryPackageBytes.includes(Buffer.from("memory package ok")));
@@ -3839,6 +3900,61 @@ assert.equal(graphMemCopyHelper.errorBehavior, "infallible");
 assert.match(graphMemCopyHelper.ownershipNotes, /caller-owned storage/);
 assert.equal(graphMemCopyHelper.example, "examples/memory-primitives.0");
 assert.equal(graphMemCopyHelper.apiStability, "bootstrap-stable");
+
+const stdDataSize = json(["size", "--json", "conformance/native/pass/std-codec-json-url.0"]).body;
+const sizeUrlHostHelper = stdDataSize.stdlibHelpers.find((helper) => helper.name === "std.url.host");
+assert.equal(sizeUrlHostHelper.module, "std.url");
+assert.equal(sizeUrlHostHelper.example, "conformance/native/pass/std-codec-json-url.0");
+
+const crcOnlySource = join(outDir, "std-codec-crc-only.0");
+writeFileSync(crcOnlySource, `pub fn main() -> Void {
+    let checksum: u32 = std.codec.crc32("zero")
+}
+`);
+const crcOnlyGraph = json(["graph", "--json", crcOnlySource]).body;
+assert(!crcOnlyGraph.sourceFiles.some((path) => path.endsWith("std/codec.0")));
+assert(!crcOnlyGraph.requiresCapabilities.includes("parse"));
+const crcOnlySize = json(["size", "--json", crcOnlySource]).body;
+assert(!crcOnlySize.incrementalInvalidation.changedInputs.sourceFiles.some((path) => path.endsWith("std/codec.0")));
+assert(!crcOnlySize.retentionReasons.some((item) => item.name === "__zero_std_codec_hex_decode"));
+
+const codecReadOnlySource = join(outDir, "std-codec-read-only.0");
+writeFileSync(codecReadOnlySource, `export c fn main() -> i32 {
+    let value: Maybe<u16> = std.codec.readU16Le("AB")
+    if value.has {
+        return 0
+    }
+    return 1
+}
+`);
+const codecReadOnlyGraph = json(["graph", "--json", codecReadOnlySource]).body;
+assert(codecReadOnlyGraph.sourceFiles.some((path) => path.endsWith("std/codec.0")));
+assert(!codecReadOnlyGraph.sourceFiles.some((path) => path.endsWith("std/ascii.0")));
+assert(!codecReadOnlyGraph.requiresCapabilities.includes("parse"));
+const codecReadOnlySize = json(["size", "--json", codecReadOnlySource]).body;
+assert.equal(codecReadOnlySize.objectBackend.directFacts.functionCount, 2);
+assert(!codecReadOnlySize.retentionReasons.some((item) => item.name === "__zero_std_codec_hex_decode"));
+assert(!codecReadOnlySize.retentionReasons.some((item) => item.name === "std.ascii.hexValue"));
+
+const jsonStatusOnlySource = join(outDir, "std-json-status-only.0");
+writeFileSync(jsonStatusOnlySource, `export c fn main() -> i32 {
+    let status: u32 = std.json.errorNone()
+    if status == 0_u32 {
+        return 0
+    }
+    return 1
+}
+`);
+const jsonStatusOnlyGraph = json(["graph", "--json", jsonStatusOnlySource]).body;
+assert(jsonStatusOnlyGraph.sourceFiles.some((path) => path.endsWith("std/json.0")));
+assert(!jsonStatusOnlyGraph.sourceFiles.some((path) => path.endsWith("std/ascii.0")));
+assert(!jsonStatusOnlyGraph.sourceFiles.some((path) => path.endsWith("std/fmt.0")));
+assert(!jsonStatusOnlyGraph.sourceFiles.some((path) => path.endsWith("std/parse.0")));
+assert.equal(jsonStatusOnlyGraph.functions.filter((fun) => fun.name.startsWith("__zero_std_json_")).length, 1);
+const jsonStatusOnlySize = json(["size", "--json", jsonStatusOnlySource]).body;
+assert.equal(jsonStatusOnlySize.objectBackend.directFacts.functionCount, 2);
+assert(!jsonStatusOnlySize.retentionReasons.some((item) => item.name === "__zero_std_json_validate_error"));
+assert(!jsonStatusOnlySize.retentionReasons.some((item) => item.name === "std.parse.parseU32"));
 
 const httpErrorsGraph = json(["graph", "--json", "conformance/native/pass/std-http-errors.0"]).body;
 assert.deepEqual(httpErrorsGraph.requiresCapabilities, []);

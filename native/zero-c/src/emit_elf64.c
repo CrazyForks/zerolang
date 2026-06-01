@@ -2016,6 +2016,7 @@ typedef struct {
   size_t *function_offsets, *function_sizes;
   uint32_t *symbol_names, runtime_names[ELF_RUNTIME_HELPER_COUNT];
   ElfEmitContext ctx;
+  uint32_t local_symbol_count;
   bool has_rodata;
   unsigned rodata_base_offset;
 } ElfObjectBuild;
@@ -2037,6 +2038,7 @@ static void elf_object_build_init(ElfObjectBuild *build, const IrProgram *ir) {
   z_elf_append_u8(&build->strtab, 0); z_elf_append_zeros(&build->symtab, 24);
   build->has_rodata = ir->readonly_data_bytes > 0 || ir->data_segment_len > 0;
   build->rodata_base_offset = elf_rodata_base_offset(ir);
+  build->local_symbol_count = build->has_rodata ? 2 : 1;
   if (build->has_rodata) {
     elf_append_rodata(&build->rodata, ir, build->rodata_base_offset);
     z_elf_append_symbol(&build->symtab, 0, 0x03, 2, 0, 0);
@@ -2093,7 +2095,15 @@ static void elf_finish_object_symbols(ElfObjectBuild *build, const IrProgram *ir
     runtime_symbols[helper] = next_runtime_symbol++;
     z_elf_append_runtime_relocations(&build->rela_text, &build->ctx, runtime_helper, runtime_symbols[helper]);
   }
-  for (size_t i = 0; i < ir->function_len; i++) z_elf_append_symbol(&build->symtab, build->symbol_names[i], ir->functions[i].is_exported ? 0x12 : 0x02, 1, build->function_offsets[i], build->function_sizes[i]);
+  for (size_t i = 0; i < ir->function_len; i++) {
+    if (ir->functions[i].is_exported) continue;
+    z_elf_append_symbol(&build->symtab, build->symbol_names[i], 0x02, 1, build->function_offsets[i], build->function_sizes[i]);
+    build->local_symbol_count++;
+  }
+  for (size_t i = 0; i < ir->function_len; i++) {
+    if (!ir->functions[i].is_exported) continue;
+    z_elf_append_symbol(&build->symtab, build->symbol_names[i], 0x12, 1, build->function_offsets[i], build->function_sizes[i]);
+  }
   for (unsigned helper = 0; helper < ELF_RUNTIME_HELPER_COUNT; helper++) {
     ElfRuntimeHelper runtime_helper = (ElfRuntimeHelper)helper;
     if (z_elf_runtime_patch_count(&build->ctx, runtime_helper) == 0) continue;
@@ -2107,7 +2117,7 @@ static void elf_write_object_image(ZBuf *out, ElfObjectBuild *build) {
     .rodata = build->has_rodata ? &build->rodata : NULL, .rodata_align = 8,
     .rela_text = build->rela_text.len > 0 ? &build->rela_text : NULL,
     .symtab = &build->symtab, .strtab = &build->strtab,
-    .local_symbol_count = build->has_rodata ? 2 : 1
+    .local_symbol_count = build->local_symbol_count
   };
   z_elf_write_object64(out, &image);
 }
