@@ -251,6 +251,10 @@ function findNodeById(graph, id) {
   return node;
 }
 
+function assertMissingNodeId(graph, id, message) {
+  assert(!graph.nodes.some((item) => item.id === id), message);
+}
+
 function findOwnerNode(graph, nodeId, edgeKind) {
   const edge = graph.edges.find((item) => item.target === "node" && item.to === nodeId && item.kind === edgeKind);
   assert(edge, `missing ${edgeKind} owner edge for ${nodeId}`);
@@ -309,8 +313,19 @@ async function assertSourceEditIdentityBaseline() {
   const insertedHelper = sameShapeSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "appendedHelper");
   assert(sameShapeHelper, "missing helper after same-shape sibling insertion");
   assert(insertedHelper, "missing inserted same-shape sibling");
-  assert.equal(sameShapeHelper.id, beforeHelper.id, "appending a same-shape sibling should not steal the existing declaration ID");
-  assert.notEqual(insertedHelper.id, beforeHelper.id, "same-shape sibling should get a collision-resolved ID");
+  assert.notEqual(sameShapeHelper.id, beforeHelper.id, "same-shape sibling collision should retire the old ambiguous declaration ID");
+  assert.notEqual(insertedHelper.id, beforeHelper.id, "same-shape sibling should not steal the old declaration ID");
+  assertMissingNodeId(sameShapeSiblingGraph, beforeHelper.id, "old ambiguous declaration ID should not target any same-shape sibling");
+
+  await writeFile(fixture, original.replace("fn helper", "fn prependedHelper() -> i32 {\n    return 2\n}\n\nfn helper"));
+  const prependedSiblingGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const prependedExistingHelper = prependedSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "helper");
+  const prependedHelper = prependedSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "prependedHelper");
+  assert(prependedExistingHelper, "missing helper after prepended same-shape sibling");
+  assert(prependedHelper, "missing prepended same-shape sibling");
+  assert.notEqual(prependedExistingHelper.id, beforeHelper.id, "prepending a same-shape sibling should retire the old ambiguous declaration ID");
+  assert.notEqual(prependedHelper.id, beforeHelper.id, "prepended same-shape sibling should not steal the old declaration ID");
+  assertMissingNodeId(prependedSiblingGraph, beforeHelper.id, "old ambiguous declaration ID should not target any prepended sibling");
 
   await writeFile(fixture, original.replace("    check world.out.write", "    let marker: i32 = 1\n    check world.out.write"));
   const insertedGraph = await zeroJson(["graph", "dump", "--json", fixture]);
@@ -323,10 +338,23 @@ async function assertSourceEditIdentityBaseline() {
   const sameKindStatementGraph = await zeroJson(["graph", "dump", "--json", fixture]);
   const sameKindExisting = findCheckForStringLiteral(sameKindStatementGraph, "hello from zero\n");
   const sameKindInserted = findCheckForStringLiteral(sameKindStatementGraph, "inserted\n");
-  assert.equal(sameKindExisting.check.id, beforeCheck.id, "appending a same-kind statement should not steal the existing statement ID");
-  assert.equal(sameKindExisting.literal.id, before.id, "appending a same-kind statement should not churn nested expression IDs");
-  assert.notEqual(sameKindInserted.check.id, beforeCheck.id, "appended same-kind statement should get a collision-resolved ID");
-  assert.notEqual(sameKindInserted.literal.id, before.id, "appended same-kind expression should not reuse the existing expression ID");
+  assert.notEqual(sameKindExisting.check.id, beforeCheck.id, "same-kind statement collision should retire the old ambiguous statement ID");
+  assert.notEqual(sameKindExisting.literal.id, before.id, "same-kind statement collision should retire nested ambiguous expression IDs");
+  assert.notEqual(sameKindInserted.check.id, beforeCheck.id, "appended same-kind statement should not steal the old statement ID");
+  assert.notEqual(sameKindInserted.literal.id, before.id, "appended same-kind expression should not steal the old expression ID");
+  assertMissingNodeId(sameKindStatementGraph, beforeCheck.id, "old ambiguous statement ID should not target any same-kind statement");
+  assertMissingNodeId(sameKindStatementGraph, before.id, "old ambiguous expression ID should not target any same-kind expression");
+
+  await writeFile(fixture, original.replace("    check world.out.write", "    check world.out.write(\"inserted\\n\")\n    check world.out.write"));
+  const prependedStatementGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const prependedExisting = findCheckForStringLiteral(prependedStatementGraph, "hello from zero\n");
+  const prependedInserted = findCheckForStringLiteral(prependedStatementGraph, "inserted\n");
+  assert.notEqual(prependedExisting.check.id, beforeCheck.id, "prepending a same-kind statement should retire the old ambiguous statement ID");
+  assert.notEqual(prependedExisting.literal.id, before.id, "prepending a same-kind statement should retire nested ambiguous expression IDs");
+  assert.notEqual(prependedInserted.check.id, beforeCheck.id, "prepended same-kind statement should not steal the old statement ID");
+  assert.notEqual(prependedInserted.literal.id, before.id, "prepended same-kind expression should not steal the old expression ID");
+  assertMissingNodeId(prependedStatementGraph, beforeCheck.id, "old ambiguous statement ID should not target any prepended statement");
+  assertMissingNodeId(prependedStatementGraph, before.id, "old ambiguous expression ID should not target any prepended expression");
 }
 
 try {

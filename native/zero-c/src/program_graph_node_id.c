@@ -171,11 +171,11 @@ static uint64_t graph_collision_hash_value(const ZProgramGraphNode *node) {
   return hash;
 }
 
-static char *graph_source_node_collision_id(const ZProgramGraphNode *node, const char *base_id, char **ids, size_t id_len, size_t rank) {
+static char *graph_source_node_collision_id(const ZProgramGraphNode *node, const char *base_id, char **ids, size_t id_len, size_t rank, bool force_suffix) {
   ZBuf base;
   zbuf_init(&base);
   zbuf_append(&base, base_id);
-  if (!graph_id_is_used(ids, id_len, base.data)) return base.data ? base.data : z_strdup("#node_00000000");
+  if (!force_suffix && !graph_id_is_used(ids, id_len, base.data)) return base.data ? base.data : z_strdup("#node_00000000");
   uint64_t collision = graph_collision_hash_value(node);
   for (size_t attempt = 0;; attempt++) {
     ZBuf unique;
@@ -277,7 +277,7 @@ void z_program_graph_assign_source_node_ids(ZProgramGraph *graph) {
       graph_sort_collision_group(graph, group, group_len);
       for (size_t j = 0; j < group_len; j++) {
         size_t index = group[j];
-        new_ids[index] = graph_source_node_collision_id(&graph->nodes[index], base_ids[index], new_ids, graph->node_len, j);
+        new_ids[index] = graph_source_node_collision_id(&graph->nodes[index], base_ids[index], new_ids, graph->node_len, j, group_len > 1);
         assigned[index] = true;
         assigned_count++;
       }
