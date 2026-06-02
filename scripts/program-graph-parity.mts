@@ -209,19 +209,156 @@ async function assertSourceBackedPatchParity() {
   assert.equal(graph, source, "patched graph artifact run output should match source");
 }
 
+async function assertGraphPatchPreservesNodeIds() {
+  const artifact = await dumpGraphArtifact("examples/hello.0", "patch-preserves-id");
+  const patchedArtifact = `${outDir}/patch-preserves-id.patched.program-graph`;
+  const beforeGraph = await zeroJson(["graph", "dump", "--json", "examples/hello.0"]);
+  const beforeLiteral = findStringLiteral(beforeGraph, "hello from zero\n");
+  const beforeMain = beforeGraph.nodes.find((node) => node.kind === "Function" && node.name === "main");
+  assert(beforeMain, "missing main function");
+
+  const patch = await zeroJson([
+    "graph",
+    "patch",
+    "--json",
+    "--out",
+    patchedArtifact,
+    artifact,
+    "--expect-graph-hash",
+    beforeGraph.graphHash,
+    "--op",
+    `replace node="${beforeLiteral.id}" expect="${beforeLiteral.nodeHash}" kind="Literal" type="String" value="hello preserved\\n"`,
+  ]);
+  assert.equal(patch.ok, true, "graph artifact patch should succeed");
+  assert.equal(patch.operations[0].node, beforeLiteral.id, "graph patch should target the inspected literal ID");
+  assert.notEqual(patch.patchedGraphHash, beforeGraph.graphHash, "graph patch should update graphHash");
+
+  const patchedText = await readFile(patchedArtifact, "utf8");
+  assert.match(patchedText, new RegExp(`node ${beforeLiteral.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} Literal[^\\n]*value:"hello preserved\\\\n"`), "graph patch should preserve literal node ID");
+  assert.match(patchedText, new RegExp(`node ${beforeMain.id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")} Function[^\\n]*name:"main"`), "graph patch should not churn unrelated function ID");
+  assert.equal(await zeroText(["graph", "check", patchedArtifact]), "program graph check ok\n", "patched graph artifact should check");
+}
+
 function findStringLiteral(graph, value) {
   const literal = graph.nodes.find((node) => node.kind === "Literal" && node.type === "String" && node.value === value);
   assert(literal, `missing string literal ${JSON.stringify(value)}`);
   return literal;
 }
 
+function findNodeById(graph, id) {
+  const node = graph.nodes.find((item) => item.id === id);
+  assert(node, `missing graph node ${id}`);
+  return node;
+}
+
+function assertMissingNodeId(graph, id, message) {
+  assert(!graph.nodes.some((item) => item.id === id), message);
+}
+
+function findOwnerNode(graph, nodeId, edgeKind) {
+  const edge = graph.edges.find((item) => item.target === "node" && item.to === nodeId && item.kind === edgeKind);
+  assert(edge, `missing ${edgeKind} owner edge for ${nodeId}`);
+  return findNodeById(graph, edge.from);
+}
+
+function findCheckForStringLiteral(graph, value) {
+  const literal = findStringLiteral(graph, value);
+  const call = findOwnerNode(graph, literal.id, "arg");
+  const check = findOwnerNode(graph, call.id, "expr");
+  assert.equal(check.kind, "Check", `expected check owner for ${JSON.stringify(value)}`);
+  return { check, literal };
+}
+
+function findNodeByKindAndName(graph, kind, name) {
+  const node = graph.nodes.find((item) => item.kind === kind && item.name === name);
+  assert(node, `missing ${kind} node ${name}`);
+  return node;
+}
+
+async function assertDeclarationSiblingIdentity() {
+  const declarationFixture = `${outDir}/identity-declarations.0`;
+  const declarations = [
+    "type Point {",
+    "    x: i32,",
+    "}",
+    "",
+    "type Other {",
+    "    y: i32,",
+    "}",
+    "",
+    "pub fn main() -> Void {",
+    "    let point: Point = Point { x: 1 }",
+    "    expect point.x == 1",
+    "}",
+    "",
+  ].join("\n");
+  await writeFile(declarationFixture, declarations);
+  const beforeDeclarations = await zeroJson(["graph", "dump", "--json", declarationFixture]);
+  const beforePoint = findNodeByKindAndName(beforeDeclarations, "Shape", "Point");
+  const beforeOther = findNodeByKindAndName(beforeDeclarations, "Shape", "Other");
+
+  await writeFile(declarationFixture, declarations.replace("type Point", "type Added {\n    z: i32,\n}\n\ntype Point"));
+  const prependedDeclarations = await zeroJson(["graph", "dump", "--json", declarationFixture]);
+  assert.equal(findNodeByKindAndName(prependedDeclarations, "Shape", "Point").id, beforePoint.id, "prepending a declaration should not churn existing shape IDs");
+  assert.equal(findNodeByKindAndName(prependedDeclarations, "Shape", "Other").id, beforeOther.id, "prepending a declaration should not churn later shape IDs");
+
+  const methodFixture = `${outDir}/identity-methods.0`;
+  const methods = [
+    "type Counter {",
+    "    value: i32,",
+    "    fn read(self: ref<Self>) -> i32 {",
+    "        return self.value",
+    "    }",
+    "    fn done(self: ref<Self>) -> Bool {",
+    "        return true",
+    "    }",
+    "}",
+    "",
+    "pub fn main() -> Void {",
+    "    let counter: Counter = Counter { value: 42 }",
+    "    expect Counter.read(&counter) == 42",
+    "}",
+    "",
+  ].join("\n");
+  await writeFile(methodFixture, methods);
+  const beforeMethods = await zeroJson(["graph", "dump", "--json", methodFixture]);
+  const beforeRead = findNodeByKindAndName(beforeMethods, "Function", "read");
+  const beforeDone = findNodeByKindAndName(beforeMethods, "Function", "done");
+
+  await writeFile(methodFixture, methods.replace("    fn read", "    fn zero(self: ref<Self>) -> u32 {\n        return 0_u32\n    }\n    fn read"));
+  const prependedMethods = await zeroJson(["graph", "dump", "--json", methodFixture]);
+  assert.equal(findNodeByKindAndName(prependedMethods, "Function", "read").id, beforeRead.id, "prepending a distinct method should not churn existing method IDs");
+  assert.equal(findNodeByKindAndName(prependedMethods, "Function", "done").id, beforeDone.id, "prepending a distinct method should not churn later method IDs");
+
+  await writeFile(methodFixture, methods.replace("    fn read", "    fn count(self: ref<Self>) -> i32 {\n        return 1\n    }\n    fn read"));
+  const sameShapeMethods = await zeroJson(["graph", "dump", "--json", methodFixture]);
+  const sameShapeRead = findNodeByKindAndName(sameShapeMethods, "Function", "read");
+  const countMethod = findNodeByKindAndName(sameShapeMethods, "Function", "count");
+  assert.notEqual(sameShapeRead.id, beforeRead.id, "same-shape method collision should retire the old ambiguous method ID");
+  assert.notEqual(countMethod.id, beforeRead.id, "prepended same-shape method should not steal the old method ID");
+  assertMissingNodeId(sameShapeMethods, beforeRead.id, "old ambiguous method ID should not target any same-shape method");
+}
+
 async function assertSourceEditIdentityBaseline() {
   const fixture = `${outDir}/identity-edit.0`;
-  const original = await readFile("examples/hello.0", "utf8");
+  const original = [
+    "fn helper() -> i32 {",
+    "    return 1",
+    "}",
+    "",
+    "pub fn main(world: World) -> Void raises {",
+    "    check world.out.write(\"hello from zero\\n\")",
+    "}",
+    "",
+  ].join("\n");
   await writeFile(fixture, original);
 
   const beforeGraph = await zeroJson(["graph", "dump", "--json", fixture]);
   const before = findStringLiteral(beforeGraph, "hello from zero\n");
+  const beforeHelper = beforeGraph.nodes.find((node) => node.kind === "Function" && node.name === "helper");
+  const beforeCheck = beforeGraph.nodes.find((node) => node.kind === "Check");
+  assert(beforeHelper, "missing helper function before rename");
+  assert(beforeCheck, "missing check statement before insertion");
 
   await writeFile(fixture, original.replace("hello from zero\\n", "hello from graph\\n"));
   const afterGraph = await zeroJson(["graph", "dump", "--json", fixture]);
@@ -229,11 +366,65 @@ async function assertSourceEditIdentityBaseline() {
 
   assert.notEqual(after.nodeHash, before.nodeHash, "editing literal content should change nodeHash");
   assert.notEqual(afterGraph.graphHash, beforeGraph.graphHash, "editing literal content should change graphHash");
-  if (requireStableNodeIds) {
-    assert.equal(after.id, before.id, "source-imported node id should survive a local content edit");
-  } else {
-    assert.notEqual(after.id, before.id, "current source-imported node ids are content-derived");
-  }
+  assert.equal(after.id, before.id, "source-imported node id should survive a local content edit");
+
+  await writeFile(fixture, original.replace("fn helper", "fn renamedHelper"));
+  const renamedGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const renamedHelper = renamedGraph.nodes.find((node) => node.kind === "Function" && node.name === "renamedHelper");
+  assert(renamedHelper, "missing renamed function");
+  assert.equal(renamedHelper.id, beforeHelper.id, "source-imported declaration id should survive a rename");
+  assert.notEqual(renamedHelper.nodeHash, beforeHelper.nodeHash, "renaming a declaration should change nodeHash");
+  assert.notEqual(renamedHelper.symbolId, beforeHelper.symbolId, "renaming a declaration should change symbolId");
+  if (requireStableNodeIds) assert.equal(renamedHelper.id, beforeHelper.id, "strict stable node id check");
+
+  await writeFile(fixture, original.replace("\npub fn main", "\nfn appendedHelper() -> i32 {\n    return 2\n}\n\npub fn main"));
+  const sameShapeSiblingGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const sameShapeHelper = sameShapeSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "helper");
+  const insertedHelper = sameShapeSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "appendedHelper");
+  assert(sameShapeHelper, "missing helper after same-shape sibling insertion");
+  assert(insertedHelper, "missing inserted same-shape sibling");
+  assert.notEqual(sameShapeHelper.id, beforeHelper.id, "same-shape sibling collision should retire the old ambiguous declaration ID");
+  assert.notEqual(insertedHelper.id, beforeHelper.id, "same-shape sibling should not steal the old declaration ID");
+  assertMissingNodeId(sameShapeSiblingGraph, beforeHelper.id, "old ambiguous declaration ID should not target any same-shape sibling");
+
+  await writeFile(fixture, original.replace("fn helper", "fn prependedHelper() -> i32 {\n    return 2\n}\n\nfn helper"));
+  const prependedSiblingGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const prependedExistingHelper = prependedSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "helper");
+  const prependedHelper = prependedSiblingGraph.nodes.find((node) => node.kind === "Function" && node.name === "prependedHelper");
+  assert(prependedExistingHelper, "missing helper after prepended same-shape sibling");
+  assert(prependedHelper, "missing prepended same-shape sibling");
+  assert.notEqual(prependedExistingHelper.id, beforeHelper.id, "prepending a same-shape sibling should retire the old ambiguous declaration ID");
+  assert.notEqual(prependedHelper.id, beforeHelper.id, "prepended same-shape sibling should not steal the old declaration ID");
+  assertMissingNodeId(prependedSiblingGraph, beforeHelper.id, "old ambiguous declaration ID should not target any prepended sibling");
+
+  await writeFile(fixture, original.replace("    check world.out.write", "    let marker: i32 = 1\n    check world.out.write"));
+  const insertedGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const insertedCheck = insertedGraph.nodes.find((node) => node.kind === "Check");
+  const insertedLiteral = findStringLiteral(insertedGraph, "hello from zero\n");
+  assert.equal(insertedCheck?.id, beforeCheck.id, "inserting before a statement should not churn the existing statement ID");
+  assert.equal(insertedLiteral.id, before.id, "inserting before a statement should not churn nested expression IDs");
+
+  await writeFile(fixture, original.replace("    check world.out.write(\"hello from zero\\n\")", "    check world.out.write(\"hello from zero\\n\")\n    check world.out.write(\"inserted\\n\")"));
+  const sameKindStatementGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const sameKindExisting = findCheckForStringLiteral(sameKindStatementGraph, "hello from zero\n");
+  const sameKindInserted = findCheckForStringLiteral(sameKindStatementGraph, "inserted\n");
+  assert.notEqual(sameKindExisting.check.id, beforeCheck.id, "same-kind statement collision should retire the old ambiguous statement ID");
+  assert.notEqual(sameKindExisting.literal.id, before.id, "same-kind statement collision should retire nested ambiguous expression IDs");
+  assert.notEqual(sameKindInserted.check.id, beforeCheck.id, "appended same-kind statement should not steal the old statement ID");
+  assert.notEqual(sameKindInserted.literal.id, before.id, "appended same-kind expression should not steal the old expression ID");
+  assertMissingNodeId(sameKindStatementGraph, beforeCheck.id, "old ambiguous statement ID should not target any same-kind statement");
+  assertMissingNodeId(sameKindStatementGraph, before.id, "old ambiguous expression ID should not target any same-kind expression");
+
+  await writeFile(fixture, original.replace("    check world.out.write", "    check world.out.write(\"inserted\\n\")\n    check world.out.write"));
+  const prependedStatementGraph = await zeroJson(["graph", "dump", "--json", fixture]);
+  const prependedExisting = findCheckForStringLiteral(prependedStatementGraph, "hello from zero\n");
+  const prependedInserted = findCheckForStringLiteral(prependedStatementGraph, "inserted\n");
+  assert.notEqual(prependedExisting.check.id, beforeCheck.id, "prepending a same-kind statement should retire the old ambiguous statement ID");
+  assert.notEqual(prependedExisting.literal.id, before.id, "prepending a same-kind statement should retire nested ambiguous expression IDs");
+  assert.notEqual(prependedInserted.check.id, beforeCheck.id, "prepended same-kind statement should not steal the old statement ID");
+  assert.notEqual(prependedInserted.literal.id, before.id, "prepended same-kind expression should not steal the old expression ID");
+  assertMissingNodeId(prependedStatementGraph, beforeCheck.id, "old ambiguous statement ID should not target any prepended statement");
+  assertMissingNodeId(prependedStatementGraph, before.id, "old ambiguous expression ID should not target any prepended expression");
 }
 
 try {
@@ -266,8 +457,10 @@ try {
   await assertRunParity("conformance/native/pass/std-args.0", "std-args", ["alpha", "beta"]);
   await assertTestParity("conformance/native/pass/test-blocks.0", "test-blocks");
   await assertSourceBackedPatchParity();
+  await assertGraphPatchPreservesNodeIds();
 
   await assertSourceEditIdentityBaseline();
+  await assertDeclarationSiblingIdentity();
   console.log("program graph parity ok");
 } finally {
   await rm(outDir, { force: true, recursive: true });
