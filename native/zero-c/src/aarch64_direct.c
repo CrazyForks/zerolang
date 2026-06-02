@@ -635,6 +635,7 @@ static bool a64_emit_call_to_reg_at(ZBuf *text, const IrFunction *fun, const IrV
   }
   size_t patch = z_aarch64_emit_bl_placeholder(text);
   if (!a64_record_call_patch(ctx, patch, value->external_call ? 0 : value->callee_index, diag, value)) return false;
+  if (value->external_call) a64_emit_cast_normalize_reg(text, 0, value->type, value->type);
   if (reg != 0) {
     if (a64_type_is_scalar64(value->type)) z_aarch64_emit_mov_x(text, reg, 0);
     else z_aarch64_emit_mov_w(text, reg, 0);

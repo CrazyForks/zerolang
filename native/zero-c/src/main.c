@@ -802,7 +802,7 @@ static bool link_zero_runtime_executable(const char *object_file, const char *ru
   size_t object_count = http_object_file && http_object_file[0] ? 3 : 2;
   ZBuf post_flags;
   zbuf_init(&post_flags);
-  append_manifest_c_link_flags(&post_flags, input);
+  if (input && input->direct_c_import_call_count > 0) append_manifest_c_link_flags(&post_flags, input);
   if (http_object_file && http_object_file[0]) zbuf_append(&post_flags, " -lcurl");
   zbuf_append(&post_flags, " 2>/dev/null");
   bool ok = z_toolchain_link_objects(plan, target, object_files, object_count, exe_file, linux_no_pie, post_flags.data ? post_flags.data : "2>/dev/null");

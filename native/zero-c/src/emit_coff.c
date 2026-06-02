@@ -486,6 +486,7 @@ static bool coff_emit_call_value(ZBuf *text, const IrFunction *fun, const IrValu
   }
   size_t patch = z_x64_emit_call32_placeholder(text);
   z_x64_emit_add_rsp(text, total_stack);
+  if (value->external_call) coff_emit_cast_normalize_rax(text, value->type);
   return z_coff_record_call_patch(ctx, patch, value->external_call ? 0 : value->callee_index, value, diag);
 }
 

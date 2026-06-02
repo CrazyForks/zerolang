@@ -3512,25 +3512,48 @@ await mkdir(`${externCallRoot}/src`, { recursive: true });
 await mkdir(`${externCallRoot}/vendor/include`, { recursive: true });
 await mkdir(`${externCallRoot}/vendor/lib`, { recursive: true });
 await mkdir(`${externCallShadowRoot}/vendor/include`, { recursive: true });
+const externCallSymbolPrefix = process.platform === "darwin" ? "_" : "";
+let externCallDirtyAsm = "";
+if (process.arch === "x64") {
+  externCallDirtyAsm = `.text
+.globl ${externCallSymbolPrefix}zero_ext_dirty_u8
+${externCallSymbolPrefix}zero_ext_dirty_u8:
+    movq $257, %rax
+    ret
+`;
+} else if (process.arch === "arm64") {
+  externCallDirtyAsm = `.text
+.globl ${externCallSymbolPrefix}zero_ext_dirty_u8
+${externCallSymbolPrefix}zero_ext_dirty_u8:
+    mov x0, #1
+    movk x0, #1, lsl #8
+    ret
+`;
+}
 await writeFile(`${externCallRoot}/vendor/include/zero_ext.h`, `int
 zero_ext_add(
     int left,
     int right
 );
+unsigned char zero_ext_dirty_u8(void);
 `);
 await writeFile(`${externCallShadowRoot}/vendor/include/zero_ext.h`, "int zero_ext_wrong(int, int);\n");
 await writeFile(`${externCallRoot}/vendor/lib/zero_ext.c`, '#include "zero_ext.h"\nint zero_ext_add(int a, int b) { return a + b; }\n');
 await execFileAsync("cc", ["-I", `${externCallRoot}/vendor/include`, "-c", `${externCallRoot}/vendor/lib/zero_ext.c`, "-o", `${externCallRoot}/vendor/lib/zero_ext.o`]);
+if (externCallDirtyAsm) {
+  await writeFile(`${externCallRoot}/vendor/lib/zero_ext_dirty.S`, externCallDirtyAsm);
+  await execFileAsync("cc", ["-c", `${externCallRoot}/vendor/lib/zero_ext_dirty.S`, "-o", `${externCallRoot}/vendor/lib/zero_ext_dirty.o`]);
+}
 await writeFile(`${externCallRoot}/zero.json`, JSON.stringify({
   package: { name: "extern-c-call", version: "0.1.0" },
   targets: { cli: { kind: "exe", main: "src/main.0" } },
-  c: { libs: { ext: { headers: ["vendor/include/zero_ext.h"], include: ["vendor/include"], lib: ["vendor/lib/zero_ext.o"], link: [], mode: "static" } } }
+  c: { libs: { ext: { headers: ["vendor/include/zero_ext.h"], include: ["vendor/include"], lib: ["vendor/lib/zero_ext.o", ...(externCallDirtyAsm ? ["vendor/lib/zero_ext_dirty.o"] : [])], link: [], mode: "static" } } }
 }, null, 2));
 await writeFile(`${externCallRoot}/src/main.0`, `extern c "vendor/include/zero_ext.h" as c
 
 pub fn main(world: World) -> Void raises {
     let total: i32 = c.zero_ext_add(20, 22)
-    if total == 42 {
+    if total == 42${externCallDirtyAsm ? " && c.zero_ext_dirty_u8() == 1_u8" : ""} {
         check world.out.write("extern c call ok\\n")
     } else {
         check world.out.write("extern c call failed\\n")
@@ -3545,6 +3568,7 @@ const externCallGraphBody = JSON.parse(externCallGraph.stdout);
 const externCallImport = externCallGraphBody.cImports.find((item) => item.header === "vendor/include/zero_ext.h");
 assert(externCallImport);
 assert(externCallImport.typedModel.functions.some((item) => item.name === "zero_ext_add" && item.params.length === 2));
+assert(externCallImport.typedModel.functions.some((item) => item.name === "zero_ext_dirty_u8" && item.returnType === "unsigned char" && item.params.length === 0));
 const externCallBuildOut = `${externCallRoot}/extern-call`;
 const externCallBuild = await execFileAsync(zero, ["build", "--json", externCallRoot, "--out", externCallBuildOut]);
 const externCallBuildBody = JSON.parse(externCallBuild.stdout);
@@ -3554,12 +3578,34 @@ assert.notEqual(externCallBuildBody.objectBackend.linking.externalToolchain, "no
 assert.match(externCallBuildBody.objectBackend.linking.targetLibraries, /zero-runtime/);
 assert.match(externCallBuildBody.objectBackend.linking.targetLibraries, /c-imports/);
 assert(externCallBuildBody.objectBackend.linkerPlan.staticLibraries.some((item) => item.endsWith("vendor/lib/zero_ext.o")));
+if (externCallDirtyAsm) assert(externCallBuildBody.objectBackend.linkerPlan.staticLibraries.some((item) => item.endsWith("vendor/lib/zero_ext_dirty.o")));
 assert.equal(externCallBuildBody.releaseTargetContract.selectedEmitter, externCallBuildBody.releaseTargetContract.directObjectEmitter);
 assert.equal(externCallBuildBody.releaseTargetContract.libc.artifactMode, externCallBuildBody.releaseTargetContract.libc.targetMode);
 const externCallRun = await execFileAsync(zero, ["run", externCallRoot]);
 assert.equal(externCallRun.stdout, "extern c call ok\n");
 await rm(externCallRoot, { recursive: true, force: true });
 await rm(externCallShadowRoot, { recursive: true, force: true });
+
+const runtimeManifestRoot = `/tmp/zero-runtime-manifest-link-${process.pid}`;
+await rm(runtimeManifestRoot, { recursive: true, force: true });
+await mkdir(`${runtimeManifestRoot}/src`, { recursive: true });
+await writeFile(`${runtimeManifestRoot}/zero.json`, JSON.stringify({
+  package: { name: "runtime-manifest-link", version: "0.1.0" },
+  targets: { cli: { kind: "exe", main: "src/main.0" } },
+  c: { libs: { unused: { headers: ["vendor/include/unused.h"], include: ["vendor/include"], lib: ["vendor/lib/missing.o"], link: ["zero_missing_system"], mode: "static" } } }
+}, null, 2));
+await writeFile(`${runtimeManifestRoot}/src/main.0`, `pub fn main(world: World) -> Void raises {
+    check world.out.write("runtime manifest ignored\\n")
+}
+`);
+const runtimeManifestBuildOut = `${runtimeManifestRoot}/runtime-manifest`;
+const runtimeManifestBuild = await execFileAsync(zero, ["build", "--json", runtimeManifestRoot, "--out", runtimeManifestBuildOut]);
+const runtimeManifestBuildBody = JSON.parse(runtimeManifestBuild.stdout);
+assert(!runtimeManifestBuildBody.objectBackend.linkerPlan.staticLibraries.some((item) => item.endsWith("vendor/lib/missing.o")));
+assert(!runtimeManifestBuildBody.objectBackend.linkerPlan.systemLibraries.includes("zero_missing_system"));
+const runtimeManifestRun = await execFileAsync(zero, ["run", runtimeManifestRoot]);
+assert.equal(runtimeManifestRun.stdout, "runtime manifest ignored\n");
+await rm(runtimeManifestRoot, { recursive: true, force: true });
 
 const cInteropGraph = await execFileAsync(zero, ["graph", "--json", "examples/c-interop"]);
 const cInteropGraphBody = JSON.parse(cInteropGraph.stdout);

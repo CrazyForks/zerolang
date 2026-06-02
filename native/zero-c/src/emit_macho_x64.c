@@ -564,6 +564,7 @@ static bool machx64_emit_call_value(ZBuf *text, const IrFunction *fun, const IrV
   }
   size_t patch = z_x64_emit_call32_placeholder(text);
   if (total_stack > 0) z_x64_emit_add_rsp(text, total_stack);
+  if (value->external_call) machx64_emit_cast_normalize_rax(text, value->type, value->type);
   return z_macho_record_call_patch(ctx, patch, value->external_call ? 0 : value->callee_index, value, diag);
 }
 

@@ -980,6 +980,7 @@ static bool elf_emit_call_value(ZBuf *code, const IrFunction *fun, const IrValue
   }
   size_t patch = z_x64_emit_call32_placeholder(code);
   if (total_stack > 0) z_x64_emit_add_rsp(code, total_stack);
+  if (value->external_call) elf_emit_cast_normalize_rax(code, value->type, value->type);
   return z_elf_record_call_patch(ctx, patch, value->external_call ? 0 : value->callee_index, diag, value);
 }
 
