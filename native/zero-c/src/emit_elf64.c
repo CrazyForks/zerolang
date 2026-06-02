@@ -1,4 +1,5 @@
 #include "zero.h"
+#include "direct_emit.h"
 #include "elf_emit_state.h"
 #include "elf_format.h"
 #include "x64_emit.h"
@@ -2228,6 +2229,7 @@ typedef struct {
 static bool elf_validate_executable_ir(const IrProgram *ir, ElfExeBuild *build, ZDiag *diag) {
   if (!ir) return elf_diag(diag, "direct ELF64 executable backend requires MIR", 1, 1, "missing MIR");
   if (!ir->mir_valid) return elf_ir_diag(diag, ir);
+  if (!z_direct_exe_reject_c_import_calls(ir, diag, "ELF64")) return false;
   if (!elf_find_executable_main(ir, diag, &build->main_index)) return false;
   for (size_t i = 0; i < ir->function_len; i++) {
     if (!elf_validate_function(&ir->functions[i], diag)) return false;

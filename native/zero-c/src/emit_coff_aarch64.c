@@ -2,6 +2,7 @@
 #include "aarch64_direct.h"
 #include "aarch64_emit.h"
 #include "coff_format.h"
+#include "direct_emit.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -315,6 +316,7 @@ bool z_emit_coff_aarch64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag 
     z_diag_set_backend_blocker(diag, &program->backend_blocker);
     return ok;
   }
+  if (!z_direct_exe_reject_c_import_calls(program, diag, "COFF AArch64")) return false;
 
   unsigned main_index = 0;
   if (!z_aarch64_direct_find_main(program, &main_index, diag)) return false;

@@ -1,6 +1,7 @@
 #include "zero.h"
 #include "coff_emit_state.h"
 #include "coff_format.h"
+#include "direct_emit.h"
 #include "x64_emit.h"
 
 #include <stdint.h>
@@ -1236,6 +1237,7 @@ bool z_emit_coff_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *dia
     z_diag_set_backend_blocker(diag, &program->backend_blocker);
     return ok;
   }
+  if (!z_direct_exe_reject_c_import_calls(program, diag, "COFF x64")) return false;
   unsigned main_index = 0;
   if (!coff_find_executable_main(program, diag, &main_index)) return false;
   for (size_t i = 0; i < program->function_len; i++) {

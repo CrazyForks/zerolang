@@ -1,6 +1,7 @@
 #include "zero.h"
 #include "aarch64_direct.h"
 #include "aarch64_emit.h"
+#include "direct_emit.h"
 #include "elf_format.h"
 
 #include <stdint.h>
@@ -291,6 +292,7 @@ bool z_emit_elf_aarch64_exe_from_ir(const IrProgram *ir, ZBuf *out, ZDiag *diag)
     z_diag_set_backend_blocker(diag, &ir->backend_blocker);
     return ok;
   }
+  if (!z_direct_exe_reject_c_import_calls(ir, diag, "AArch64 ELF")) return false;
   unsigned main_index = 0;
   if (!z_aarch64_direct_find_main(ir, &main_index, diag)) return false;
 

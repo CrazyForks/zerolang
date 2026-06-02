@@ -1,4 +1,5 @@
 #include "zero.h"
+#include "direct_emit.h"
 #include "macho_emit_state.h"
 #include "macho_format.h"
 #include "x64_emit.h"
@@ -1434,6 +1435,7 @@ bool z_emit_macho_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *di
   if (!program || !out) return machx64_diag(diag, "direct x86_64 Mach-O executable backend received no program");
   unsigned main_index = 0;
   if (!machx64_validate_exe_program(program, &main_index, diag)) return false;
+  if (!z_direct_exe_reject_c_import_calls(program, diag, "x86_64 Mach-O")) return false;
   MachX64ExeBuild build;
   if (!machx64_exe_build_init(&build, program, main_index, diag)) return false;
   bool ok = machx64_exe_emit_functions(&build, program, diag) && machx64_exe_validate_runtime(&build, diag);

@@ -1,5 +1,6 @@
 #include "zero.h"
 #include "aarch64_emit.h"
+#include "direct_emit.h"
 #include "macho_emit_state.h"
 #include "macho_format.h"
 
@@ -1828,6 +1829,7 @@ bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag
   if (!program || !out) return macho_diag(diag, "direct Mach-O executable backend received no program");
   unsigned main_index = 0;
   if (!macho_validate_exe_program(program, &main_index, diag)) return false;
+  if (!z_direct_exe_reject_c_import_calls(program, diag, "AArch64 Mach-O")) return false;
   MachOExeBuild build;
   if (!macho_exe_build_init(&build, program, main_index, diag)) return false;
   bool ok = macho_exe_emit_functions(&build, program, diag) && macho_exe_validate_runtime(&build, diag);

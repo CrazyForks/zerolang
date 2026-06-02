@@ -41,6 +41,7 @@ const fileBudgets = {
   "native/zero-c/src/coff_emit_state.c": { maxLines: 150, maxStrcmpCalls: 0 },
   "native/zero-c/src/coff_emit_state.h": { maxLines: 70, maxStrcmpCalls: 0 },
   "native/zero-c/src/direct_emit.c": { maxLines: 35, maxStrcmpCalls: 0 },
+  "native/zero-c/src/direct_emit.h": { maxLines: 30, maxStrcmpCalls: 0 },
   "native/zero-c/src/direct_metrics.c": { maxLines: 35, maxStrcmpCalls: 0 },
   "native/zero-c/src/elf_format.c": { maxLines: 220, maxStrcmpCalls: 0 },
   "native/zero-c/src/elf_format.h": { maxLines: 60, maxStrcmpCalls: 0 },
