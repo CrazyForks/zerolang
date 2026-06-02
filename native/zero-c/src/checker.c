@@ -5185,7 +5185,7 @@ static bool resolve_stdlib_call(const Expr *call, ZCallResolution *out) {
   return resolve_stdlib_callee(call->left, call, out);
 }
 
-static bool resolve_c_import_call(const Program *program, const Expr *call, Scope *scope, ZCallResolution *out) {
+static bool resolve_c_import_call(const Program *program, const ZTargetInfo *target, const Expr *call, Scope *scope, ZCallResolution *out) {
   if (!program || !call || call->kind != EXPR_CALL || !call->left || call->left->kind != EXPR_MEMBER ||
       !call->left->left || call->left->left->kind != EXPR_IDENT || !out) {
     return false;
@@ -5194,7 +5194,7 @@ static bool resolve_c_import_call(const Program *program, const Expr *call, Scop
   const char *symbol = call->left->text;
   if (scope_has(scope, alias)) return false;
   ZCImportFunction function = {0};
-  if (!z_c_import_find_function(program, alias, symbol, &function, NULL)) return false;
+  if (!z_c_import_find_function_for_target(program, target, alias, symbol, &function, NULL)) return false;
   z_call_resolution_init(out);
   out->kind = Z_CALL_C_IMPORT;
   out->call_expr = call;
@@ -5622,7 +5622,7 @@ static bool resolve_expr_call_for_type(CheckContext *ctx, const Program *program
     resolve_constrained_interface_call(program, ctx ? ctx->function : NULL, call, resolution) ||
     resolve_receiver_shape_call(ctx, program, call, scope, NULL, resolution) ||
     resolve_choice_constructor_call(program, call, resolution) ||
-    resolve_c_import_call(program, call, scope, resolution) ||
+    resolve_c_import_call(program, check_context_target(ctx), call, scope, resolution) ||
     resolve_stdlib_call(call, resolution);
 }
 
@@ -7033,7 +7033,7 @@ static bool check_c_import_call_expected(CheckContext *ctx, const Program *progr
   if (!z_c_import_alias_exists(program, alias)) return true;
   *handled = true;
   ZCImportFunction function = {0};
-  if (!z_c_import_find_function(program, alias, symbol, &function, diag)) {
+  if (!z_c_import_find_function_for_target(program, check_context_target(ctx), alias, symbol, &function, diag)) {
     char actual[192];
     snprintf(actual, sizeof(actual), "%s.%s", alias ? alias : "<alias>", symbol ? symbol : "<symbol>");
     return set_diag_detail(diag, 8004, "extern c function is not declared in imported header", expr->line, expr->column, "function declared in extern c header", actual, "call a symbol from the imported header or update the header");
@@ -8709,7 +8709,7 @@ static bool call_facts_resolve_stdlib_call(CheckContext *ctx, const Program *pro
 }
 
 static bool call_facts_resolve_c_import_call(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZCallResolution *out) {
-  if (!resolve_c_import_call(program, expr, scope, out)) return false;
+  if (!resolve_c_import_call(program, check_context_target(ctx), expr, scope, out)) return false;
   if (z_call_resolution_expected_arg_count(out) != expr->args.len) {
     z_call_resolution_free(out);
     return false;
@@ -11440,7 +11440,7 @@ static bool c_header_has_function_like_macro(const char *header) {
   return false;
 }
 
-static bool validate_c_imports(const Program *program, ZDiag *diag) {
+static bool validate_c_imports(const Program *program, const ZTargetInfo *target, ZDiag *diag) {
   for (size_t i = 0; program && i < program->c_imports.len; i++) {
     const CImport *import = &program->c_imports.items[i];
     ZDiag read_diag = {0};
@@ -11466,7 +11466,7 @@ static bool validate_c_imports(const Program *program, ZDiag *diag) {
       reason = "bitfield";
     } else {
       ZCImportFunctionVec functions = {0};
-      z_c_header_parse_functions(surface ? surface : header, &functions);
+      z_c_header_parse_functions_for_target(surface ? surface : header, target, &functions);
       for (size_t fn = 0; fn < functions.len; fn++) {
         if (functions.items[fn].old_style_params) {
           unsupported = true;
@@ -11492,7 +11492,7 @@ static bool check_program_internal(const Program *program, bool require_entrypoi
   CheckContext *ctx = &check_ctx;
   const Function *main_fun = NULL;
   bool has_test = false;
-  if (!validate_c_imports(program, diag)) return false;
+  if (!validate_c_imports(program, check_ctx.target, diag)) return false;
   for (size_t i = 0; i < program->aliases.len; i++) {
     const TypeAlias *alias = &program->aliases.items[i];
     if (!validate_type_form(alias->target, diag, alias->line, alias->column)) return false;

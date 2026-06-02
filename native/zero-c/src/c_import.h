@@ -32,7 +32,9 @@ void z_c_import_function_vec_free(ZCImportFunctionVec *vec);
 char *z_c_header_strip_comments(const char *header);
 bool z_c_type_to_zero(const char *c_type, char *out, size_t out_len);
 bool z_c_header_parse_functions(const char *header, ZCImportFunctionVec *out);
+bool z_c_header_parse_functions_for_target(const char *header, const ZTargetInfo *target, ZCImportFunctionVec *out);
 bool z_c_import_alias_exists(const Program *program, const char *alias);
 bool z_c_import_find_function(const Program *program, const char *alias, const char *symbol, ZCImportFunction *out, ZDiag *diag);
+bool z_c_import_find_function_for_target(const Program *program, const ZTargetInfo *target, const char *alias, const char *symbol, ZCImportFunction *out, ZDiag *diag);
 
 #endif

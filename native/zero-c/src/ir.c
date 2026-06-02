@@ -1487,7 +1487,7 @@ static bool ir_lower_c_import_call(const Program *program, IrProgram *ir, const 
   if (ir_program_scope_name_shadows_c_import_alias(program, alias)) return false;
   if (!z_c_import_alias_exists(program, alias)) return false;
   ZCImportFunction function = {0};
-  if (!z_c_import_find_function(program, alias, symbol, &function, NULL)) {
+  if (!z_c_import_find_function_for_target(program, ir->target, alias, symbol, &function, NULL)) {
     ir_mark_unsupported(ir, "direct backend extern c symbol is missing from imported header", expr->line, expr->column, symbol ? symbol : "missing C symbol");
     return true;
   }
@@ -4075,8 +4075,9 @@ static void push_function_clone(FunctionVec *vec, const Function *source) {
   };
 }
 
-IrProgram z_lower_program_with_source(const Program *program, const SourceInput *input) {
+IrProgram z_lower_program_with_source(const Program *program, const SourceInput *input, const ZTargetInfo *target) {
   IrProgram ir = {0};
+  ir.target = target;
   for (size_t i = 0; i < program->c_imports.len; i++) {
     CImport *source = &program->c_imports.items[i];
     ir.program.c_imports.items = ir_grow_items(ir.program.c_imports.items, ir.program.c_imports.len, &ir.program.c_imports.cap, 4, sizeof(CImport));
@@ -4175,7 +4176,7 @@ IrProgram z_lower_program_with_source(const Program *program, const SourceInput 
 }
 
 IrProgram z_lower_program(const Program *program) {
-  return z_lower_program_with_source(program, NULL);
+  return z_lower_program_with_source(program, NULL, NULL);
 }
 
 void z_free_ir_program(IrProgram *program) {

@@ -8978,9 +8978,9 @@ static void append_c_import_function_model_json(ZBuf *buf, const ZCImportFunctio
   zbuf_append(buf, "}");
 }
 
-static void append_c_header_functions_json(ZBuf *buf, const char *header) {
+static void append_c_header_functions_json(ZBuf *buf, const char *header, const ZTargetInfo *target) {
   ZCImportFunctionVec functions = {0};
-  z_c_header_parse_functions(header, &functions);
+  z_c_header_parse_functions_for_target(header, target, &functions);
   zbuf_append(buf, "[");
   for (size_t i = 0; i < functions.len; i++) {
     if (i > 0) zbuf_append(buf, ",");
@@ -9170,9 +9170,9 @@ static void append_c_header_enums_json(ZBuf *buf, const char *header) {
   zbuf_append(buf, "]");
 }
 
-static void append_c_header_model_json(ZBuf *buf, const char *header) {
+static void append_c_header_model_json(ZBuf *buf, const char *header, const ZTargetInfo *target) {
   zbuf_append(buf, "{\"functions\":");
-  append_c_header_functions_json(buf, header);
+  append_c_header_functions_json(buf, header, target);
   zbuf_append(buf, ",\"constants\":");
   append_c_header_constants_json(buf, header);
   zbuf_append(buf, ",\"structs\":");
@@ -9216,7 +9216,7 @@ static void append_c_imports_json(ZBuf *buf, const Program *program, const ZTarg
     zbuf_append(buf, ",\"typedefs\":");
     zbuf_appendf(buf, "%zu", count_text_occurrences(header, "typedef "));
     zbuf_append(buf, "},\"typedModel\":");
-    append_c_header_model_json(buf, header);
+    append_c_header_model_json(buf, header, target);
     zbuf_appendf(buf, ",\"target\":\"%s\"}", target ? target->name : "host");
     free(header);
   }
@@ -9632,7 +9632,7 @@ static void append_target_readiness_json(ZBuf *buf, SourceInput *input, const Pr
   IrProgram ir = {0};
   bool ready = true;
   long long phase_started = now_ms();
-  ir = z_lower_program_with_source(program, input);
+  ir = z_lower_program_with_source(program, input, target);
   if (input) input->lower_ms = now_ms() - phase_started;
   apply_ir_metrics_to_input(input, &ir, target);
 
@@ -11120,7 +11120,7 @@ static int run_graph_size_command(const Command *command, const ZTargetInfo *tar
   }
 
   long long phase_started = now_ms();
-  IrProgram ir = z_lower_program_with_source(&program, &input);
+  IrProgram ir = z_lower_program_with_source(&program, &input, target);
   input.lower_ms = now_ms() - phase_started;
   apply_ir_metrics_to_input(&input, &ir, target);
   GraphSizeSource graph_source = {.graph = &graph, .artifact = command->input, .lowering = "direct-program-graph"};
@@ -11905,7 +11905,7 @@ int main(int argc, char **argv) {
   }
 
   long long phase_started = now_ms();
-  IrProgram ir = z_lower_program_with_source(&program, &input);
+  IrProgram ir = z_lower_program_with_source(&program, &input, target);
   input.lower_ms = now_ms() - phase_started;
   apply_ir_metrics_to_input(&input, &ir, target);
   if (strcmp(command.command, "mem") == 0) {

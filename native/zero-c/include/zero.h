@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+typedef struct ZTargetInfo ZTargetInfo;
+
 typedef struct {
   char *data;
   size_t len;
@@ -588,6 +590,7 @@ typedef struct {
 
 typedef struct {
   Program program;
+  const ZTargetInfo *target;
   IrFunction *functions;
   size_t function_len;
   size_t function_cap;
@@ -735,7 +738,7 @@ typedef struct {
   size_t c_lib_count;
 } ZManifest;
 
-typedef struct {
+struct ZTargetInfo {
   const char *name;
   const char *aliases;
   const char *os;
@@ -748,7 +751,7 @@ typedef struct {
   const char *object_format;
   const char *linker;
   const char *capabilities;
-} ZTargetInfo;
+};
 
 typedef enum {
   Z_DIRECT_BACKEND_NONE,
@@ -866,7 +869,7 @@ ZMetaCacheStats z_meta_cache_stats(void);
 void z_backend_blocker_set(ZBackendBlocker *blocker, const char *target, const char *object_format, const char *backend, const char *stage, const char *unsupported_feature);
 void z_diag_set_backend_blocker(ZDiag *diag, const ZBackendBlocker *blocker);
 IrProgram z_lower_program(const Program *program);
-IrProgram z_lower_program_with_source(const Program *program, const SourceInput *input);
+IrProgram z_lower_program_with_source(const Program *program, const SourceInput *input, const ZTargetInfo *target);
 void z_free_ir_program(IrProgram *program);
 bool z_emit_elf64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
 bool z_emit_elf64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);

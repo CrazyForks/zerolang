@@ -299,18 +299,262 @@ static bool c_import_preproc_active(const CImportPreprocFrame *frames, size_t de
   return depth == 0 || (frames[depth - 1].parent_active && frames[depth - 1].active);
 }
 
-static bool c_import_pp_expr_mentions_cplusplus(const char *expr) {
-  return expr && strstr(expr, "__cplusplus") != NULL;
+typedef struct {
+  char **items;
+  size_t len;
+  size_t cap;
+} CImportNameVec;
+
+typedef struct {
+  const ZTargetInfo *target;
+  CImportNameVec defines;
+  CImportNameVec truthy_defines;
+  CImportNameVec undefines;
+} CImportPreprocEnv;
+
+static void c_import_name_vec_free(CImportNameVec *vec) {
+  if (!vec) return;
+  for (size_t i = 0; i < vec->len; i++) free(vec->items[i]);
+  free(vec->items);
+  *vec = (CImportNameVec){0};
 }
 
-static bool c_import_pp_expr_active(const char *expr) {
+static bool c_import_name_vec_contains(const CImportNameVec *vec, const char *name) {
+  if (!vec || !name) return false;
+  for (size_t i = 0; i < vec->len; i++) {
+    if (vec->items[i] && strcmp(vec->items[i], name) == 0) return true;
+  }
+  return false;
+}
+
+static void c_import_name_vec_remove(CImportNameVec *vec, const char *name) {
+  if (!vec || !name) return;
+  for (size_t i = 0; i < vec->len; i++) {
+    if (!vec->items[i] || strcmp(vec->items[i], name) != 0) continue;
+    free(vec->items[i]);
+    if (i + 1 < vec->len) memmove(&vec->items[i], &vec->items[i + 1], (vec->len - i - 1) * sizeof(char *));
+    vec->len--;
+    return;
+  }
+}
+
+static void c_import_name_vec_add(CImportNameVec *vec, const char *name) {
+  if (!vec || !name || !name[0] || c_import_name_vec_contains(vec, name)) return;
+  if (vec->len == vec->cap) {
+    vec->cap = z_grow_capacity(vec->cap, vec->len + 1, 8);
+    vec->items = z_checked_reallocarray(vec->items, vec->cap, sizeof(char *));
+  }
+  vec->items[vec->len++] = z_strdup(name);
+}
+
+static void c_import_preproc_env_free(CImportPreprocEnv *env) {
+  if (!env) return;
+  c_import_name_vec_free(&env->defines);
+  c_import_name_vec_free(&env->truthy_defines);
+  c_import_name_vec_free(&env->undefines);
+}
+
+static char *c_import_parse_macro_name_copy(const char *text) {
+  const char *cursor = text ? text : "";
+  while (isspace((unsigned char)*cursor)) cursor++;
+  const char *start = cursor;
+  while (c_ident_char(*cursor)) cursor++;
+  return start < cursor ? z_strndup(start, (size_t)(cursor - start)) : z_strdup("");
+}
+
+static char *c_import_parse_macro_definition_copy(const char *text, char **out_value) {
+  const char *cursor = text ? text : "";
+  while (isspace((unsigned char)*cursor)) cursor++;
+  const char *start = cursor;
+  while (c_ident_char(*cursor)) cursor++;
+  char *name = start < cursor ? z_strndup(start, (size_t)(cursor - start)) : z_strdup("");
+  while (isspace((unsigned char)*cursor)) cursor++;
+  if (out_value) *out_value = trim_span_copy(cursor, cursor + strlen(cursor));
+  return name;
+}
+
+static bool c_import_string_eq(const char *left, const char *right) {
+  return left && right && strcmp(left, right) == 0;
+}
+
+static bool c_import_name_in_list(const char *name, const char *const *items, size_t len) {
+  if (!name) return false;
+  for (size_t i = 0; i < len; i++) {
+    if (strcmp(name, items[i]) == 0) return true;
+  }
+  return false;
+}
+
+static bool c_import_target_macro_defined(const ZTargetInfo *target, const char *name) {
+  if (!name || !name[0]) return false;
+  if (strcmp(name, "__cplusplus") == 0) return false;
+  if (strcmp(name, "__STDC__") == 0 || strcmp(name, "__STDC_HOSTED__") == 0) return true;
+  if (!target) return false;
+
+  const bool is_windows = c_import_string_eq(target->os, "windows");
+  const bool is_linux = c_import_string_eq(target->os, "linux");
+  const bool is_macos = c_import_string_eq(target->os, "macos");
+  const bool is_x86_64 = c_import_string_eq(target->arch, "x86_64");
+  const bool is_aarch64 = c_import_string_eq(target->arch, "aarch64");
+  const bool is_msvc = c_import_string_eq(target->abi, "msvc");
+  const bool is_gnu = c_import_string_eq(target->abi, "gnu");
+
+  static const char *const windows_names[] = {"_WIN32", "WIN32", "_WIN64", "WIN64", "__WIN32__", "__WIN64__"};
+  static const char *const linux_names[] = {"__linux__", "__linux", "linux"};
+  static const char *const macos_names[] = {"__APPLE__", "__MACH__", "__APPLE_CC__"};
+  static const char *const x86_64_names[] = {"__x86_64__", "__x86_64", "__amd64__", "__amd64"};
+  static const char *const msvc_x86_64_names[] = {"_M_X64", "_M_AMD64"};
+  static const char *const aarch64_names[] = {"__aarch64__"};
+  static const char *const macos_aarch64_names[] = {"__arm64__"};
+  static const char *const msvc_aarch64_names[] = {"_M_ARM64"};
+
+  if (is_windows && c_import_name_in_list(name, windows_names, sizeof(windows_names) / sizeof(windows_names[0]))) return true;
+  if (is_linux && c_import_name_in_list(name, linux_names, sizeof(linux_names) / sizeof(linux_names[0]))) return true;
+  if (is_macos && c_import_name_in_list(name, macos_names, sizeof(macos_names) / sizeof(macos_names[0]))) return true;
+  if (is_x86_64 && c_import_name_in_list(name, x86_64_names, sizeof(x86_64_names) / sizeof(x86_64_names[0]))) return true;
+  if (is_msvc && is_x86_64 && c_import_name_in_list(name, msvc_x86_64_names, sizeof(msvc_x86_64_names) / sizeof(msvc_x86_64_names[0]))) return true;
+  if (is_aarch64 && c_import_name_in_list(name, aarch64_names, sizeof(aarch64_names) / sizeof(aarch64_names[0]))) return true;
+  if (is_macos && is_aarch64 && c_import_name_in_list(name, macos_aarch64_names, sizeof(macos_aarch64_names) / sizeof(macos_aarch64_names[0]))) return true;
+  if (is_msvc && is_aarch64 && c_import_name_in_list(name, msvc_aarch64_names, sizeof(msvc_aarch64_names) / sizeof(msvc_aarch64_names[0]))) return true;
+  if (!is_windows && (strcmp(name, "__LP64__") == 0 || strcmp(name, "_LP64") == 0)) return true;
+  if (is_msvc && strcmp(name, "_MSC_VER") == 0) return true;
+  if (is_gnu && (strcmp(name, "__GLIBC__") == 0 || strcmp(name, "__gnu_linux__") == 0)) return true;
+  return false;
+}
+
+static bool c_import_macro_defined(const CImportPreprocEnv *env, const char *name) {
+  if (!env || !name || !name[0]) return false;
+  if (c_import_name_vec_contains(&env->undefines, name)) return false;
+  if (c_import_name_vec_contains(&env->defines, name)) return true;
+  return c_import_target_macro_defined(env->target, name);
+}
+
+static bool c_import_macro_expr_true(const CImportPreprocEnv *env, const char *name) {
+  if (!env || !name || !name[0]) return false;
+  if (c_import_name_vec_contains(&env->undefines, name)) return false;
+  if (c_import_target_macro_defined(env->target, name)) return true;
+  if (c_import_name_vec_contains(&env->defines, name)) return c_import_name_vec_contains(&env->truthy_defines, name);
+  return false;
+}
+
+static void c_import_define_macro(CImportPreprocEnv *env, const char *name, bool truthy) {
+  if (!env || !name || !name[0]) return;
+  c_import_name_vec_remove(&env->undefines, name);
+  c_import_name_vec_add(&env->defines, name);
+  if (truthy) c_import_name_vec_add(&env->truthy_defines, name);
+  else c_import_name_vec_remove(&env->truthy_defines, name);
+}
+
+static void c_import_undef_macro(CImportPreprocEnv *env, const char *name) {
+  if (!env || !name || !name[0]) return;
+  c_import_name_vec_remove(&env->defines, name);
+  c_import_name_vec_remove(&env->truthy_defines, name);
+  c_import_name_vec_add(&env->undefines, name);
+}
+
+typedef struct {
+  const char *cursor;
+  const CImportPreprocEnv *env;
+  bool valid;
+} CImportPPExprParser;
+
+static void c_import_pp_skip_space(CImportPPExprParser *parser) {
+  while (parser && isspace((unsigned char)*parser->cursor)) parser->cursor++;
+}
+
+static bool c_import_pp_consume(CImportPPExprParser *parser, const char *token) {
+  if (!parser || !token) return false;
+  c_import_pp_skip_space(parser);
+  size_t len = strlen(token);
+  if (strncmp(parser->cursor, token, len) != 0) return false;
+  parser->cursor += len;
+  return true;
+}
+
+static bool c_import_pp_parse_or(CImportPPExprParser *parser);
+
+static bool c_import_pp_parse_macro_defined(CImportPPExprParser *parser) {
+  c_import_pp_skip_space(parser);
+  bool parenthesized = c_import_pp_consume(parser, "(");
+  c_import_pp_skip_space(parser);
+  const char *start = parser->cursor;
+  while (c_ident_char(*parser->cursor)) parser->cursor++;
+  if (start == parser->cursor) {
+    parser->valid = false;
+    return false;
+  }
+  char *name = z_strndup(start, (size_t)(parser->cursor - start));
+  bool defined = c_import_macro_defined(parser->env, name);
+  free(name);
+  if (parenthesized && !c_import_pp_consume(parser, ")")) parser->valid = false;
+  return defined;
+}
+
+static bool c_import_pp_parse_primary(CImportPPExprParser *parser) {
+  c_import_pp_skip_space(parser);
+  if (c_import_pp_consume(parser, "(")) {
+    bool value = c_import_pp_parse_or(parser);
+    if (!c_import_pp_consume(parser, ")")) parser->valid = false;
+    return value;
+  }
+  if (isdigit((unsigned char)*parser->cursor)) {
+    char *end = NULL;
+    unsigned long long value = strtoull(parser->cursor, &end, 0);
+    if (!end || end == parser->cursor) {
+      parser->valid = false;
+      return false;
+    }
+    parser->cursor = end;
+    return value != 0;
+  }
+  if (c_ident_char(*parser->cursor)) {
+    const char *start = parser->cursor;
+    while (c_ident_char(*parser->cursor)) parser->cursor++;
+    char *name = z_strndup(start, (size_t)(parser->cursor - start));
+    bool value = false;
+    if (strcmp(name, "defined") == 0) {
+      free(name);
+      return c_import_pp_parse_macro_defined(parser);
+    }
+    if (strcmp(name, "true") == 0) value = true;
+    else if (strcmp(name, "false") == 0) value = false;
+    else value = c_import_macro_expr_true(parser->env, name);
+    free(name);
+    return value;
+  }
+  parser->valid = false;
+  return false;
+}
+
+static bool c_import_pp_parse_unary(CImportPPExprParser *parser) {
+  if (c_import_pp_consume(parser, "!")) return !c_import_pp_parse_unary(parser);
+  return c_import_pp_parse_primary(parser);
+}
+
+static bool c_import_pp_parse_and(CImportPPExprParser *parser) {
+  bool value = c_import_pp_parse_unary(parser);
+  while (c_import_pp_consume(parser, "&&")) {
+    bool right = c_import_pp_parse_unary(parser);
+    value = value && right;
+  }
+  return value;
+}
+
+static bool c_import_pp_parse_or(CImportPPExprParser *parser) {
+  bool value = c_import_pp_parse_and(parser);
+  while (c_import_pp_consume(parser, "||")) {
+    bool right = c_import_pp_parse_and(parser);
+    value = value || right;
+  }
+  return value;
+}
+
+static bool c_import_pp_expr_active(const CImportPreprocEnv *env, const char *expr) {
   if (!expr) return false;
-  char *trimmed = trim_span_copy(expr, expr + strlen(expr));
-  bool active = false;
-  if (strcmp(trimmed, "1") == 0 || strcmp(trimmed, "true") == 0 || strcmp(trimmed, "!defined(__cplusplus)") == 0 || strcmp(trimmed, "! defined(__cplusplus)") == 0) active = true;
-  else if (strcmp(trimmed, "0") == 0 || strcmp(trimmed, "false") == 0 || c_import_pp_expr_mentions_cplusplus(trimmed)) active = false;
-  free(trimmed);
-  return active;
+  CImportPPExprParser parser = {.cursor = expr, .env = env, .valid = true};
+  bool value = c_import_pp_parse_or(&parser);
+  c_import_pp_skip_space(&parser);
+  return parser.valid && *parser.cursor == 0 && value;
 }
 
 static void c_import_preproc_push(CImportPreprocFrame **frames, size_t *depth, size_t *cap, bool parent_active, bool active) {
@@ -321,28 +565,32 @@ static void c_import_preproc_push(CImportPreprocFrame **frames, size_t *depth, s
   (*frames)[(*depth)++] = (CImportPreprocFrame){.parent_active = parent_active, .active = active, .branch_taken = active};
 }
 
-static bool c_import_handle_preprocessor_line(const char *line, CImportPreprocFrame **frames, size_t *depth, size_t *cap) {
+static bool c_import_handle_preprocessor_line(const char *line, CImportPreprocFrame **frames, size_t *depth, size_t *cap, CImportPreprocEnv *env) {
   char directive[16];
   const char *rest = NULL;
   if (!c_import_parse_directive_word(line, directive, sizeof(directive), &rest)) return false;
   if (strcmp(directive, "if") == 0) {
     bool parent_active = c_import_preproc_active(*frames, *depth);
-    c_import_preproc_push(frames, depth, cap, parent_active, parent_active && c_import_pp_expr_active(rest));
+    c_import_preproc_push(frames, depth, cap, parent_active, parent_active && c_import_pp_expr_active(env, rest));
     return true;
   }
   if (strcmp(directive, "ifdef") == 0) {
     bool parent_active = c_import_preproc_active(*frames, *depth);
-    c_import_preproc_push(frames, depth, cap, parent_active, false);
+    char *name = c_import_parse_macro_name_copy(rest);
+    c_import_preproc_push(frames, depth, cap, parent_active, parent_active && c_import_macro_defined(env, name));
+    free(name);
     return true;
   }
   if (strcmp(directive, "ifndef") == 0) {
     bool parent_active = c_import_preproc_active(*frames, *depth);
-    c_import_preproc_push(frames, depth, cap, parent_active, parent_active);
+    char *name = c_import_parse_macro_name_copy(rest);
+    c_import_preproc_push(frames, depth, cap, parent_active, parent_active && !c_import_macro_defined(env, name));
+    free(name);
     return true;
   }
   if (strcmp(directive, "elif") == 0 && *depth > 0) {
     CImportPreprocFrame *frame = &(*frames)[*depth - 1];
-    bool active = frame->parent_active && !frame->branch_taken && c_import_pp_expr_active(rest);
+    bool active = frame->parent_active && !frame->branch_taken && c_import_pp_expr_active(env, rest);
     frame->active = active;
     frame->branch_taken = frame->branch_taken || active;
     return true;
@@ -355,6 +603,20 @@ static bool c_import_handle_preprocessor_line(const char *line, CImportPreprocFr
   }
   if (strcmp(directive, "endif") == 0 && *depth > 0) {
     (*depth)--;
+    return true;
+  }
+  if (strcmp(directive, "define") == 0 && c_import_preproc_active(*frames, *depth)) {
+    char *value = NULL;
+    char *name = c_import_parse_macro_definition_copy(rest, &value);
+    c_import_define_macro(env, name, value && value[0] ? c_import_pp_expr_active(env, value) : false);
+    free(value);
+    free(name);
+    return true;
+  }
+  if (strcmp(directive, "undef") == 0 && c_import_preproc_active(*frames, *depth)) {
+    char *name = c_import_parse_macro_name_copy(rest);
+    c_import_undef_macro(env, name);
+    free(name);
     return true;
   }
   return true;
@@ -371,13 +633,14 @@ static bool c_import_linkage_wrapper_line(const char *line) {
   return *cursor == 0 || strncmp(cursor, "//", 2) == 0 || strncmp(cursor, "/*", 2) == 0;
 }
 
-bool z_c_header_parse_functions(const char *header, ZCImportFunctionVec *out) {
+bool z_c_header_parse_functions_for_target(const char *header, const ZTargetInfo *target, ZCImportFunctionVec *out) {
   if (!out) return false;
   char *stripped = z_c_header_strip_comments(header);
   const char *cursor = stripped ? stripped : "";
   CImportPreprocFrame *frames = NULL;
   size_t preproc_depth = 0;
   size_t preproc_cap = 0;
+  CImportPreprocEnv env = {.target = target};
   ZBuf declaration;
   zbuf_init(&declaration);
   while (*cursor) {
@@ -386,7 +649,7 @@ bool z_c_header_parse_functions(const char *header, ZCImportFunctionVec *out) {
     char *line = trim_span_copy(cursor, line_end);
     bool wrapper_line = c_import_linkage_wrapper_line(line);
     if (line[0] == '#') {
-      c_import_handle_preprocessor_line(line, &frames, &preproc_depth, &preproc_cap);
+      c_import_handle_preprocessor_line(line, &frames, &preproc_depth, &preproc_cap, &env);
     } else if (c_import_preproc_active(frames, preproc_depth) && !wrapper_line) {
       if (line[0]) c_import_append_declaration_fragment(&declaration, line);
       c_import_consume_complete_declarations(&declaration, out);
@@ -401,9 +664,14 @@ bool z_c_header_parse_functions(const char *header, ZCImportFunctionVec *out) {
     cursor = *line_end ? line_end + 1 : line_end;
   }
   zbuf_free(&declaration);
+  c_import_preproc_env_free(&env);
   free(frames);
   free(stripped);
   return true;
+}
+
+bool z_c_header_parse_functions(const char *header, ZCImportFunctionVec *out) {
+  return z_c_header_parse_functions_for_target(header, NULL, out);
 }
 
 static void c_import_function_clone(ZCImportFunction *out, const ZCImportFunction *source) {
@@ -437,7 +705,7 @@ static const char *c_import_read_path(const CImport *import) {
   return import && import->resolved_header && import->resolved_header[0] ? import->resolved_header : (import ? import->header : NULL);
 }
 
-bool z_c_import_find_function(const Program *program, const char *alias, const char *symbol, ZCImportFunction *out, ZDiag *diag) {
+bool z_c_import_find_function_for_target(const Program *program, const ZTargetInfo *target, const char *alias, const char *symbol, ZCImportFunction *out, ZDiag *diag) {
   if (!program || !alias || !symbol || !out) return false;
   for (size_t i = 0; i < program->c_imports.len; i++) {
     const CImport *import = &program->c_imports.items[i];
@@ -459,7 +727,7 @@ bool z_c_import_find_function(const Program *program, const char *alias, const c
       return false;
     }
     ZCImportFunctionVec functions = {0};
-    z_c_header_parse_functions(header, &functions);
+    z_c_header_parse_functions_for_target(header, target, &functions);
     free(header);
     for (size_t fn = 0; fn < functions.len; fn++) {
       if (functions.items[fn].name && strcmp(functions.items[fn].name, symbol) == 0) {
@@ -475,4 +743,8 @@ bool z_c_import_find_function(const Program *program, const char *alias, const c
     z_c_import_function_vec_free(&functions);
   }
   return false;
+}
+
+bool z_c_import_find_function(const Program *program, const char *alias, const char *symbol, ZCImportFunction *out, ZDiag *diag) {
+  return z_c_import_find_function_for_target(program, NULL, alias, symbol, out, diag);
 }

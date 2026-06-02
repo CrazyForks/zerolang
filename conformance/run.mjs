@@ -3492,6 +3492,27 @@ assert(simpleHeaderImport.typedModel.enums.some((item) => item.name === "zero_c_
 assert(simpleHeaderImport.typedModel.typedefs.some((item) => item.name === "zero_c_int" && item.target === "int"));
 assert.equal(typeof simpleHeaderImport.cache.target, "string");
 
+const cImportTargetLinux = await execFileAsync(zero, ["check", "--json", "--emit", "obj", "--target", "linux-musl-x64", "conformance/check/pass/c-import-target-linux.0"]);
+const cImportTargetLinuxBody = JSON.parse(cImportTargetLinux.stdout);
+assert.equal(cImportTargetLinuxBody.ok, true);
+assert.equal(cImportTargetLinuxBody.targetReadiness.ok, true);
+assert.equal(cImportTargetLinuxBody.targetReadiness.buildable, true);
+const cImportTargetWin = await execFileAsync(zero, ["check", "--json", "--emit", "obj", "--target", "win32-x64.exe", "conformance/check/pass/c-import-target-win.0"]);
+const cImportTargetWinBody = JSON.parse(cImportTargetWin.stdout);
+assert.equal(cImportTargetWinBody.ok, true);
+assert.equal(cImportTargetWinBody.targetReadiness.ok, true);
+assert.equal(cImportTargetWinBody.targetReadiness.buildable, true);
+const cImportTargetLinuxGraph = await execFileAsync(zero, ["graph", "--json", "--target", "linux-musl-x64", "conformance/check/pass/c-import-target-linux.0"]);
+const cImportTargetLinuxModel = JSON.parse(cImportTargetLinuxGraph.stdout).cImports.find((item) => item.header === "conformance/c/target-conditional.h").typedModel;
+assert(cImportTargetLinuxModel.functions.some((item) => item.name === "zero_c_linux_add"));
+assert(cImportTargetLinuxModel.functions.some((item) => item.name === "zero_c_not_windows"));
+assert(!cImportTargetLinuxModel.functions.some((item) => item.name === "zero_c_windows_add"));
+const cImportTargetWinGraph = await execFileAsync(zero, ["graph", "--json", "--target", "win32-x64.exe", "conformance/check/pass/c-import-target-win.0"]);
+const cImportTargetWinModel = JSON.parse(cImportTargetWinGraph.stdout).cImports.find((item) => item.header === "conformance/c/target-conditional.h").typedModel;
+assert(cImportTargetWinModel.functions.some((item) => item.name === "zero_c_windows_add"));
+assert(!cImportTargetWinModel.functions.some((item) => item.name === "zero_c_linux_add"));
+assert(!cImportTargetWinModel.functions.some((item) => item.name === "zero_c_not_windows"));
+
 const cImportTypeShadowReadiness = await execFileAsync(zero, ["check", "--json", "--emit", "obj", "conformance/native/pass/c-import-type-shadowing.0"]);
 const cImportTypeShadowReadinessBody = JSON.parse(cImportTypeShadowReadiness.stdout);
 assert.equal(cImportTypeShadowReadinessBody.ok, true);
