@@ -10,7 +10,8 @@ ZBackendFamily z_backend_family_from_request(const char *requested_backend, cons
     if (z_direct_backend_is_request_name(requested_backend)) return Z_BACKEND_FAMILY_DIRECT;
     return Z_BACKEND_FAMILY_UNKNOWN;
   }
-  return emit_kind && strcmp(emit_kind, "llvm-ir") == 0 ? Z_BACKEND_FAMILY_LLVM : Z_BACKEND_FAMILY_DIRECT;
+  (void)emit_kind;
+  return Z_BACKEND_FAMILY_DIRECT;
 }
 
 const char *z_backend_family_name(ZBackendFamily family) {

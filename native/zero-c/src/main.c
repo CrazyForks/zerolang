@@ -4969,7 +4969,7 @@ static void init_direct_backend_diag(ZDiag *diag, const Command *command, const 
 
 static void init_direct_backend_request_mismatch_diag(ZDiag *diag, const Command *command, const SourceInput *input, const ZTargetInfo *target, const char *emit_kind) {
   const char *requested = z_backend_direct_request_name(command ? command->backend : NULL);
-  const char *selected = emit_kind && strcmp(emit_kind, "exe") == 0 ? z_direct_exe_emitter(target) : z_direct_object_emitter(target);
+  const char *selected_request = z_direct_object_emitter(target);
   memset(diag, 0, sizeof(*diag));
   diag->code = 2004;
   diag->path = input ? input->source_file : NULL;
@@ -4981,10 +4981,10 @@ static void init_direct_backend_request_mismatch_diag(ZDiag *diag, const Command
            target && target->name ? target->name : "unknown",
            emit_kind ? emit_kind : "unknown");
   snprintf(diag->expected, sizeof(diag->expected), "direct emitter %s for target %s",
-           selected && selected[0] ? selected : "none",
+           selected_request && selected_request[0] ? selected_request : "none",
            target && target->name ? target->name : "unknown");
   snprintf(diag->actual, sizeof(diag->actual), "--backend %s", requested ? requested : "");
-  snprintf(diag->help, sizeof(diag->help), "use --backend direct or --backend %s for this target", selected && selected[0] ? selected : "direct");
+  snprintf(diag->help, sizeof(diag->help), "use --backend direct or --backend %s for this target", selected_request && selected_request[0] ? selected_request : "direct");
   ZBackendBlocker blocker;
   z_backend_blocker_set(&blocker,
                         target && target->name ? target->name : "unknown",
@@ -11162,17 +11162,6 @@ static int run_graph_check_command(const Command *command, const ZTargetInfo *ta
 }
 
 static int run_graph_size_command(const Command *command, const ZTargetInfo *target, ZDiag *diag) {
-  if (command && command->emit == EMIT_LLVM_IR) {
-    if (z_backend_request_is_llvm(command->backend, emit_kind_name(command->emit))) z_backend_init_llvm_unavailable_diag(diag, target, emit_kind_name(command->emit), command->input);
-    else init_direct_llvm_ir_unavailable_diag(diag, command, target, command->input);
-    if (command->json) print_diag_json(diag->path ? diag->path : command->input, diag); else print_diag(diag->path ? diag->path : command->input, diag);
-    return 1;
-  }
-  if (z_backend_request_is_llvm(command ? command->backend : NULL, emit_kind_name(command ? command->emit : EMIT_EXE))) {
-    z_backend_init_llvm_unavailable_diag(diag, target, emit_kind_name(command ? command->emit : EMIT_EXE), command ? command->input : NULL);
-    if (command && command->json) print_diag_json(diag->path ? diag->path : command->input, diag); else print_diag(diag->path ? diag->path : (command ? command->input : NULL), diag);
-    return 1;
-  }
   ZProgramGraph graph;
   if (!z_program_graph_load(command->input, &graph, diag)) {
     if (command->json) print_diag_json(diag->path ? diag->path : command->input, diag);
@@ -11194,6 +11183,24 @@ static int run_graph_size_command(const Command *command, const ZTargetInfo *tar
     if (!diag->path) diag->path = input.source_file ? input.source_file : command->input;
     if (command->json) print_diag_json(diag->path ? diag->path : command->input, diag);
     else print_diag(diag->path ? diag->path : command->input, diag);
+    z_free_program(&program);
+    z_free_source(&input);
+    z_program_graph_free(&graph);
+    return 1;
+  }
+
+  if (command && command->emit == EMIT_LLVM_IR) {
+    if (z_backend_request_is_llvm(command->backend, emit_kind_name(command->emit))) z_backend_init_llvm_unavailable_diag(diag, target, emit_kind_name(command->emit), command->input);
+    else init_direct_llvm_ir_unavailable_diag(diag, command, target, command->input);
+    if (command->json) print_diag_json(diag->path ? diag->path : command->input, diag); else print_diag(diag->path ? diag->path : command->input, diag);
+    z_free_program(&program);
+    z_free_source(&input);
+    z_program_graph_free(&graph);
+    return 1;
+  }
+  if (z_backend_request_is_llvm(command ? command->backend : NULL, emit_kind_name(command ? command->emit : EMIT_EXE))) {
+    z_backend_init_llvm_unavailable_diag(diag, target, emit_kind_name(command ? command->emit : EMIT_EXE), command ? command->input : NULL);
+    if (command && command->json) print_diag_json(diag->path ? diag->path : command->input, diag); else print_diag(diag->path ? diag->path : (command ? command->input : NULL), diag);
     z_free_program(&program);
     z_free_source(&input);
     z_program_graph_free(&graph);

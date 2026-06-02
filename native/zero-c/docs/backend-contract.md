@@ -93,4 +93,3 @@ Backend fallback is never implicit:
 - LLVM requests do not fall back to direct;
 - removed C backend flags do not act as a debug or compatibility path;
 - graph and source entry points follow the same backend contract.
-
