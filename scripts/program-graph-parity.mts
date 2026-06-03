@@ -84,6 +84,14 @@ function findResolutionReference(graph, predicate, message) {
   return reference;
 }
 
+function resolutionBindings(graph) {
+  return graph.resolution?.scopes?.flatMap((scope) => scope.bindings ?? []) ?? [];
+}
+
+function hasIncomingGraphEdge(graph, nodeId, kind) {
+  return graph.edges.some((edge) => edge.target === "node" && edge.to === nodeId && edge.kind === kind);
+}
+
 async function assertCheckParity(fixture) {
   const source = await zeroJson(["check", "--json", fixture]);
   const graph = await zeroJson(["graph", "check", "--json", fixture]);
@@ -208,11 +216,66 @@ async function assertResolutionFacts() {
   const localC = findResolutionReference(cImport, (item) => item.kind === "identifier" && item.name === "c" && item.targetKind === "local", "later local should shadow C import after declaration");
   assert.match(localC.symbolId, /local\.c@/, "local shadow symbol");
 
+  const cImportTypeShadow = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/c-import-type-shadowing.0"]);
+  assert.equal(cImportTypeShadow.resolution.ok, true, "C import/type shadow graph resolution");
+  const shadowedCounterCall = findResolutionReference(cImportTypeShadow, (item) => item.kind === "call" && item.qualifiedName === "Counter.zero_c_add", "static method should resolve when a C import alias shares the type name");
+  assert.equal(shadowedCounterCall.targetKind, "method", "C import/type shadow static method target kind");
+  assert.equal(shadowedCounterCall.symbolId, "symbol:c-import-type-shadowing::type.Counter/method.zero_c_add", "C import/type shadow static method symbol");
+  const counterIdentifier = findResolutionReference(cImportTypeShadow, (item) => item.kind === "identifier" && item.name === "Counter", "call-chain base should resolve to the type namespace");
+  assert.equal(counterIdentifier.targetKind, "shape", "call-chain base should prefer the type binding for static method chains");
+
   const staticInterface = await zeroJson(["graph", "dump", "--json", "examples/static-interface.0"]);
   assert.equal(staticInterface.resolution.ok, true, "static interface graph resolution");
   const interfaceCall = findResolutionReference(staticInterface, (item) => item.kind === "call" && item.qualifiedName === "T.read", "constrained interface method call should resolve");
   assert.equal(interfaceCall.targetKind, "interfaceMethod", "constrained interface call target kind");
   assert.equal(interfaceCall.symbolId, "symbol:static-interface::type.Readable/method.read", "constrained interface call target symbol");
+
+  const genericFunction = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/generic-function-basic.0"]);
+  assert.equal(genericFunction.resolution.ok, true, "generic function graph resolution");
+  const identityReturnType = findResolutionReference(genericFunction, (item) => item.kind === "type" && item.name === "T" && item.symbolId === "symbol:generic-function-basic::value.identity/param.T" && hasIncomingGraphEdge(genericFunction, item.node, "returnType"), "generic return type should resolve to its type parameter");
+  assert.equal(identityReturnType.targetKind, "type", "generic return type target kind");
+
+  const staticValues = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/static-value-params.0"]);
+  assert.equal(staticValues.resolution.ok, true, "static value parameter graph resolution");
+  const staticParamBinding = resolutionBindings(staticValues).find((item) => item.name === "N" && item.kind === "staticParam" && item.symbolId === "symbol:static-value-params::value.first/param.N");
+  assert(staticParamBinding, "function static parameter should be classified as a staticParam binding");
+  const capTypeArg = findResolutionReference(staticValues, (item) => item.kind === "type" && item.name === "cap" && hasIncomingGraphEdge(staticValues, item.node, "typeArg"), "static value type argument should resolve through value lookup");
+  assert.equal(capTypeArg.targetKind, "const", "static value type argument target kind");
+  assert.equal(capTypeArg.symbolId, "symbol:static-value-params::value.cap", "static value type argument symbol");
+
+  const forRange = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/for-range.0"]);
+  assert.equal(forRange.resolution.ok, true, "for range graph resolution");
+  const forIndexBinding = resolutionBindings(forRange).find((item) => item.name === "index" && item.kind === "local");
+  assert(forIndexBinding, "for range iterator should create a local binding");
+  const forIndexRef = findResolutionReference(forRange, (item) => item.kind === "identifier" && item.name === "index" && item.targetKind === "local", "for range body should resolve iterator references");
+  assert.equal(forIndexRef.symbolId, forIndexBinding.symbolId, "for range iterator reference symbol");
+
+  const testBlocks = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/test-blocks.0"]);
+  assert.equal(testBlocks.resolution.ok, true, "test block graph resolution");
+  const expectCall = findResolutionReference(testBlocks, (item) => item.kind === "call" && item.qualifiedName === "expect", "test expect call should resolve as a language builtin");
+  assert.equal(expectCall.targetKind, "testExpect", "test expect call target kind");
+  assert.equal(expectCall.symbolId, "builtin:expect", "test expect call symbol");
+
+  const compileTime = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/compile-time-v1.0"]);
+  assert.equal(compileTime.resolution.ok, true, "compile-time facts graph resolution");
+  const targetNamespace = findResolutionReference(compileTime, (item) => item.kind === "identifier" && item.name === "target", "target meta namespace should resolve");
+  assert.equal(targetNamespace.targetKind, "targetNamespace", "target namespace target kind");
+  for (const fact of ["hasField", "fieldCount", "fieldType", "enumCaseCount", "hasEnumCase", "choiceCaseCount", "hasChoiceCase"]) {
+    const metaFact = findResolutionReference(compileTime, (item) => item.kind === "call" && item.qualifiedName === fact, `${fact} meta call should resolve`);
+    assert.equal(metaFact.targetKind, "metaFact", `${fact} meta call target kind`);
+    assert.equal(metaFact.symbolId, `meta:${fact}`, `${fact} meta call symbol`);
+  }
+  const targetFacts = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/meta-typed-target-type.0"]);
+  assert.equal(targetFacts.resolution.ok, true, "target fact graph resolution");
+  const hasCapability = findResolutionReference(targetFacts, (item) => item.kind === "call" && item.qualifiedName === "target.hasCapability", "target fact call should resolve");
+  assert.equal(hasCapability.targetKind, "targetFact", "target fact call target kind");
+  assert.equal(hasCapability.symbolId, "meta:target.hasCapability", "target fact call symbol");
+
+  const fixedVec = await zeroJson(["graph", "dump", "--json", "examples/fixed-vec.0"]);
+  assert.equal(fixedVec.resolution.ok, true, "Self graph resolution");
+  const selfReturn = findResolutionReference(fixedVec, (item) => item.kind === "type" && item.name === "Self" && hasIncomingGraphEdge(fixedVec, item.node, "returnType"), "Self return type should resolve to the enclosing type");
+  assert.equal(selfReturn.targetKind, "type", "Self return type target kind");
+  assert.equal(selfReturn.symbolId, "symbol:fixed-vec::type.FixedVec", "Self return type symbol");
 
   const systemsPackage = await zeroJson(["graph", "dump", "--json", "examples/systems-package"]);
   assert.equal(systemsPackage.resolution.ok, true, "package-local module graph resolution");
