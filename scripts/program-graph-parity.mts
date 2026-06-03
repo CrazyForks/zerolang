@@ -88,8 +88,8 @@ function resolutionBindings(graph) {
   return graph.resolution?.scopes?.flatMap((scope) => scope.bindings ?? []) ?? [];
 }
 
-function hasIncomingGraphEdge(graph, nodeId, kind) {
-  return graph.edges.some((edge) => edge.target === "node" && edge.to === nodeId && edge.kind === kind);
+function hasIncomingGraphEdge(graph, nodeId, kind, order = null) {
+  return graph.edges.some((edge) => edge.target === "node" && edge.to === nodeId && edge.kind === kind && (order === null || edge.order === order));
 }
 
 async function assertCheckParity(fixture) {
@@ -243,6 +243,58 @@ async function assertResolutionFacts() {
   const capTypeArg = findResolutionReference(staticValues, (item) => item.kind === "type" && item.name === "cap" && hasIncomingGraphEdge(staticValues, item.node, "typeArg"), "static value type argument should resolve through value lookup");
   assert.equal(capTypeArg.targetKind, "const", "static value type argument target kind");
   assert.equal(capTypeArg.symbolId, "symbol:static-value-params::value.cap", "static value type argument symbol");
+
+  const staticExplicitFixture = `${outDir}/resolution-static-explicit-args.0`;
+  await writeFile(staticExplicitFixture, [
+    "const Foo: usize = 3",
+    "",
+    "type Foo {",
+    "    value: i32,",
+    "}",
+    "",
+    "type Gate<static enabledFlag: Bool, static selectedMode: Mode> {",
+    "    value: i32,",
+    "}",
+    "",
+    "enum Mode: u8 {",
+    "    fast,",
+    "    tiny,",
+    "}",
+    "",
+    "fn readGate<static enabledFlag: Bool, static selectedMode: Mode>(gate: ref<Gate<enabledFlag, selectedMode>>) -> i32 {",
+    "    if enabledFlag {",
+    "        return gate.value",
+    "    }",
+    "    return 0",
+    "}",
+    "",
+    "fn pick<T: Type, static N: usize>(value: T, items: ref<[N]i32>) -> T {",
+    "    return value",
+    "}",
+    "",
+    "pub fn main() -> Void {",
+    "    let items: [Foo]i32 = [1, 2, 3]",
+    "    let value: Foo = pick<Foo, Foo>(Foo { value: 7 }, &items)",
+    "    let gate: Gate<true, Mode.fast> = Gate { value: 9 }",
+    "    let gated: i32 = readGate<true, Mode.fast>(&gate)",
+    "    expect (value.value == 7 && gated == 9)",
+    "}",
+    "",
+  ].join("\n"));
+  const staticExplicit = await zeroJson(["graph", "dump", "--json", staticExplicitFixture]);
+  assert.equal(staticExplicit.resolution.ok, true, "explicit static generic argument graph resolution");
+  const pickTypeArg = findResolutionReference(staticExplicit, (item) => item.kind === "type" && item.name === "Foo" && hasIncomingGraphEdge(staticExplicit, item.node, "typeArg", 0), "type argument in a mixed generic call should resolve as a type");
+  assert.equal(pickTypeArg.targetKind, "type", "mixed generic type argument target kind");
+  assert.equal(pickTypeArg.symbolId, "symbol:resolution-static-explicit-args::type.Foo", "mixed generic type argument symbol");
+  const pickStaticArg = findResolutionReference(staticExplicit, (item) => item.kind === "type" && item.name === "Foo" && hasIncomingGraphEdge(staticExplicit, item.node, "typeArg", 1), "static argument with a type-name collision should resolve as a value");
+  assert.equal(pickStaticArg.targetKind, "const", "static argument with a type-name collision target kind");
+  assert.equal(pickStaticArg.symbolId, "symbol:resolution-static-explicit-args::value.Foo", "static argument with a type-name collision symbol");
+  const boolStaticArg = findResolutionReference(staticExplicit, (item) => item.kind === "type" && item.qualifiedName === "true" && hasIncomingGraphEdge(staticExplicit, item.node, "typeArg", 0), "literal bool static argument should resolve");
+  assert.equal(boolStaticArg.targetKind, "staticLiteral", "literal bool static argument target kind");
+  assert.equal(boolStaticArg.symbolId, "literal:true", "literal bool static argument symbol");
+  const enumStaticArg = findResolutionReference(staticExplicit, (item) => item.kind === "type" && item.qualifiedName === "Mode.fast" && hasIncomingGraphEdge(staticExplicit, item.node, "typeArg", 1), "enum-case static argument should resolve");
+  assert.equal(enumStaticArg.targetKind, "variant", "enum-case static argument target kind");
+  assert.equal(enumStaticArg.symbolId, "symbol:resolution-static-explicit-args::type.Mode/variant.fast", "enum-case static argument symbol");
 
   const forRange = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/for-range.0"]);
   assert.equal(forRange.resolution.ok, true, "for range graph resolution");

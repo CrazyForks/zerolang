@@ -578,6 +578,10 @@ static char *graph_resolve_simple_type_name(const char *type) {
   return z_strndup(type, (size_t)(end - type));
 }
 
+static char *graph_resolve_static_arg_name(const char *type) {
+  return graph_resolve_text_present(type) ? z_strdup(type) : NULL;
+}
+
 static char *graph_resolve_receiver_type_name(const char *type) {
   char *name = graph_resolve_simple_type_name(type);
   if (!name) return NULL;
@@ -657,6 +661,16 @@ static void graph_resolve_reference_builtin(ZGraphReferenceFact *ref, const char
   ref->symbol_id = z_strdup(symbol_id ? symbol_id : "");
 }
 
+static void graph_resolve_reference_static_literal(ZGraphReferenceFact *ref, const char *name) {
+  if (!ref || !name) return;
+  ZBuf symbol;
+  zbuf_init(&symbol);
+  zbuf_append(&symbol, "literal:");
+  zbuf_append(&symbol, name);
+  graph_resolve_reference_builtin(ref, "staticLiteral", symbol.data ? symbol.data : "");
+  zbuf_free(&symbol);
+}
+
 static void graph_resolve_reference_diag(ZGraphResolver *resolver, ZGraphReferenceFact *ref, const char *code, const char *message) {
   if (!resolver || !ref || !code || !message) return;
   ref->diagnostic_code = z_strdup(code);
@@ -725,6 +739,81 @@ static const ZGraphBindingFact *graph_resolve_receiver_type_binding(const ZGraph
   ZGraphLookup lookup = graph_resolve_lookup_name(resolver, ref_scope, type_name, owner->node_index, Z_GRAPH_LOOKUP_TYPE);
   free(type_name);
   return lookup.len == 1 && !lookup.overflow ? lookup.items[0] : NULL;
+}
+
+static bool graph_resolve_static_arg_literal(const char *name) {
+  if (graph_resolve_text_eq(name, "true") || graph_resolve_text_eq(name, "false")) return true;
+  if (!name || !isdigit((unsigned char)name[0])) return false;
+  bool saw_digit = false;
+  for (const char *p = name; *p; p++) {
+    unsigned char ch = (unsigned char)*p;
+    if (isdigit(ch)) saw_digit = true;
+    if (isalnum(ch) || ch == '_') continue;
+    return false;
+  }
+  return saw_digit;
+}
+
+static const ZGraphBindingFact *graph_resolve_callee_binding_from_node(const ZGraphResolver *resolver, const ZProgramGraphNode *node) {
+  if (!resolver || !node) return NULL;
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_CALL || node->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL) {
+    return graph_resolve_callee_binding_from_node(resolver, graph_resolve_child(resolver->graph, node, "left", 0));
+  }
+  size_t node_index = graph_resolve_node_index(resolver->graph, node->id);
+  size_t scope = graph_resolve_nearest_scope(resolver, node_index);
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_IDENTIFIER) {
+    ZGraphLookup lookup = graph_resolve_lookup_name(resolver, scope, node->name, node_index, Z_GRAPH_LOOKUP_ANY);
+    return lookup.len == 1 && !lookup.overflow ? lookup.items[0] : NULL;
+  }
+  if (node->kind != Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS) return NULL;
+  char *qualified = graph_resolve_expr_chain(resolver, node);
+  char *first = graph_resolve_first_segment(qualified);
+  const char *dot = qualified ? strchr(qualified, '.') : NULL;
+  const char *member_name = dot && dot[1] ? dot + 1 : node->name;
+  const ZGraphBindingFact *result = NULL;
+  if (first && member_name && member_name[0]) {
+    ZGraphLookup type_owner_lookup = graph_resolve_lookup_name(resolver, scope, first, node_index, Z_GRAPH_LOOKUP_TYPE);
+    if (type_owner_lookup.len == 1 && !type_owner_lookup.overflow) {
+      result = graph_resolve_lookup_member(resolver, type_owner_lookup.items[0], member_name);
+    }
+    if (!result) {
+      ZGraphLookup owner_lookup = graph_resolve_lookup_name(resolver, scope, first, node_index, Z_GRAPH_LOOKUP_ANY);
+      if (owner_lookup.len == 1 && !owner_lookup.overflow) {
+        result = graph_resolve_lookup_member(resolver, owner_lookup.items[0], member_name);
+        if (!result && (graph_resolve_text_eq(owner_lookup.items[0]->kind, "param") || graph_resolve_text_eq(owner_lookup.items[0]->kind, "local"))) {
+          const ZGraphBindingFact *receiver_type = graph_resolve_receiver_type_binding(resolver, owner_lookup.items[0], scope);
+          result = graph_resolve_lookup_member(resolver, receiver_type, member_name);
+        }
+      }
+    }
+  }
+  free(first);
+  free(qualified);
+  return result;
+}
+
+static bool graph_resolve_type_arg_expects_static(const ZGraphResolver *resolver, size_t node_index) {
+  const ZProgramGraphNode *node = graph_resolve_node(resolver ? resolver->graph : NULL, node_index);
+  const ZProgramGraphEdge *owner = graph_resolve_owner_edge(resolver ? resolver->graph : NULL, node ? node->id : NULL);
+  if (!owner || !graph_resolve_text_eq(owner->kind, "typeArg")) return false;
+  const ZProgramGraphNode *callee = graph_resolve_node(resolver->graph, graph_resolve_node_index(resolver->graph, owner->from));
+  const ZGraphBindingFact *binding = graph_resolve_callee_binding_from_node(resolver, callee);
+  const ZProgramGraphNode *decl = binding ? graph_resolve_node(resolver->graph, binding->node_index) : NULL;
+  const ZProgramGraphNode *param = graph_resolve_child(resolver->graph, decl, "typeParam", owner->order);
+  return param && param->kind == Z_PROGRAM_GRAPH_NODE_PARAM && param->is_static;
+}
+
+static bool graph_resolve_static_enum_case_reference(ZGraphResolver *resolver, ZGraphReferenceFact *ref, const char *name, size_t scope, size_t node_index) {
+  const char *dot = name ? strchr(name, '.') : NULL;
+  if (!dot || dot == name || !dot[1]) return false;
+  char *owner_name = z_strndup(name, (size_t)(dot - name));
+  ZGraphLookup owner_lookup = graph_resolve_lookup_name(resolver, scope, owner_name, node_index, Z_GRAPH_LOOKUP_TYPE);
+  free(owner_name);
+  if (owner_lookup.len != 1 || owner_lookup.overflow || !graph_resolve_text_eq(owner_lookup.items[0]->kind, "enum")) return false;
+  const ZGraphBindingFact *variant = graph_resolve_lookup_member(resolver, owner_lookup.items[0], dot + 1);
+  if (!variant || !graph_resolve_text_eq(variant->kind, "variant")) return false;
+  graph_resolve_reference_to_binding(ref, resolver, variant, "variant", NULL);
+  return true;
 }
 
 static const ZGraphBindingFact *graph_resolve_std_source_binding(const ZGraphResolver *resolver, const char *qualified_name) {
@@ -954,11 +1043,27 @@ static void graph_resolve_identifier_reference(ZGraphResolver *resolver, size_t 
 static void graph_resolve_type_reference(ZGraphResolver *resolver, size_t node_index) {
   const ZProgramGraphNode *node = graph_resolve_node(resolver ? resolver->graph : NULL, node_index);
   if (!node || node->kind != Z_PROGRAM_GRAPH_NODE_TYPE_REF || !graph_resolve_text_present(node->type)) return;
-  char *name = graph_resolve_simple_type_name(node->type);
+  bool static_arg = graph_resolve_type_arg_expects_static(resolver, node_index);
+  char *name = static_arg ? graph_resolve_static_arg_name(node->type) : graph_resolve_simple_type_name(node->type);
   if (!name) return;
   size_t scope = graph_resolve_nearest_scope(resolver, node_index);
   ZGraphReferenceFact *ref = graph_resolve_add_reference(resolver, node, "type", name, node->type, scope);
   if (!ref) {
+    free(name);
+    return;
+  }
+  if (static_arg) {
+    if (graph_resolve_static_arg_literal(name)) {
+      graph_resolve_reference_static_literal(ref, name);
+      free(name);
+      return;
+    }
+    if (graph_resolve_static_enum_case_reference(resolver, ref, name, scope, node_index)) {
+      free(name);
+      return;
+    }
+    ZGraphLookup static_lookup = graph_resolve_lookup_name(resolver, scope, name, node_index, Z_GRAPH_LOOKUP_STATIC_VALUE);
+    graph_resolve_apply_lookup(resolver, ref, &static_lookup, NULL);
     free(name);
     return;
   }
