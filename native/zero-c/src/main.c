@@ -670,18 +670,19 @@ static bool write_runtime_compile_inputs(
   return true;
 }
 
-static bool compile_zero_runtime_object(const char *runtime_object_file, const ZToolchainPlan *plan, const Command *command, const ZTargetInfo *target, ZDiag *diag) {
+static bool compile_zero_runtime_object(const char *runtime_object_file, const ZToolchainPlan *plan, const Command *command, const ZTargetInfo *target, bool llvm_backend, ZDiag *diag) {
   RuntimeCompileInputs inputs = {0};
   if (!write_runtime_compile_inputs(runtime_object_file, ".zero_runtime.c", zero_embedded_zero_runtime_c, &inputs, diag)) return false;
   bool ok = z_toolchain_compile_c_object(plan, command ? command->profile : NULL, target, inputs.source_file, runtime_object_file, inputs.include_dir, "-std=c11 -Wall -Wextra -Wpedantic");
   runtime_compile_inputs_free(&inputs);
   if (!ok && diag) {
-    diag->code = 2003;
+    diag->code = llvm_backend ? 2004 : 2003;
     diag->line = diag->column = diag->length = 1;
-    snprintf(diag->message, sizeof(diag->message), "host runtime object build failed");
-    snprintf(diag->expected, sizeof(diag->expected), "C compiler can compile the embedded Zero runtime source");
-    snprintf(diag->actual, sizeof(diag->actual), "runtime object compile command failed");
-    snprintf(diag->help, sizeof(diag->help), "install a host C compiler or pass --cc for the runtime link plan");
+    snprintf(diag->message, sizeof(diag->message), "%s runtime object build failed", llvm_backend ? "LLVM" : "host");
+    snprintf(diag->expected, sizeof(diag->expected), "%s", llvm_backend ? "clang can compile the embedded Zero runtime source for the LLVM executable link" : "C compiler can compile the embedded Zero runtime source");
+    snprintf(diag->actual, sizeof(diag->actual), "%s", llvm_backend ? "clang runtime object compile command failed" : "runtime object compile command failed");
+    snprintf(diag->help, sizeof(diag->help), "%s", llvm_backend ? "inspect the emitted LLVM IR, runtime object, and clang installation; use --emit llvm-ir to write the IR only" : "install a host C compiler or pass --cc for the runtime link plan");
+    if (llvm_backend) z_backend_blocker_set(&diag->backend_blocker, target && target->name ? target->name : "unknown", target && target->object_format ? target->object_format : "unknown", "llvm", "toolchain", "clang");
   }
   return ok;
 }
@@ -11841,7 +11842,7 @@ static int run_llvm_native_artifact_command(const Command *command, SourceInput 
   phase_started = now_ms();
   input->emitted_object_cache_hit = compiler_cache_touch("emitted-llvm-native", compile_cache_key(input, target, command->profile, "llvm-clang-exe"));
   bool wrote_llvm_ir = z_write_file(llvm_file, llvm_ir.data ? llvm_ir.data : "", &diag);
-  if (wrote_llvm_ir && links_zero_runtime) wrote_llvm_ir = compile_zero_runtime_object(runtime_object_file, &llvm_toolchain, command, target, &diag);
+  if (wrote_llvm_ir && links_zero_runtime) wrote_llvm_ir = compile_zero_runtime_object(runtime_object_file, &llvm_toolchain, command, target, true, &diag);
   input->object_ms = now_ms() - phase_started;
   if (!wrote_llvm_ir) {
     if (command->json) print_diag_json(diag.path ? diag.path : input->source_file, &diag);
@@ -12578,7 +12579,7 @@ int main(int argc, char **argv) {
     phase_started = now_ms();
     input.emitted_object_cache_hit = compiler_cache_touch("emitted-object", compile_cache_key(&input, target, command.profile, needs_zero_runtime ? runtime_object.cache_key : direct_obj.artifact_path));
     bool wrote_object = z_write_binary_file(object_file, (const unsigned char *)object.data, object.len, &diag);
-    if (wrote_object && needs_zero_runtime) wrote_object = compile_zero_runtime_object(runtime_object_file, &runtime_toolchain, &command, target, &diag);
+    if (wrote_object && needs_zero_runtime) wrote_object = compile_zero_runtime_object(runtime_object_file, &runtime_toolchain, &command, target, false, &diag);
     if (wrote_object && needs_http_runtime) wrote_object = compile_zero_http_curl_object(http_object_file, &runtime_toolchain, &command, target, &diag);
     input.object_ms = now_ms() - phase_started;
     if (!wrote_object) {

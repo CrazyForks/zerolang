@@ -194,7 +194,7 @@ bool z_llvm_link_executable(const char *llvm_file, const char *runtime_object_fi
   if (runtime_object_file && runtime_object_file[0]) object_files[object_count++] = runtime_object_file;
   bool ok = z_toolchain_link_objects(plan, target, object_files, object_count, exe_file, pre_flags, "2>/dev/null");
   if (!ok && diag) {
-    diag->code = 2003;
+    diag->code = 2004;
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
@@ -202,6 +202,7 @@ bool z_llvm_link_executable(const char *llvm_file, const char *runtime_object_fi
     snprintf(diag->expected, sizeof(diag->expected), "%s", links_zero_runtime ? "LLVM IR plus zero runtime object link successfully with clang" : "LLVM IR links successfully with clang");
     snprintf(diag->actual, sizeof(diag->actual), "clang LLVM link command failed");
     snprintf(diag->help, sizeof(diag->help), "inspect the emitted LLVM IR, runtime object, and clang installation; use --emit llvm-ir to write the IR only");
+    z_backend_blocker_set(&diag->backend_blocker, target && target->name ? target->name : "unknown", target && target->object_format ? target->object_format : "unknown", "llvm", "toolchain", "clang");
   }
   return ok;
 }
