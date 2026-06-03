@@ -544,13 +544,14 @@ async function assertSemanticFacts() {
     "pub fn main() -> Void {",
     "    let record: UserFileRecord = UserFileRecord { value: 1 }",
     "    let file: File = File { fd: record.value }",
+    "    let maybe_file: Maybe<File> = null",
     "    expect file.fd == 1",
     "}",
     "",
   ].join("\n"));
   const userResourceNames = await zeroJson(["graph", "dump", "--json", userResourceNameFixture]);
   assert.equal(userResourceNames.semantics.resources.length, 0, "user-defined type names containing resource words should not emit resource facts");
-  assert(!userResourceNames.semantics.ownership.some((item) => item.type === "File" || item.type === "UserFileRecord"), "user-defined type names containing resource words should not emit ownership resource facts");
+  assert(!userResourceNames.semantics.ownership.some((item) => item.type === "File" || item.type === "UserFileRecord" || item.type === "Maybe<File>"), "user-defined type names containing resource words should not emit ownership resource facts");
 
   const shadowedStdResourceFixture = `${outDir}/semantic-shadowed-stdlib-resource.0`;
   await writeFile(shadowedStdResourceFixture, [

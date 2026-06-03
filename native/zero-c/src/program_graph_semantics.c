@@ -580,10 +580,34 @@ static bool graph_semantics_type_id_resolves_to_user_type_name(const ZProgramGra
   return false;
 }
 
-static bool graph_semantics_resource_name_shadowed(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *type, const char *type_id, const char *name) {
+static bool graph_semantics_type_token_is_owned_wrapped(const char *type, const char *token_start) {
+  if (!type || !token_start || token_start <= type) return false;
+  const char *cursor = token_start;
+  size_t depth = 0;
+  while (cursor > type) {
+    cursor--;
+    if (*cursor == '>') {
+      depth++;
+      continue;
+    }
+    if (*cursor != '<') continue;
+    if (depth > 0) {
+      depth--;
+      continue;
+    }
+    const char *name_end = cursor;
+    const char *name_start = name_end;
+    while (name_start > type && graph_semantics_type_identifier_char((unsigned char)name_start[-1])) name_start--;
+    return (size_t)(name_end - name_start) == strlen("owned") && strncmp(name_start, "owned", strlen("owned")) == 0;
+  }
+  return false;
+}
+
+static bool graph_semantics_resource_name_shadowed(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *type, const char *type_id, const char *name, const char *token_start) {
   if (!graph_semantics_graph_declares_type_name(graph, name)) return false;
   if (graph_semantics_type_id_resolves_to_user_type_name(graph, resolution, type_id, name)) return true;
-  return graph_semantics_text_eq(type, name);
+  if (graph_semantics_text_eq(type, name)) return true;
+  return !graph_semantics_type_token_is_owned_wrapped(type, token_start);
 }
 
 static bool graph_semantics_known_resource_type_name(const char *name) {
@@ -615,7 +639,7 @@ static bool graph_semantics_type_has_resource_name(const ZProgramGraph *graph, c
     while (*cursor && graph_semantics_type_identifier_char((unsigned char)*cursor)) cursor++;
     if (start == cursor) continue;
     size_t len = (size_t)(cursor - start);
-    if (strlen(name) == len && strncmp(start, name, len) == 0 && !graph_semantics_resource_name_shadowed(graph, resolution, type, type_id, name)) return true;
+    if (strlen(name) == len && strncmp(start, name, len) == 0 && !graph_semantics_resource_name_shadowed(graph, resolution, type, type_id, name, start)) return true;
   }
   return false;
 }
@@ -631,7 +655,7 @@ static bool graph_semantics_type_has_known_resource(const ZProgramGraph *graph, 
     if (len >= sizeof(name)) continue;
     memcpy(name, start, len);
     name[len] = 0;
-    if (graph_semantics_known_resource_type_name(name) && !graph_semantics_resource_name_shadowed(graph, resolution, type, type_id, name)) return true;
+    if (graph_semantics_known_resource_type_name(name) && !graph_semantics_resource_name_shadowed(graph, resolution, type, type_id, name, start)) return true;
   }
   return false;
 }
