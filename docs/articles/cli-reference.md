@@ -98,12 +98,15 @@ another tool needs stable fields.
 | `zero test --json` | Graph identity for canonical source, test discovery mode, selected fixtures, result counts, output, and per-test locations/failures. |
 | `zero doctor --json` | Host checks plus `targetToolchains`, the per-target readiness matrix. |
 
-Canonical `.0` source commands report a top-level `graph` object with
-`artifact`, `canonicalSource`, `moduleIdentity`, `graphHash`, and `lowering`.
-Their compiler cache and incremental invalidation facts use
+Canonical `.0` source JSON for `zero check`, `zero build`, `zero size`,
+`zero ship`, `zero mem`, and `zero test` reports a top-level `graph` object
+with `artifact`, `canonicalSource`, `moduleIdentity`, `graphHash`, and
+`lowering`. Their compiler cache and incremental invalidation facts use
 `sourceKind: "program-graph"` and include the graph input that keyed the
-compile. Derived ProgramGraph artifact commands report the same identity fields
-for the artifact being inspected or built.
+compile. Planning and introspection commands such as `zero dev`, `zero time`,
+`zero doc`, and `zero abi` continue to report canonical source cache facts.
+Derived ProgramGraph artifact commands report the same identity fields for the
+artifact being inspected or built.
 
 `zero check --json` and `zero graph --json` also include `compileTime`.
 That object records bounded `meta` evaluation, sandbox denials, cache key
