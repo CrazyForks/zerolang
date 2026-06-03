@@ -73,6 +73,7 @@ typedef struct {
 
 typedef enum {
   Z_GRAPH_LOOKUP_ANY,
+  Z_GRAPH_LOOKUP_VALUE,
   Z_GRAPH_LOOKUP_TYPE,
   Z_GRAPH_LOOKUP_STATIC_VALUE,
 } ZGraphLookupMode;
@@ -390,9 +391,26 @@ static bool graph_resolve_binding_is_static_value(const ZGraphBindingFact *bindi
          graph_resolve_text_eq(binding->kind, "staticParam");
 }
 
+static bool graph_resolve_binding_is_value(const ZGraphBindingFact *binding) {
+  if (!binding) return false;
+  return graph_resolve_text_eq(binding->kind, "import") ||
+         graph_resolve_text_eq(binding->kind, "cImport") ||
+         graph_resolve_text_eq(binding->kind, "const") ||
+         graph_resolve_text_eq(binding->kind, "function") ||
+         graph_resolve_text_eq(binding->kind, "method") ||
+         graph_resolve_text_eq(binding->kind, "param") ||
+         graph_resolve_text_eq(binding->kind, "staticParam") ||
+         graph_resolve_text_eq(binding->kind, "field") ||
+         graph_resolve_text_eq(binding->kind, "variant") ||
+         graph_resolve_text_eq(binding->kind, "local") ||
+         graph_resolve_text_eq(binding->kind, "pattern") ||
+         graph_resolve_text_eq(binding->kind, "error");
+}
+
 static bool graph_resolve_binding_matches_mode(const ZGraphBindingFact *binding, ZGraphLookupMode mode) {
   if (!binding) return false;
   switch (mode) {
+    case Z_GRAPH_LOOKUP_VALUE: return graph_resolve_binding_is_value(binding);
     case Z_GRAPH_LOOKUP_TYPE: return graph_resolve_binding_is_type(binding);
     case Z_GRAPH_LOOKUP_STATIC_VALUE: return graph_resolve_binding_is_static_value(binding);
     case Z_GRAPH_LOOKUP_ANY: return true;
@@ -1021,11 +1039,18 @@ static void graph_resolve_identifier_reference(ZGraphResolver *resolver, size_t 
   size_t scope = graph_resolve_nearest_scope(resolver, node_index);
   ZGraphReferenceFact *ref = graph_resolve_add_reference(resolver, node, "identifier", node->name, node->name, scope);
   if (!ref) return;
-  ZGraphLookup lookup = graph_resolve_lookup_name(resolver, scope, node->name, node_index, Z_GRAPH_LOOKUP_ANY);
-  if ((lookup.len != 1 || lookup.overflow) && graph_resolve_identifier_is_call_chain_base(resolver, node)) {
+  ZGraphLookup lookup = graph_resolve_lookup_name(resolver, scope, node->name, node_index, Z_GRAPH_LOOKUP_VALUE);
+  if (graph_resolve_identifier_is_call_chain_base(resolver, node)) {
     ZGraphLookup type_lookup = graph_resolve_lookup_name(resolver, scope, node->name, node_index, Z_GRAPH_LOOKUP_TYPE);
     if (type_lookup.len == 1 && !type_lookup.overflow) {
       graph_resolve_reference_to_binding(ref, resolver, type_lookup.items[0], NULL, NULL);
+      return;
+    }
+  }
+  if (lookup.len == 0 && !lookup.overflow) {
+    ZGraphLookup type_lookup = graph_resolve_lookup_name(resolver, scope, node->name, node_index, Z_GRAPH_LOOKUP_TYPE);
+    if (type_lookup.len > 0 || type_lookup.overflow) {
+      graph_resolve_apply_lookup(resolver, ref, &type_lookup, NULL);
       return;
     }
   }
@@ -1067,16 +1092,6 @@ static void graph_resolve_type_reference(ZGraphResolver *resolver, size_t node_i
     free(name);
     return;
   }
-  if (graph_resolve_builtin_type(name)) {
-    ZBuf symbol;
-    zbuf_init(&symbol);
-    zbuf_append(&symbol, "builtin:");
-    zbuf_append(&symbol, name);
-    graph_resolve_reference_builtin(ref, "builtinType", symbol.data ? symbol.data : "");
-    zbuf_free(&symbol);
-    free(name);
-    return;
-  }
   if (graph_resolve_text_eq(name, "Self")) {
     const ZGraphBindingFact *self = graph_resolve_enclosing_type_binding(resolver, scope);
     if (self) {
@@ -1086,6 +1101,16 @@ static void graph_resolve_type_reference(ZGraphResolver *resolver, size_t node_i
     }
   }
   ZGraphLookup lookup = graph_resolve_lookup_name(resolver, scope, name, node_index, Z_GRAPH_LOOKUP_TYPE);
+  if (lookup.len == 0 && !lookup.overflow && graph_resolve_builtin_type(name)) {
+    ZBuf symbol;
+    zbuf_init(&symbol);
+    zbuf_append(&symbol, "builtin:");
+    zbuf_append(&symbol, name);
+    graph_resolve_reference_builtin(ref, "builtinType", symbol.data ? symbol.data : "");
+    zbuf_free(&symbol);
+    free(name);
+    return;
+  }
   if (lookup.len == 0 && !lookup.overflow) {
     ZGraphLookup static_lookup = graph_resolve_lookup_name(resolver, scope, name, node_index, Z_GRAPH_LOOKUP_STATIC_VALUE);
     if (static_lookup.len > 0 || static_lookup.overflow) {

@@ -296,6 +296,44 @@ async function assertResolutionFacts() {
   assert.equal(enumStaticArg.targetKind, "variant", "enum-case static argument target kind");
   assert.equal(enumStaticArg.symbolId, "symbol:resolution-static-explicit-args::type.Mode/variant.fast", "enum-case static argument symbol");
 
+  const valueTypeCollisionFixture = `${outDir}/resolution-value-type-collision.0`;
+  await writeFile(valueTypeCollisionFixture, [
+    "const Foo: usize = 3",
+    "",
+    "type Foo {",
+    "    value: i32,",
+    "}",
+    "",
+    "pub fn main() -> Void {",
+    "    let n: usize = Foo",
+    "    expect n == 3",
+    "}",
+    "",
+  ].join("\n"));
+  const valueTypeCollision = await zeroJson(["graph", "dump", "--json", valueTypeCollisionFixture]);
+  assert.equal(valueTypeCollision.resolution.ok, true, "value/type collision graph resolution");
+  const valueFoo = findResolutionReference(valueTypeCollision, (item) => item.kind === "identifier" && item.name === "Foo", "ordinary identifiers should prefer value bindings over same-name type bindings");
+  assert.equal(valueFoo.targetKind, "const", "value/type collision identifier target kind");
+  assert.equal(valueFoo.symbolId, "symbol:resolution-value-type-collision::value.Foo", "value/type collision identifier symbol");
+
+  const builtinShadowFixture = `${outDir}/resolution-builtin-shadow.0`;
+  await writeFile(builtinShadowFixture, [
+    "type World {",
+    "    value: i32,",
+    "}",
+    "",
+    "pub fn main() -> Void {",
+    "    let item: World = World { value: 1 }",
+    "    expect item.value == 1",
+    "}",
+    "",
+  ].join("\n"));
+  const builtinShadow = await zeroJson(["graph", "dump", "--json", builtinShadowFixture]);
+  assert.equal(builtinShadow.resolution.ok, true, "builtin type shadow graph resolution");
+  const shadowedWorld = findResolutionReference(builtinShadow, (item) => item.kind === "type" && item.name === "World" && hasIncomingGraphEdge(builtinShadow, item.node, "declaredType"), "declared types should shadow builtin type names in resolution facts");
+  assert.equal(shadowedWorld.targetKind, "type", "builtin shadow type target kind");
+  assert.equal(shadowedWorld.symbolId, "symbol:resolution-builtin-shadow::type.World", "builtin shadow type symbol");
+
   const forRange = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/for-range.0"]);
   assert.equal(forRange.resolution.ok, true, "for range graph resolution");
   const forIndexBinding = resolutionBindings(forRange).find((item) => item.name === "index" && item.kind === "local");
