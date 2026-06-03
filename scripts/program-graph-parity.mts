@@ -90,6 +90,14 @@ function findSemanticCall(graph, predicate, message) {
   return call;
 }
 
+function assertSemanticCallResolutionMatches(graph, call, message) {
+  const reference = graph.resolution?.references?.find((item) => item.kind === "call" && item.node === call.node);
+  assert(reference, `${message}: resolver call reference`);
+  for (const field of ["qualifiedName", "targetKind", "targetNode", "symbolId"]) {
+    assert.equal(call.resolution?.[field], reference[field], `${message}: semantic resolution ${field}`);
+  }
+}
+
 function resolutionBindings(graph) {
   return graph.resolution?.scopes?.flatMap((scope) => scope.bindings ?? []) ?? [];
 }
@@ -453,7 +461,8 @@ async function assertSemanticFacts() {
   assert.equal(write.contract.targetSupport, "world-io", "world write target support");
   assert.match(write.contract.targetNode, /^#param_/, "world write contract target node");
   assert.equal(write.contract.symbolId, "symbol:hello::value.main/param.world", "world write contract symbol");
-  assert.equal(write.resolution.targetKind, "worldStreamWrite", "world write semantic resolution kind");
+  assertSemanticCallResolutionMatches(hello, write, "world write semantic resolution");
+  assert.equal(write.resolution.targetKind, "member", "world write semantic resolution kind");
   assert.equal(write.resolution.symbolId, "symbol:hello::value.main/param.world", "world write semantic resolution symbol");
   assert.equal(write.fallible, true, "world write fallibility");
   assert.equal(write.checked, true, "world write checked state");
@@ -473,8 +482,9 @@ async function assertSemanticFacts() {
   assert.equal(reverse.contract.targetSupport, "target-neutral", "source-backed std target support");
   assert.equal(reverse.contract.expectedArgCount, 2, "source-backed std arg count");
   assert.deepEqual(reverse.contract.expectedArgTypes, ["MutSpan<u8>", "Span<u8>"], "source-backed std arg types");
+  assertSemanticCallResolutionMatches(stdStr, reverse, "source-backed std semantic resolution");
   assert.equal(reverse.resolution.targetKind, "sourceBackedStdlib", "source-backed std semantic resolution kind");
-  assert.equal(reverse.resolution.symbolId, "stdlib:std.str.reverse", "source-backed std semantic symbol");
+  assert.equal(reverse.resolution.symbolId, "symbol:std.str::value.__zero_std_str_reverse", "source-backed std semantic symbol");
   assert.deepEqual(reverse.args.map((item) => item.type), ["MutSpan<u8>", "String"], "source-backed std actual arg types");
 
   const stdFs = await zeroJson(["graph", "dump", "--json", "conformance/native/pass/std-fs-fallible.0"]);
@@ -489,6 +499,7 @@ async function assertSemanticFacts() {
   assert.equal(readAll.contract.capability, "fs", "fallible std helper capability");
   assert.equal(readAll.contract.targetSupport, "host", "fallible std helper target support");
   assert.equal(readAll.contract.repair.id, "check-fallible-call", "fallible std helper repair shape");
+  assertSemanticCallResolutionMatches(stdFs, readAll, "fallible std helper semantic resolution");
   assert.equal(readAll.resolution.targetKind, "stdlib", "fallible std helper semantic resolution kind");
   assert.equal(readAll.resolution.symbolId, "stdlib:std.fs.readAllOrRaise", "fallible std helper semantic symbol");
   assert(stdFs.semantics.ownership.some((item) => item.name === "body" && item.type === "owned<ByteBuf>" && item.ownership === "owned"), "owned ByteBuf ownership fact");
@@ -504,7 +515,8 @@ async function assertSemanticFacts() {
   assert.equal(cCall.contract.targetSupport, "host-c-abi", "C import target support");
   assert.match(cCall.contract.targetNode, /^#cimp_/, "C import contract target node");
   assert.match(cCall.contract.symbolId, /^symbol:c-import-alias-later-local::c-import\.c$/, "C import contract symbol");
-  assert.equal(cCall.resolution.targetKind, "cAbi", "C import semantic resolution kind");
+  assertSemanticCallResolutionMatches(cImport, cCall, "C import semantic resolution");
+  assert.equal(cCall.resolution.targetKind, "cFunction", "C import semantic resolution kind");
   assert.equal(cCall.returnType, "i32", "C import return type");
   assert.deepEqual(cCall.args.map((item) => item.type), ["i32", "i32"], "C import actual arg types");
   assert(cImport.semantics.targetRequirements.some((item) => item.qualifiedName === "c.zero_c_add" && item.capability === "c-abi" && item.targetSupport === "host-c-abi"), "C import target requirement fact");
@@ -514,6 +526,17 @@ async function assertSemanticFacts() {
   assert(borrowGraph.semantics.ownership.some((item) => item.name === "current" && item.ownership === "borrow"), "borrowed local ownership fact");
   assert(borrowGraph.semantics.borrowing.some((item) => item.borrowKind === "mut-borrow" && item.mutable === true && item.target), "mutable borrow target fact");
   assert.equal(borrowGraph.semantics.resources.length, 0, "borrow-only fixture should not invent resource facts");
+
+  const callResolution = await zeroJson(["graph", "dump", "--json", "conformance/check/pass/call-resolution-inspection.0"]);
+  const resolverCallReferences = callResolution.resolution.references.filter((item) => item.kind === "call");
+  assert.equal(callResolution.semantics.calls.length, resolverCallReferences.length, "semantic calls should mirror resolver call references and skip operators");
+  for (const call of callResolution.semantics.calls) assertSemanticCallResolutionMatches(callResolution, call, `call resolution semantic fact ${call.qualifiedName}`);
+  const interfaceRead = findSemanticCall(callResolution, (item) => item.qualifiedName === "T.read", "interface method semantic call fact");
+  assert.equal(interfaceRead.resolution.targetKind, "interfaceMethod", "interface method semantic target kind");
+  assert.equal(interfaceRead.resolution.symbolId, "symbol:call-resolution-inspection::type.Readable/method.read", "interface method semantic symbol");
+  const eventKey = findSemanticCall(callResolution, (item) => item.qualifiedName === "Event.key", "choice variant semantic call fact");
+  assert.equal(eventKey.resolution.targetKind, "variant", "choice variant semantic target kind");
+  assert.equal(eventKey.resolution.symbolId, "symbol:call-resolution-inspection::type.Event/variant.key", "choice variant semantic symbol");
 
   await assertCheckFailureParity("conformance/native/fail/unchecked-fallible-call.0");
   await assertCheckFailureParity("conformance/check/fail/wrong-return-type.0");

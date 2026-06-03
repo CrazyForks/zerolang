@@ -1,5 +1,6 @@
 #include "program_graph_semantics.h"
 
+#include "program_graph_resolve.h"
 #include "std_sig.h"
 #include "std_source.h"
 
@@ -8,9 +9,11 @@
 #include <string.h>
 
 typedef struct {
+  const ZProgramGraphResolutionReference *reference;
   const ZStdHelperInfo *helper;
   const ZStdSourceModule *source_module;
   const ZProgramGraphNode *c_import;
+  const ZProgramGraphNode *target_node;
   const ZProgramGraphNode *target_function;
   const ZProgramGraphNode *world_binding;
   bool world_write;
@@ -83,6 +86,22 @@ static const ZProgramGraphNode *graph_semantics_node(const ZProgramGraph *graph,
   return graph && index < graph->node_len ? &graph->nodes[index] : NULL;
 }
 
+static const ZProgramGraphNode *graph_semantics_node_by_id(const ZProgramGraph *graph, const char *id) {
+  return graph_semantics_node(graph, graph_semantics_node_index(graph, id));
+}
+
+static bool graph_semantics_node_is_call(const ZProgramGraphNode *node) {
+  return node && (node->kind == Z_PROGRAM_GRAPH_NODE_CALL || node->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL);
+}
+
+static const ZProgramGraphResolutionReference *graph_semantics_call_reference(const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *call) {
+  for (size_t i = 0; resolution && call && i < resolution->reference_len; i++) {
+    const ZProgramGraphResolutionReference *ref = &resolution->references[i];
+    if (graph_semantics_text_eq(ref->kind, "call") && graph_semantics_text_eq(ref->node_id, call->id)) return ref;
+  }
+  return NULL;
+}
+
 static const ZProgramGraphEdge *graph_semantics_owner_edge(const ZProgramGraph *graph, const char *node_id) {
   for (size_t i = 0; graph && node_id && i < graph->edge_len; i++) {
     const ZProgramGraphEdge *edge = &graph->edges[i];
@@ -117,71 +136,6 @@ static size_t graph_semantics_child_count(const ZProgramGraph *graph, const ZPro
   return count;
 }
 
-static char *graph_semantics_expr_chain(const ZProgramGraph *graph, const ZProgramGraphNode *node) {
-  if (!graph || !node) return NULL;
-  if (node->kind == Z_PROGRAM_GRAPH_NODE_IDENTIFIER) return graph_semantics_text_present(node->name) ? z_strdup(node->name) : NULL;
-  if (node->kind == Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS) {
-    const ZProgramGraphNode *left = graph_semantics_child(graph, node, "left", 0);
-    char *left_name = graph_semantics_expr_chain(graph, left);
-    if (!left_name || !left_name[0] || !graph_semantics_text_present(node->name)) {
-      free(left_name);
-      return NULL;
-    }
-    ZBuf out;
-    zbuf_init(&out);
-    zbuf_append(&out, left_name);
-    zbuf_append_char(&out, '.');
-    zbuf_append(&out, node->name);
-    free(left_name);
-    return out.data ? out.data : NULL;
-  }
-  if (node->kind == Z_PROGRAM_GRAPH_NODE_CALL || node->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL) {
-    const ZProgramGraphNode *left = graph_semantics_child(graph, node, "left", 0);
-    char *left_name = graph_semantics_expr_chain(graph, left);
-    if (left_name) return left_name;
-    return graph_semantics_text_present(node->name) ? z_strdup(node->name) : NULL;
-  }
-  return NULL;
-}
-
-static char *graph_semantics_first_segment(const char *name) {
-  const char *dot = name ? strchr(name, '.') : NULL;
-  return dot ? z_strndup(name, (size_t)(dot - name)) : (name ? z_strdup(name) : NULL);
-}
-
-static const char *graph_semantics_last_segment(const char *name) {
-  const char *dot = name ? strrchr(name, '.') : NULL;
-  return dot && dot[1] ? dot + 1 : (name ? name : "");
-}
-
-static const ZProgramGraphNode *graph_semantics_find_function(const ZProgramGraph *graph, const char *name) {
-  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION && graph_semantics_text_eq(node->name, name)) return node;
-  }
-  return NULL;
-}
-
-static const ZProgramGraphNode *graph_semantics_find_c_import(const ZProgramGraph *graph, const char *alias) {
-  for (size_t i = 0; graph && alias && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_C_IMPORT && graph_semantics_text_eq(node->name, alias)) return node;
-  }
-  return NULL;
-}
-
-static const ZProgramGraphNode *graph_semantics_find_world_binding(const ZProgramGraph *graph, const char *name) {
-  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if ((node->kind == Z_PROGRAM_GRAPH_NODE_PARAM || node->kind == Z_PROGRAM_GRAPH_NODE_LET) &&
-        graph_semantics_text_eq(node->name, name) &&
-        graph_semantics_text_eq(node->type, "World")) {
-      return node;
-    }
-  }
-  return NULL;
-}
-
 static bool graph_semantics_is_under_kind(const ZProgramGraph *graph, const ZProgramGraphNode *node, ZProgramGraphNodeKind kind) {
   const char *current = node ? node->id : NULL;
   for (size_t depth = 0; graph && current && depth < graph->node_len; depth++) {
@@ -193,14 +147,6 @@ static bool graph_semantics_is_under_kind(const ZProgramGraph *graph, const ZPro
     current = owner_node->id;
   }
   return false;
-}
-
-static const ZProgramGraphNode *graph_semantics_world_stream_binding(const ZProgramGraph *graph, const ZProgramGraphNode *call, const char *qualified) {
-  if (!call || !graph_semantics_text_eq(call->name, "write") || !qualified || !strstr(qualified, ".out.write")) return NULL;
-  char *first = graph_semantics_first_segment(qualified);
-  const ZProgramGraphNode *result = graph_semantics_find_world_binding(graph, first);
-  free(first);
-  return result;
 }
 
 static bool graph_semantics_node_has_type_fact(const ZProgramGraphNode *node) {
@@ -291,18 +237,45 @@ static void graph_semantics_append_args_json(ZBuf *buf, const ZProgramGraph *gra
   zbuf_append(buf, "]");
 }
 
-static ZGraphSemanticContract graph_semantics_contract(const ZProgramGraph *graph, const ZProgramGraphNode *call, const char *qualified) {
+static bool graph_semantics_reference_target_kind(const ZProgramGraphResolutionReference *ref, const char *kind) {
+  return ref && graph_semantics_text_eq(ref->target_kind, kind);
+}
+
+static bool graph_semantics_contract_world_write(const ZProgramGraphNode *call, const ZProgramGraphResolutionReference *ref, const ZProgramGraphNode *target) {
+  return call &&
+         ref &&
+         ref->resolved &&
+         graph_semantics_text_eq(call->name, "write") &&
+         graph_semantics_text_contains(ref->qualified_name, ".out.write") &&
+         (target && (target->kind == Z_PROGRAM_GRAPH_NODE_PARAM || target->kind == Z_PROGRAM_GRAPH_NODE_LET)) &&
+         graph_semantics_text_eq(target->type, "World");
+}
+
+static ZGraphSemanticContract graph_semantics_contract(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *call) {
   ZGraphSemanticContract contract = {0};
-  contract.helper = z_std_helper_find(qualified);
-  contract.source_module = z_std_source_module_for_public_call(qualified);
-  char *first = graph_semantics_first_segment(qualified);
-  contract.c_import = first && strchr(qualified ? qualified : "", '.') ? graph_semantics_find_c_import(graph, first) : NULL;
-  contract.target_function = !contract.helper && !contract.c_import && !contract.source_module ? graph_semantics_find_function(graph, graph_semantics_last_segment(qualified)) : NULL;
-  contract.world_binding = graph_semantics_world_stream_binding(graph, call, qualified);
+  const ZProgramGraphResolutionReference *ref = graph_semantics_call_reference(resolution, call);
+  contract.reference = ref;
+  if (!ref) return contract;
+  contract.target_node = graph_semantics_node_by_id(graph, ref->target_node);
+  if (graph_semantics_reference_target_kind(ref, "stdlib") || graph_semantics_reference_target_kind(ref, "sourceBackedStdlib")) {
+    contract.helper = z_std_helper_find(ref->qualified_name);
+  }
+  if (graph_semantics_reference_target_kind(ref, "sourceBackedStdlib")) contract.source_module = z_std_source_module_for_public_call(ref->qualified_name);
+  if (graph_semantics_reference_target_kind(ref, "cFunction") || (contract.target_node && contract.target_node->kind == Z_PROGRAM_GRAPH_NODE_C_IMPORT)) {
+    contract.c_import = contract.target_node;
+  }
+  if (contract.target_node && contract.target_node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION) contract.target_function = contract.target_node;
+  contract.world_binding = graph_semantics_contract_world_write(call, ref, contract.target_node) ? contract.target_node : NULL;
   contract.world_write = contract.world_binding != NULL;
   contract.fallible = contract.world_write || (contract.helper && z_std_helper_is_fallible(contract.helper)) || (contract.target_function && contract.target_function->fallible);
-  contract.present = contract.helper || contract.c_import || contract.source_module || contract.target_function || contract.world_write;
-  free(first);
+  contract.present = ref->resolved &&
+    (contract.helper ||
+     contract.c_import ||
+     contract.source_module ||
+     contract.target_function ||
+     contract.target_node ||
+     contract.world_write ||
+     graph_semantics_text_present(ref->target_kind));
   return contract;
 }
 
@@ -312,7 +285,7 @@ static const char *graph_semantics_contract_kind(const ZGraphSemanticContract *c
   if (contract->c_import) return "cAbi";
   if (contract->source_module) return "sourceBackedStdlib";
   if (contract->helper) return "stdlib";
-  if (contract->target_function) return "function";
+  if (contract->reference && graph_semantics_text_present(contract->reference->target_kind)) return contract->reference->target_kind;
   return "language";
 }
 
@@ -358,13 +331,18 @@ static void graph_semantics_append_repair_json(ZBuf *buf, const ZGraphSemanticCo
 }
 
 static void graph_semantics_append_contract_target_node_json(ZBuf *buf, const ZGraphSemanticContract *contract) {
-  graph_semantics_append_quoted(buf,
-                                contract && contract->world_binding ? contract->world_binding->id :
-                                (contract && contract->c_import ? contract->c_import->id :
-                                 (contract && contract->target_function ? contract->target_function->id : "")));
+  if (contract && contract->reference) {
+    graph_semantics_append_quoted(buf, contract->reference->target_node);
+    return;
+  }
+  graph_semantics_append_quoted(buf, contract && contract->target_node ? contract->target_node->id : "");
 }
 
 static void graph_semantics_append_contract_symbol_json(ZBuf *buf, const ZGraphSemanticContract *contract, const char *qualified) {
+  if (contract && contract->reference) {
+    graph_semantics_append_quoted(buf, contract->reference->symbol_id);
+    return;
+  }
   if (contract && contract->world_binding) {
     graph_semantics_append_quoted(buf, contract->world_binding->symbol_id);
     return;
@@ -389,28 +367,31 @@ static void graph_semantics_append_contract_symbol_json(ZBuf *buf, const ZGraphS
   graph_semantics_append_quoted(buf, "");
 }
 
-static void graph_semantics_append_resolution_json(ZBuf *buf, const ZGraphSemanticContract *contract, const char *qualified) {
+static void graph_semantics_append_resolution_json(ZBuf *buf, const ZGraphSemanticContract *contract) {
+  const ZProgramGraphResolutionReference *ref = contract ? contract->reference : NULL;
   zbuf_append(buf, "{\"referenceKind\":\"call\",\"qualifiedName\":");
-  graph_semantics_append_quoted(buf, qualified);
+  graph_semantics_append_quoted(buf, ref ? ref->qualified_name : "");
+  zbuf_appendf(buf, ",\"resolved\":%s,\"ambiguous\":%s", ref && ref->resolved ? "true" : "false", ref && ref->ambiguous ? "true" : "false");
   zbuf_append(buf, ",\"targetKind\":");
-  graph_semantics_append_quoted(buf, graph_semantics_contract_kind(contract));
+  graph_semantics_append_quoted(buf, ref ? ref->target_kind : "");
   zbuf_append(buf, ",\"targetNode\":");
-  graph_semantics_append_contract_target_node_json(buf, contract);
+  graph_semantics_append_quoted(buf, ref ? ref->target_node : "");
   zbuf_append(buf, ",\"symbolId\":");
-  graph_semantics_append_contract_symbol_json(buf, contract, qualified);
+  graph_semantics_append_quoted(buf, ref ? ref->symbol_id : "");
   zbuf_append(buf, "}");
 }
 
-static void graph_semantics_append_contract_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *call, const char *qualified, bool checked, bool *fallible_out) {
-  ZGraphSemanticContract contract = graph_semantics_contract(graph, call, qualified);
+static void graph_semantics_append_contract_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *call, bool checked, bool *fallible_out, ZGraphSemanticContract *contract_out) {
+  ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, call);
   if (fallible_out) *fallible_out = contract.fallible;
+  if (contract_out) *contract_out = contract;
   zbuf_append(buf, "{\"kind\":");
   graph_semantics_append_quoted(buf, graph_semantics_contract_kind(&contract));
   zbuf_appendf(buf, ",\"fallible\":%s,\"checked\":%s,\"requiresCheck\":%s", contract.fallible ? "true" : "false", checked ? "true" : "false", contract.fallible && !checked ? "true" : "false");
   zbuf_append(buf, ",\"targetNode\":");
   graph_semantics_append_contract_target_node_json(buf, &contract);
   zbuf_append(buf, ",\"symbolId\":");
-  graph_semantics_append_contract_symbol_json(buf, &contract, qualified);
+  graph_semantics_append_contract_symbol_json(buf, &contract, contract.reference ? contract.reference->qualified_name : (call ? call->name : ""));
   zbuf_append(buf, ",\"returnType\":");
   graph_semantics_append_quoted(buf, contract.helper && contract.helper->return_type ? contract.helper->return_type : (contract.target_function ? contract.target_function->type : call ? call->type : ""));
   zbuf_append(buf, ",\"capability\":");
@@ -452,10 +433,10 @@ static size_t graph_semantics_function_count(const ZProgramGraph *graph) {
   return count;
 }
 
-static size_t graph_semantics_call_count(const ZProgramGraph *graph) {
+static size_t graph_semantics_call_count(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   size_t count = 0;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
-    if (graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_CALL || graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL) count++;
+    if (graph_semantics_node_is_call(&graph->nodes[i]) && graph_semantics_call_reference(resolution, &graph->nodes[i])) count++;
   }
   return count;
 }
@@ -470,15 +451,13 @@ static size_t graph_semantics_effect_fact_count(const ZProgramGraph *graph) {
   return count;
 }
 
-static void graph_semantics_call_summary_counts(const ZProgramGraph *graph, size_t *fallible_calls, size_t *contracts) {
+static void graph_semantics_call_summary_counts(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, size_t *fallible_calls, size_t *contracts) {
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    if (!graph_semantics_node_is_call(node) || !graph_semantics_call_reference(resolution, node)) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (contract.fallible && fallible_calls) (*fallible_calls)++;
     if (contract.present && contracts) (*contracts)++;
-    free(qualified);
   }
 }
 
@@ -566,42 +545,36 @@ static size_t graph_semantics_borrowing_fact_count(const ZProgramGraph *graph) {
   return count;
 }
 
-static size_t graph_semantics_resource_fact_count(const ZProgramGraph *graph) {
+static size_t graph_semantics_resource_fact_count(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   size_t count = 0;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
     if (graph_semantics_node_has_type_fact(node) && graph_semantics_type_is_resource(node->type)) count++;
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    if (!graph_semantics_node_is_call(node) || !graph_semantics_call_reference(resolution, node)) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (graph_semantics_contract_is_resource(&contract)) count++;
-    free(qualified);
   }
   return count;
 }
 
-static size_t graph_semantics_target_requirement_count(const ZProgramGraph *graph) {
+static size_t graph_semantics_target_requirement_count(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   size_t count = 0;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    if (!graph_semantics_node_is_call(node) || !graph_semantics_call_reference(resolution, node)) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (graph_semantics_contract_has_target_requirement(&contract)) count++;
-    free(qualified);
   }
   return count;
 }
 
-static size_t graph_semantics_repair_fact_count(const ZProgramGraph *graph) {
+static size_t graph_semantics_repair_fact_count(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   size_t count = 0;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    if (!graph_semantics_node_is_call(node) || !graph_semantics_call_reference(resolution, node)) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (graph_semantics_contract_has_repair(&contract)) count++;
-    free(qualified);
   }
   return count;
 }
@@ -687,16 +660,18 @@ static void graph_semantics_append_functions_json(ZBuf *buf, const ZProgramGraph
   zbuf_append(buf, "]");
 }
 
-static void graph_semantics_append_calls_json(ZBuf *buf, const ZProgramGraph *graph) {
+static void graph_semantics_append_calls_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   zbuf_append(buf, "[");
   bool first = true;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
+    if (!graph_semantics_node_is_call(node)) continue;
+    const ZProgramGraphResolutionReference *ref = graph_semantics_call_reference(resolution, node);
+    if (!ref) continue;
     bool checked = graph_semantics_is_under_kind(graph, node, Z_PROGRAM_GRAPH_NODE_CHECK) ||
                    graph_semantics_is_under_kind(graph, node, Z_PROGRAM_GRAPH_NODE_RESCUE);
     bool fallible = false;
+    ZGraphSemanticContract contract = {0};
     if (!first) zbuf_append(buf, ",");
     zbuf_append(buf, "{\"node\":");
     graph_semantics_append_quoted(buf, node->id);
@@ -705,7 +680,7 @@ static void graph_semantics_append_calls_json(ZBuf *buf, const ZProgramGraph *gr
     zbuf_append(buf, ",\"name\":");
     graph_semantics_append_quoted(buf, node->name);
     zbuf_append(buf, ",\"qualifiedName\":");
-    graph_semantics_append_quoted(buf, qualified && qualified[0] ? qualified : node->name);
+    graph_semantics_append_quoted(buf, ref->qualified_name);
     zbuf_append(buf, ",\"returnType\":");
     graph_semantics_append_quoted(buf, node->type);
     zbuf_append(buf, ",\"returnTypeId\":");
@@ -713,14 +688,12 @@ static void graph_semantics_append_calls_json(ZBuf *buf, const ZProgramGraph *gr
     zbuf_append(buf, ",\"args\":");
     graph_semantics_append_args_json(buf, graph, node);
     zbuf_append(buf, ",\"contract\":");
-    graph_semantics_append_contract_json(buf, graph, node, qualified && qualified[0] ? qualified : node->name, checked, &fallible);
-    ZGraphSemanticContract resolution_contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    graph_semantics_append_contract_json(buf, graph, resolution, node, checked, &fallible, &contract);
     zbuf_append(buf, ",\"resolution\":");
-    graph_semantics_append_resolution_json(buf, &resolution_contract, qualified && qualified[0] ? qualified : node->name);
+    graph_semantics_append_resolution_json(buf, &contract);
     zbuf_appendf(buf, ",\"fallible\":%s,\"checked\":%s,\"sourceRange\":", fallible ? "true" : "false", checked ? "true" : "false");
     graph_semantics_append_source_range_json(buf, node);
     zbuf_append(buf, "}");
-    free(qualified);
     first = false;
   }
   zbuf_append(buf, "]");
@@ -804,7 +777,7 @@ static void graph_semantics_append_borrowing_json(ZBuf *buf, const ZProgramGraph
   zbuf_append(buf, "]");
 }
 
-static void graph_semantics_append_resources_json(ZBuf *buf, const ZProgramGraph *graph) {
+static void graph_semantics_append_resources_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   zbuf_append(buf, "[");
   bool first = true;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
@@ -822,9 +795,10 @@ static void graph_semantics_append_resources_json(ZBuf *buf, const ZProgramGraph
       zbuf_append(buf, "}");
       first = false;
     }
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    if (!graph_semantics_node_is_call(node)) continue;
+    const ZProgramGraphResolutionReference *ref = graph_semantics_call_reference(resolution, node);
+    if (!ref) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (graph_semantics_contract_is_resource(&contract)) {
       if (!first) zbuf_append(buf, ",");
       const char *capability = graph_semantics_contract_capability(&contract);
@@ -835,31 +809,31 @@ static void graph_semantics_append_resources_json(ZBuf *buf, const ZProgramGraph
       zbuf_append(buf, ",\"capability\":");
       graph_semantics_append_quoted(buf, capability);
       zbuf_append(buf, ",\"qualifiedName\":");
-      graph_semantics_append_quoted(buf, qualified && qualified[0] ? qualified : node->name);
+      graph_semantics_append_quoted(buf, ref->qualified_name);
       zbuf_append(buf, ",\"sourceRange\":");
       graph_semantics_append_source_range_json(buf, node);
       zbuf_append(buf, "}");
       first = false;
     }
-    free(qualified);
   }
   zbuf_append(buf, "]");
 }
 
-static void graph_semantics_append_target_requirements_json(ZBuf *buf, const ZProgramGraph *graph) {
+static void graph_semantics_append_target_requirements_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   zbuf_append(buf, "[");
   bool first = true;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    if (!graph_semantics_node_is_call(node)) continue;
+    const ZProgramGraphResolutionReference *ref = graph_semantics_call_reference(resolution, node);
+    if (!ref) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (graph_semantics_contract_has_target_requirement(&contract)) {
       if (!first) zbuf_append(buf, ",");
       zbuf_append(buf, "{\"node\":");
       graph_semantics_append_quoted(buf, node->id);
       zbuf_append(buf, ",\"qualifiedName\":");
-      graph_semantics_append_quoted(buf, qualified && qualified[0] ? qualified : node->name);
+      graph_semantics_append_quoted(buf, ref->qualified_name);
       zbuf_append(buf, ",\"contractKind\":");
       graph_semantics_append_quoted(buf, graph_semantics_contract_kind(&contract));
       zbuf_append(buf, ",\"capability\":");
@@ -871,27 +845,27 @@ static void graph_semantics_append_target_requirements_json(ZBuf *buf, const ZPr
       zbuf_append(buf, "}");
       first = false;
     }
-    free(qualified);
   }
   zbuf_append(buf, "]");
 }
 
-static void graph_semantics_append_repairs_json(ZBuf *buf, const ZProgramGraph *graph) {
+static void graph_semantics_append_repairs_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
   zbuf_append(buf, "[");
   bool first = true;
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) continue;
-    char *qualified = graph_semantics_expr_chain(graph, node);
+    if (!graph_semantics_node_is_call(node)) continue;
+    const ZProgramGraphResolutionReference *ref = graph_semantics_call_reference(resolution, node);
+    if (!ref) continue;
     bool checked = graph_semantics_is_under_kind(graph, node, Z_PROGRAM_GRAPH_NODE_CHECK) ||
                    graph_semantics_is_under_kind(graph, node, Z_PROGRAM_GRAPH_NODE_RESCUE);
-    ZGraphSemanticContract contract = graph_semantics_contract(graph, node, qualified && qualified[0] ? qualified : node->name);
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
     if (graph_semantics_contract_has_repair(&contract)) {
       if (!first) zbuf_append(buf, ",");
       zbuf_append(buf, "{\"node\":");
       graph_semantics_append_quoted(buf, node->id);
       zbuf_append(buf, ",\"qualifiedName\":");
-      graph_semantics_append_quoted(buf, qualified && qualified[0] ? qualified : node->name);
+      graph_semantics_append_quoted(buf, ref->qualified_name);
       zbuf_appendf(buf, ",\"requiresCheck\":%s,\"repair\":", contract.fallible && !checked ? "true" : "false");
       graph_semantics_append_repair_json(buf, &contract, checked);
       zbuf_append(buf, ",\"sourceRange\":");
@@ -899,35 +873,37 @@ static void graph_semantics_append_repairs_json(ZBuf *buf, const ZProgramGraph *
       zbuf_append(buf, "}");
       first = false;
     }
-    free(qualified);
   }
   zbuf_append(buf, "]");
 }
 
 void z_program_graph_append_semantics_json(ZBuf *buf, const ZProgramGraph *graph) {
+  ZProgramGraphResolutionFacts resolution;
+  z_program_graph_resolution_facts_init(&resolution);
+  z_program_graph_collect_resolution_facts(graph, &resolution);
   size_t fallible_calls = 0;
   size_t contracts = 0;
-  graph_semantics_call_summary_counts(graph, &fallible_calls, &contracts);
+  graph_semantics_call_summary_counts(graph, &resolution, &fallible_calls, &contracts);
   zbuf_append(buf, "{\"state\":\"typed-facts\",\"ok\":true");
   zbuf_appendf(buf,
                ",\"counts\":{\"typedNodes\":%zu,\"functions\":%zu,\"calls\":%zu,\"fallibleCalls\":%zu,\"effects\":%zu,\"contracts\":%zu,\"ownership\":%zu,\"borrowing\":%zu,\"resources\":%zu,\"targetRequirements\":%zu,\"repairs\":%zu,\"diagnostics\":0}",
                graph_semantics_typed_node_count(graph),
                graph_semantics_function_count(graph),
-               graph_semantics_call_count(graph),
+               graph_semantics_call_count(graph, &resolution),
                fallible_calls,
                graph_semantics_effect_fact_count(graph),
                contracts,
                graph_semantics_ownership_fact_count(graph),
                graph_semantics_borrowing_fact_count(graph),
-               graph_semantics_resource_fact_count(graph),
-               graph_semantics_target_requirement_count(graph),
-               graph_semantics_repair_fact_count(graph));
+               graph_semantics_resource_fact_count(graph, &resolution),
+               graph_semantics_target_requirement_count(graph, &resolution),
+               graph_semantics_repair_fact_count(graph, &resolution));
   zbuf_append(buf, ",\"types\":");
   graph_semantics_append_types_json(buf, graph);
   zbuf_append(buf, ",\"functions\":");
   graph_semantics_append_functions_json(buf, graph);
   zbuf_append(buf, ",\"calls\":");
-  graph_semantics_append_calls_json(buf, graph);
+  graph_semantics_append_calls_json(buf, graph, &resolution);
   zbuf_append(buf, ",\"effects\":");
   graph_semantics_append_effects_json(buf, graph);
   zbuf_append(buf, ",\"ownership\":");
@@ -935,11 +911,12 @@ void z_program_graph_append_semantics_json(ZBuf *buf, const ZProgramGraph *graph
   zbuf_append(buf, ",\"borrowing\":");
   graph_semantics_append_borrowing_json(buf, graph);
   zbuf_append(buf, ",\"resources\":");
-  graph_semantics_append_resources_json(buf, graph);
+  graph_semantics_append_resources_json(buf, graph, &resolution);
   zbuf_append(buf, ",\"targetRequirements\":");
-  graph_semantics_append_target_requirements_json(buf, graph);
+  graph_semantics_append_target_requirements_json(buf, graph, &resolution);
   zbuf_append(buf, ",\"repairs\":");
-  graph_semantics_append_repairs_json(buf, graph);
+  graph_semantics_append_repairs_json(buf, graph, &resolution);
   zbuf_append(buf, ",\"diagnostics\":[]");
   zbuf_append(buf, "}");
+  z_program_graph_resolution_facts_free(&resolution);
 }

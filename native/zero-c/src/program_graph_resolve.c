@@ -1323,6 +1323,58 @@ static void graph_resolve_append_diagnostics_json(ZBuf *buf, const ZGraphResolve
   zbuf_append(buf, "]");
 }
 
+void z_program_graph_resolution_facts_init(ZProgramGraphResolutionFacts *facts) {
+  if (facts) *facts = (ZProgramGraphResolutionFacts){0};
+}
+
+void z_program_graph_resolution_facts_free(ZProgramGraphResolutionFacts *facts) {
+  if (!facts) return;
+  for (size_t i = 0; i < facts->reference_len; i++) {
+    free(facts->references[i].node_id);
+    free(facts->references[i].kind);
+    free(facts->references[i].name);
+    free(facts->references[i].qualified_name);
+    free(facts->references[i].scope_id);
+    free(facts->references[i].target_kind);
+    free(facts->references[i].target_node);
+    free(facts->references[i].symbol_id);
+    free(facts->references[i].via_import);
+  }
+  free(facts->references);
+  *facts = (ZProgramGraphResolutionFacts){0};
+}
+
+bool z_program_graph_collect_resolution_facts(const ZProgramGraph *graph, ZProgramGraphResolutionFacts *facts) {
+  if (!facts) return false;
+  *facts = (ZProgramGraphResolutionFacts){0};
+  ZGraphResolver resolver = {.graph = graph};
+  graph_resolve_build_scopes(&resolver);
+  graph_resolve_build_bindings(&resolver);
+  graph_resolve_build_references(&resolver);
+  facts->diagnostic_len = resolver.diagnostic_len;
+  if (resolver.reference_len > 0) {
+    facts->references = z_checked_reallocarray(NULL, resolver.reference_len, sizeof(ZProgramGraphResolutionReference));
+    facts->reference_len = resolver.reference_len;
+    for (size_t i = 0; i < resolver.reference_len; i++) {
+      const ZGraphReferenceFact *src = &resolver.references[i];
+      ZProgramGraphResolutionReference *dst = &facts->references[i];
+      dst->node_id = z_strdup(src->node_id ? src->node_id : "");
+      dst->kind = z_strdup(src->kind ? src->kind : "");
+      dst->name = z_strdup(src->name ? src->name : "");
+      dst->qualified_name = z_strdup(src->qualified_name ? src->qualified_name : "");
+      dst->scope_id = z_strdup(src->scope_id ? src->scope_id : "");
+      dst->target_kind = z_strdup(src->target_kind ? src->target_kind : "");
+      dst->target_node = z_strdup(src->target_node ? src->target_node : "");
+      dst->symbol_id = z_strdup(src->symbol_id ? src->symbol_id : "");
+      dst->via_import = z_strdup(src->via_import ? src->via_import : "");
+      dst->resolved = src->resolved;
+      dst->ambiguous = src->ambiguous;
+    }
+  }
+  graph_resolve_free(&resolver);
+  return true;
+}
+
 void z_program_graph_append_resolution_json(ZBuf *buf, const ZProgramGraph *graph) {
   ZGraphResolver resolver = {.graph = graph};
   graph_resolve_build_scopes(&resolver);
