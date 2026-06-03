@@ -41,6 +41,8 @@ zero graph inspect --json examples/hello.0
 zero graph validate .zero/out/hello.program-graph
 zero graph view examples/hello.0
 zero graph view --out .zero/out/hello.view.0 .zero/out/hello.program-graph
+zero graph source-map --json examples/hello.0
+zero graph reconcile --json .zero/out/hello.program-graph --source examples/hello.0
 zero graph check --json .zero/out/hello.program-graph
 zero graph size --json .zero/out/hello.program-graph
 zero graph build --json --emit obj --target linux-musl-x64 --out .zero/out/hello.o .zero/out/hello.program-graph
@@ -79,6 +81,8 @@ another tool needs stable fields.
 | `zero graph import --json` | Source-to-ProgramGraph import with graph identity and validation. With `--out <program-graph-artifact>`, writes a derived graph artifact and reports `saved.path`. |
 | `zero graph validate --json` | A derived ProgramGraph artifact readback check with `moduleIdentity`, `graphHash`, counts, validation state, and optional normalized artifact output path. |
 | `zero graph view --json` | Canonical source text rendered from source or a ProgramGraph artifact with `moduleIdentity`, `graphHash`, and optional output path. |
+| `zero graph source-map --json` | Graph node IDs mapped to source ranges with node hashes, symbol/type/effect IDs, and file hash facts. |
+| `zero graph reconcile --json` | Identity decisions when edited source is compared with a prior graph, including ambiguous-match diagnostics and simple graph patch text when available. |
 | `zero graph check --json` | Typecheck source or a ProgramGraph artifact through direct graph lowering with graph identity, target, `check.lowering: "direct-program-graph"`, target readiness, safety facts, and graph-mapped diagnostics. |
 | `zero graph size --json` | Size, helper, runtime, profile, safety, and backend facts for a ProgramGraph artifact lowered through `direct-program-graph`, with graph identity. |
 | `zero graph build --json` | Build a ProgramGraph artifact through direct graph lowering, including graph identity, selected `emit` kind, target, artifact path and size, safety facts, compiler cache facts, and graph-aware incremental invalidation. |
@@ -233,9 +237,11 @@ zero build [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--
 zero ship [--json] [--target <target>] [--profile release-small|tiny|audit] [--out <file>] <input>
 zero test [--json] [--filter <name>] [--target <target>] [--cc <path>] [--out <file>] <input>
 zero fmt [--check] <input>
-zero graph [dump|import|inspect|validate|view|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <input> [patch]
+zero graph [dump|import|inspect|validate|view|source-map|reconcile|check|size|build|run|test|patch|roundtrip] [--json] [--target <target>] <input> [patch]
 zero graph [dump|import|validate|roundtrip] [--json] --out <program-graph-artifact> <input>
 zero graph view [--json] [--out <file.0>] <program-graph-or-source>
+zero graph source-map --json <program-graph-or-source>
+zero graph reconcile [--json] <base-program-graph-or-source> --source <edited-file.0|project|zero.json>
 zero graph size [--json] [--target <target>] --out <artifact> <program-graph-or-package>
 zero graph patch [--json] [--out <program-graph-artifact>] <program-graph-or-source> (<patch-file>|--op <operation>)
 zero graph build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <program-graph-or-package>

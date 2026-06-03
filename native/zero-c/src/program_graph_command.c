@@ -29,6 +29,22 @@ static const ZProgramGraphCommandKind z_graph_command_kinds[] = {
   GRAPH_OUT("validate", Z_PROGRAM_GRAPH_INPUT_ARTIFACT),
   GRAPH_OUT("view", Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT),
   GRAPH_NO_OUT(
+    "source-map",
+    Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT,
+    "graph source-map does not support --out",
+    "zero graph source-map --json <program-graph-or-source>",
+    "zero graph source-map --out",
+    "source maps are reported on stdout; remove --out"
+  ),
+  GRAPH_NO_OUT(
+    "reconcile",
+    Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT,
+    "graph reconcile does not support --out",
+    "zero graph reconcile [--json] <base-program-graph-or-source> --source <edited-file.0|project|zero.json>",
+    "zero graph reconcile --out",
+    "reconciliation reports identity decisions on stdout; remove --out"
+  ),
+  GRAPH_NO_OUT(
     "check",
     Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT,
     "graph check does not support --out",

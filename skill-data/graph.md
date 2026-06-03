@@ -42,9 +42,25 @@ Use JSON when you need exact node IDs, graph hashes, spans, or operation fields:
 
 ```sh
 zero graph dump --json <file-or-package>
+zero graph source-map --json <file-or-package>
 zero graph inspect --json <file-or-package>
 zero graph patch --json <file.0> --expect-graph-hash graph:a7f7e6899a73f3b4 --op 'rename node="#decl_ad8d9028" expect="main" value="start"'
 ```
+
+Use source maps when a tool needs to connect graph nodes back to source ranges:
+
+```sh
+zero graph source-map --json <file-or-package>
+```
+
+When a human has edited source after an agent captured a graph, reconcile the prior graph with the edited source before relying on old node IDs:
+
+```sh
+zero graph dump --out .zero/agent/app.before.program-graph <file-or-package>
+zero graph reconcile --json .zero/agent/app.before.program-graph --source <file-or-package>
+```
+
+`zero graph reconcile` reports unchanged, edited, inserted, deleted, ambiguous, and identity-changed nodes. Ambiguous identity matches fail instead of silently assigning a stale node handle.
 
 ## Patches
 
@@ -90,7 +106,7 @@ Do not commit `.program-graph` files unless the user explicitly asks for derived
 
 ## Packages
 
-For packages, inspect the graph from the package root or manifest. Only write an artifact when another tool needs a file handoff:
+For packages, inspect the graph from the package root or manifest. Only write an artifact when another tool needs a file transfer:
 
 ```sh
 zero graph view <package-dir>

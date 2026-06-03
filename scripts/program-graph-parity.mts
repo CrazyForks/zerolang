@@ -29,6 +29,15 @@ async function zeroJson(args) {
   return JSON.parse(result.stdout);
 }
 
+async function zeroJsonFailure(args) {
+  try {
+    await execFileAsync(zero, args, { maxBuffer: execMaxBuffer });
+  } catch (error) {
+    return JSON.parse(error.stdout);
+  }
+  assert.fail(`${zero} ${args.join(" ")} should fail`);
+}
+
 async function zeroText(args) {
   const result = await execFileAsync(zero, args, { maxBuffer: execMaxBuffer });
   return result.stdout;
@@ -133,6 +142,33 @@ async function assertCommandStateContracts() {
   assert.equal(roundtrip.canonicalSource, false, "graph roundtrip should report artifact input");
   assert.equal(roundtrip.semanticStable, true, "graph roundtrip should promise semantic stability");
   assert.equal(roundtrip.lowering, "direct-program-graph", "graph roundtrip should lower through ProgramGraph");
+
+  const sourceMap = await zeroJson(["graph", "source-map", "--json", "examples/hello.0"]);
+  assert.equal(sourceMap.ok, true, "graph source-map should succeed");
+  assert.equal(sourceMap.canonicalSource, true, "graph source-map should report canonical source input");
+  const mainMapping = sourceMap.mappings.find((mapping) => mapping.kind === "Function" && mapping.name === "main");
+  assert(mainMapping && mainMapping.sourceRange.path === "examples/hello.0", "graph source-map should map function nodes to source ranges");
+  assert.equal(mainMapping.sourceAvailable, true, "graph source-map should report tokenized source availability");
+  assert.deepEqual(mainMapping.sourceRange.start, { line: 1, column: 8 }, "graph source-map should start function ranges at the name token");
+  assert.deepEqual(mainMapping.sourceRange.end, { line: 1, column: 12 }, "graph source-map should end function ranges at the name token");
+  assert.equal(await zeroText(["graph", "source-map", "examples/hello.0"]), `program graph source map ok: ${sourceMap.counts.mappings} mappings\n`, "graph source-map text output");
+
+  const repeatedTypesFixture = `${outDir}/source-map-repeated-types.0`;
+  await writeFile(repeatedTypesFixture, [
+    "fn double(value: i32) -> i32 {",
+    "    return value + value",
+    "}",
+    "",
+    "pub fn main(world: World) -> Void raises {",
+    "    check world.out.write(\"source map repeated types\\n\")",
+    "}",
+    "",
+  ].join("\n"));
+  const repeatedTypesMap = await zeroJson(["graph", "source-map", "--json", repeatedTypesFixture]);
+  const repeatedTypeRanges = repeatedTypesMap.mappings
+    .filter((mapping) => mapping.kind === "TypeRef" && mapping.type === "i32" && mapping.sourceRange.start.line === 1)
+    .map((mapping) => mapping.sourceRange.start);
+  assert.deepEqual(repeatedTypeRanges, [{ line: 1, column: 18 }, { line: 1, column: 26 }], "graph source-map should disambiguate repeated type tokens");
 }
 
 async function assertUnconstrainedGenericTypeParams() {
@@ -462,6 +498,47 @@ async function assertSourceEditIdentityBaseline() {
   assertMissingNodeId(prependedStatementGraph, before.id, "old ambiguous expression ID should not target any prepended expression");
 }
 
+async function assertSourceEditReconcile() {
+  const fixture = `${outDir}/identity-reconcile.0`;
+  const original = [
+    "fn helper() -> i32 {",
+    "    return 1",
+    "}",
+    "",
+    "pub fn main(world: World) -> Void raises {",
+    "    check world.out.write(\"hello from zero\\n\")",
+    "}",
+    "",
+  ].join("\n");
+  await writeFile(fixture, original);
+  const baseArtifact = await dumpGraphArtifact(fixture, "identity-reconcile-base");
+
+  await writeFile(fixture, original.replace("hello from zero\\n", "hello from graph\\n"));
+  const edited = await zeroJson(["graph", "reconcile", "--json", baseArtifact, "--source", fixture]);
+  assert.equal(edited.ok, true, "reconcile should accept an unambiguous literal edit");
+  assert.equal(edited.identity.edited > 0, true, "reconcile should report edited nodes");
+  assert.equal(edited.identity.ambiguous, 0, "literal edit should not be ambiguous");
+  assert.equal(edited.graphPatch.available, true, "literal edit should produce a graph patch");
+  assert.match(edited.graphPatch.text, /set node="#expr_[^"]+" field="value"/, "literal edit patch should target a graph node");
+  const literalDecision = edited.decisions.find((decision) => decision.status === "edited" && decision.kind === "Literal");
+  assert.deepEqual(literalDecision?.sourceRange.start, { line: 6, column: 27 }, "reconcile should map edited literal decisions to the source token");
+  assert.deepEqual(literalDecision?.sourceRange.end, { line: 6, column: 47 }, "reconcile should include the full edited literal token");
+  assert.equal(await zeroText(["graph", "reconcile", baseArtifact, "--source", fixture]), "program graph reconcile ok\n", "reconcile text output");
+
+  await writeFile(fixture, original.replace("\npub fn main", "\nfn appendedHelper() -> i32 {\n    return 2\n}\n\npub fn main"));
+  const ambiguous = await zeroJsonFailure(["graph", "reconcile", "--json", baseArtifact, "--source", fixture]);
+  assert.equal(ambiguous.ok, false, "reconcile should reject ambiguous same-shape declaration edits");
+  assert.equal(ambiguous.identity.ambiguous > 0, true, "reconcile should count ambiguous identities");
+  assert.equal(ambiguous.diagnostics[0].code, "GRC001", "reconcile should explain ambiguous identity");
+
+  const copiedFixture = `${outDir}/identity-reconcile-copy.0`;
+  await writeFile(copiedFixture, original);
+  const moduleMismatch = await zeroJsonFailure(["graph", "reconcile", "--json", baseArtifact, "--source", copiedFixture]);
+  assert.equal(moduleMismatch.ok, false, "reconcile should reject different module identities");
+  assert.equal(moduleMismatch.identity.moduleIdentityChanged, true, "reconcile should flag module identity changes");
+  assert.equal(moduleMismatch.diagnostics[0].code, "GRC003", "reconcile should explain module identity mismatch");
+}
+
 try {
   await mkdir(outDir, { recursive: true });
 
@@ -512,6 +589,7 @@ try {
   await assertGraphPatchPreservesNodeIds();
 
   await assertSourceEditIdentityBaseline();
+  await assertSourceEditReconcile();
   await assertDeclarationSiblingIdentity();
   console.log("program graph parity ok");
 } finally {

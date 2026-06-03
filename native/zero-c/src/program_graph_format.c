@@ -791,11 +791,9 @@ void z_program_graph_append_dump(ZBuf *buf, const ZProgramGraph *graph, const ZP
     graph_format_append_text_field(buf, "name", node->name, false);
     graph_format_append_text_field(buf, "type", node->type, false);
     graph_format_append_text_field(buf, "value", node->value, node->kind == Z_PROGRAM_GRAPH_NODE_LITERAL || node->kind == Z_PROGRAM_GRAPH_NODE_C_IMPORT);
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_C_IMPORT) {
-      graph_format_append_text_field(buf, "path", node->path, false);
-      graph_format_append_int_field(buf, "line", node->line);
-      graph_format_append_int_field(buf, "column", node->column);
-    }
+    graph_format_append_text_field(buf, "path", node->path, false);
+    graph_format_append_int_field(buf, "line", node->line);
+    graph_format_append_int_field(buf, "column", node->column);
     graph_format_append_bool_field(buf, "public", node->is_public);
     graph_format_append_bool_field(buf, "mutable", node->is_mutable);
     graph_format_append_bool_field(buf, "static", node->is_static);
