@@ -1088,9 +1088,9 @@ static void append_shell_quoted_arg(ZBuf *cmd, const char *value) {
   zbuf_append_char(cmd, '\'');
 }
 
-static bool dir_exists_for_cc(const char *path) {
+static bool path_exists_for_cc(const char *path, bool directory) {
   struct stat st;
-  return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+  return path && path[0] && stat(path, &st) == 0 && (directory ? S_ISDIR(st.st_mode) : S_ISREG(st.st_mode));
 }
 
 static bool profile_should_strip_artifact(const char *profile);
@@ -1099,7 +1099,7 @@ static const char *sysroot_status_for(const ZTargetInfo *target, const char *env
   if (!z_target_requires_sysroot(target)) return "not-required";
   if (!env_name || !env_name[0] || !sysroot || !sysroot[0]) return "missing";
   if (strstr(sysroot, "/usr/include") || strstr(sysroot, "/usr/lib")) return "host-leakage";
-  if (!dir_exists_for_cc(sysroot)) return "missing";
+  if (!path_exists_for_cc(sysroot, true)) return "missing";
   return "present";
 }
 
@@ -1221,7 +1221,7 @@ bool z_toolchain_compile_c_object(const ZToolchainPlan *plan, const char *profil
   append_shell_quoted_arg(&cmd, c_file);
   zbuf_append(&cmd, " -o ");
   append_shell_quoted_arg(&cmd, object_file);
-  bool ok = system(cmd.data) == 0;
+  bool ok = system(cmd.data) == 0 && path_exists_for_cc(object_file, false);
   zbuf_free(&cmd);
   return ok;
 }
@@ -1242,7 +1242,7 @@ bool z_toolchain_link_objects(const ZToolchainPlan *plan, const ZTargetInfo *tar
   zbuf_append(&cmd, " -o ");
   append_shell_quoted_arg(&cmd, exe_file);
   if (post_object_flags && post_object_flags[0]) zbuf_appendf(&cmd, " %s", post_object_flags);
-  bool ok = system(cmd.data) == 0;
+  bool ok = system(cmd.data) == 0 && path_exists_for_cc(exe_file, false);
   zbuf_free(&cmd);
   return ok;
 }

@@ -3835,6 +3835,18 @@ assert.match(llvmFailingToolLinkBuild.body.diagnostics[0].message, /LLVM executa
 assert.equal(llvmFailingToolLinkBuild.body.diagnostics[0].backendBlocker.backend, "llvm");
 assert.equal(llvmFailingToolLinkBuild.body.diagnostics[0].backendBlocker.stage, "toolchain");
 assert.equal(llvmFailingToolLinkBuild.body.diagnostics[0].backendBlocker.unsupportedFeature, "clang");
+const llvmNoOutputToolPath = join(outDir, "no-output-clang");
+const llvmNoOutputArtifactPath = join(outDir, "return-llvm-no-output-tool");
+writeFileSync(llvmNoOutputToolPath, "#!/bin/sh\nexit 0\n");
+chmodSync(llvmNoOutputToolPath, 0o755);
+const llvmNoOutputToolBuild = json(["build", "--json", "--backend", "llvm", "examples/direct-exe-return.0", "--out", llvmNoOutputArtifactPath], { allowFailure: true, env: { ZERO_LLVM_CLANG: llvmNoOutputToolPath } });
+assert.notEqual(llvmNoOutputToolBuild.code, 0);
+assert.equal(llvmNoOutputToolBuild.body.diagnostics[0].code, "BLD004");
+assert.match(llvmNoOutputToolBuild.body.diagnostics[0].message, /LLVM executable link failed/);
+assert.equal(llvmNoOutputToolBuild.body.diagnostics[0].backendBlocker.backend, "llvm");
+assert.equal(llvmNoOutputToolBuild.body.diagnostics[0].backendBlocker.stage, "toolchain");
+assert.equal(llvmNoOutputToolBuild.body.diagnostics[0].backendBlocker.unsupportedFeature, "clang");
+assert.equal(existsSync(llvmNoOutputArtifactPath), false);
 const llvmIrBuild = json(["build", "--json", "--emit", "llvm-ir", "examples/add.0", "--out", join(outDir, "add.ll")], { allowFailure: true });
 assert.notEqual(llvmIrBuild.code, 0);
 assert.equal(llvmIrBuild.body.diagnostics[0].code, "BLD004");
