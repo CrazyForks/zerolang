@@ -15,5 +15,6 @@ void z_program_graph_projection_init(ZProgramGraphProjection *projection);
 void z_program_graph_projection_free(ZProgramGraphProjection *projection);
 bool z_program_graph_projection_sources_match(const ZProgramGraphStore *store, bool *matches, ZDiag *diag);
 bool z_program_graph_projection_write_sources(const ZProgramGraphStore *store, ZProgramGraphProjection *projection, ZDiag *diag);
+bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *store, ZDiag *diag);
 
 #endif

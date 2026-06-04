@@ -762,6 +762,18 @@ const standaloneRepoGraphSourceMapAfterProjection = json(["graph", "source-map",
 assert.equal(standaloneRepoGraphSourceMapAfterProjection.ok, true);
 assert(standaloneRepoGraphSourceMapAfterProjection.files.some((file: any) => file.path === standaloneRepoGraphSource && file.readable === true && file.nodeCount > 0));
 assert(standaloneRepoGraphSourceMapAfterProjection.mappings.some((mapping: any) => mapping.sourceAvailable === true && mapping.sourceRange?.path === standaloneRepoGraphSource));
+const invalidProjectionText = readFileSync(standaloneRepoGraphSource, "utf8").replace("hello from zero", "projection row changed graph");
+writeFileSync(standaloneRepoGraphStore, storeText.replace(/^projection path:"standalone\.0" text:.*$/m, `projection path:"standalone.0" text:${JSON.stringify(invalidProjectionText)}`));
+const invalidProjectionStatus = json(["graph", "status", "--json", resolve(standaloneRepoGraphSource)]);
+assert.equal(invalidProjectionStatus.body.repositoryGraph.syncState, "conflict");
+const invalidProjectionVerify = json(["graph", "verify-sync", "--json", resolve(standaloneRepoGraphSource)], { allowFailure: true });
+assert.notEqual(invalidProjectionVerify.code, 0);
+assert.equal(invalidProjectionVerify.body.diagnostics[0].code, "RGP006");
+const invalidProjectionSync = json(["graph", "sync", "--from-graph", "--json", resolve(standaloneRepoGraphSource)], { allowFailure: true });
+assert.notEqual(invalidProjectionSync.code, 0);
+assert.equal(invalidProjectionSync.body.diagnostics[0].code, "RGP004");
+assert(!readFileSync(standaloneRepoGraphSource, "utf8").includes("projection row changed graph"));
+writeFileSync(standaloneRepoGraphStore, storeText);
 const relativePackageRoot = join("/tmp", `zero-repo-graph-relative-package-${process.pid}`);
 const relativePackageSource = join(relativePackageRoot, "src", "main.0");
 const relativePackageStore = join(relativePackageRoot, "zero.graph");
