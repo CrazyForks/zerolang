@@ -61,7 +61,7 @@ const fileBudgets = {
   "native/zero-c/src/macho_emit_state.h": { maxLines: 90, maxStrcmpCalls: 0 },
   "native/zero-c/src/emit_elf64.c": { maxLines: 2308, maxStrcmpCalls: 3 },
   "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 370, maxStrcmpCalls: 1 },
-  "native/zero-c/src/emit_llvm_ir.c": { maxLines: 540, maxStrcmpCalls: 9 },
+  "native/zero-c/src/emit_llvm_ir.c": { maxLines: 930, maxStrcmpCalls: 9 },
   "native/zero-c/src/emit_coff.c": { maxLines: 1315, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff_aarch64.c": { maxLines: 400, maxStrcmpCalls: 0 },
   "native/zero-c/src/fs.c": { maxLines: 1300, maxStrcmpCalls: 36 },

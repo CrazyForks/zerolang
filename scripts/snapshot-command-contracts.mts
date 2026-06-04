@@ -3800,13 +3800,29 @@ assert.equal(llvmIrReadiness.targetReadiness.backend, "llvm");
 assert.equal(llvmIrReadiness.targetReadiness.emit, "llvm-ir");
 assert.equal(llvmIrReadiness.targetReadiness.stage, "ready");
 assert.equal(llvmIrReadiness.targetReadiness.diagnostics.length, 0);
+const llvmPracticalSubsetExpected = "LLVM IR scalar, fixed-array, and byte-view MIR subset";
+for (const fixture of [
+  "examples/direct-array-sum.0",
+  "examples/direct-string-len.0",
+  "examples/direct-byte-copy-fill.0",
+  "examples/direct-string-eql.0",
+  "examples/direct-byte-view-locals.0",
+  "examples/direct-span-read.0",
+]) {
+  const readiness = json(["check", "--json", "--emit", "llvm-ir", "--backend", "llvm", fixture]).body;
+  assert.equal(readiness.ok, true);
+  assert.equal(readiness.targetReadiness.ok, true);
+  assert.equal(readiness.targetReadiness.backend, "llvm");
+  assert.equal(readiness.targetReadiness.stage, "ready");
+  assert.equal(readiness.targetReadiness.diagnostics.length, 0);
+}
 const llvmIrLoweringBlockedReadiness = json(["check", "--json", "--emit", "llvm-ir", "--backend", "llvm", "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0"]).body;
 assert.equal(llvmIrLoweringBlockedReadiness.ok, true);
 assert.equal(llvmIrLoweringBlockedReadiness.targetReadiness.ok, false);
 assert.equal(llvmIrLoweringBlockedReadiness.targetReadiness.backend, "llvm");
 assert.equal(llvmIrLoweringBlockedReadiness.targetReadiness.stage, "lower");
 assert.equal(llvmIrLoweringBlockedReadiness.targetReadiness.diagnostics[0].code, "BLD004");
-assert.equal(llvmIrLoweringBlockedReadiness.targetReadiness.diagnostics[0].expected, "LLVM IR scalar MIR subset");
+assert.equal(llvmIrLoweringBlockedReadiness.targetReadiness.diagnostics[0].expected, llvmPracticalSubsetExpected);
 assert.match(llvmIrLoweringBlockedReadiness.targetReadiness.diagnostics[0].help, /--backend llvm --emit llvm-ir/);
 assert.deepEqual(llvmIrLoweringBlockedReadiness.targetReadiness.diagnostics[0].backendBlocker, {
   target: version.host,
@@ -3821,7 +3837,7 @@ assert.equal(llvmNativeLoweringBlockedReadiness.targetReadiness.ok, false);
 assert.equal(llvmNativeLoweringBlockedReadiness.targetReadiness.backend, "llvm");
 assert.equal(llvmNativeLoweringBlockedReadiness.targetReadiness.stage, "lower");
 assert.equal(llvmNativeLoweringBlockedReadiness.targetReadiness.diagnostics[0].code, "BLD004");
-assert.equal(llvmNativeLoweringBlockedReadiness.targetReadiness.diagnostics[0].expected, "LLVM IR scalar MIR subset");
+assert.equal(llvmNativeLoweringBlockedReadiness.targetReadiness.diagnostics[0].expected, llvmPracticalSubsetExpected);
 assert.doesNotMatch(llvmNativeLoweringBlockedReadiness.targetReadiness.diagnostics[0].message, /direct backend/);
 const llvmBuild = json(["build", "--json", "--backend", "llvm", "examples/add.0", "--out", join(outDir, "add-llvm")], { allowFailure: !llvmHostReady });
 if (llvmHostReady) {
@@ -3860,7 +3876,7 @@ assert.equal(llvmMissingToolBuild.body.diagnostics[0].backendBlocker.unsupported
 const llvmNativeLoweringBlockedBuild = json(["build", "--json", "--backend", "llvm", "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0", "--out", join(outDir, "owned-drop-llvm")], { allowFailure: true });
 assert.notEqual(llvmNativeLoweringBlockedBuild.code, 0);
 assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].code, "BLD004");
-assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].expected, "LLVM IR scalar MIR subset");
+assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].expected, llvmPracticalSubsetExpected);
 assert.doesNotMatch(llvmNativeLoweringBlockedBuild.body.diagnostics[0].message, /direct backend/);
 assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].backendBlocker.backend, "llvm");
 assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].backendBlocker.stage, "lower");
@@ -3931,12 +3947,12 @@ assert.match(explicitLlvmIrText, /target triple = "/);
 assert.match(explicitLlvmIrText, /define i32 @main\(\)/);
 assert.match(explicitLlvmIrText, /declare i32 @zero_world_write\(i32, ptr, i32\)/);
 assert.match(explicitLlvmIrText, /declare void @llvm\.trap\(\)/);
-assert.match(explicitLlvmIrText, /call i32 @zero_world_write\(i32 1, ptr %v[0-9]+, i32 11\)/);
-assert.match(explicitLlvmIrText, /%v[0-9]+ = call i32 @zero_world_write\(i32 1, ptr %v[0-9]+, i32 11\)\n  %v[0-9]+ = icmp eq i32 %v[0-9]+, 0\n  br i1 %v[0-9]+, label %L[0-9]+, label %L[0-9]+\nL[0-9]+:\n  call void @llvm\.trap\(\)\n  unreachable\nL[0-9]+:/);
+assert.match(explicitLlvmIrText, /call i32 @zero_world_write\(i32 1, ptr %v[0-9]+, i32 (?:11|%v[0-9]+)\)/);
+assert.match(explicitLlvmIrText, /%v[0-9]+ = call i32 @zero_world_write\(i32 1, ptr %v[0-9]+, i32 (?:11|%v[0-9]+)\)\n  %v[0-9]+ = icmp eq i32 %v[0-9]+, 0\n  br i1 %v[0-9]+, label %L[0-9]+, label %L[0-9]+\nL[0-9]+:\n  call void @llvm\.trap\(\)\n  unreachable\nL[0-9]+:/);
 const llvmIrLoweringBlockedBuild = json(["build", "--json", "--emit", "llvm-ir", "--backend", "llvm", "conformance/agent-surface/fixtures/owned-drop-direct-backend-unsupported.0", "--out", join(outDir, "owned-drop.ll")], { allowFailure: true });
 assert.notEqual(llvmIrLoweringBlockedBuild.code, 0);
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].code, "BLD004");
-assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].expected, "LLVM IR scalar MIR subset");
+assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].expected, llvmPracticalSubsetExpected);
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.backend, "llvm");
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.stage, "lower");
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.unsupportedFeature, "owned<Tracked>");

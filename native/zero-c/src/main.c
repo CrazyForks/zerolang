@@ -9926,11 +9926,11 @@ static void init_lowering_backend_diag(ZDiag *diag, const SourceInput *input, co
            llvm_request ? "LLVM IR backend cannot lower this MIR program yet" :
            (ir && ir->mir_message[0] ? ir->mir_message : "direct backend lowering failed"));
   snprintf(diag->expected, sizeof(diag->expected), "%s",
-           llvm_request ? "LLVM IR scalar MIR subset" : z_direct_backend_expected(target));
+           llvm_request ? "LLVM IR scalar, fixed-array, and byte-view MIR subset" : z_direct_backend_expected(target));
   snprintf(diag->actual, sizeof(diag->actual), "%s", ir && ir->mir_actual[0] ? ir->mir_actual : "unsupported construct");
   snprintf(diag->help, sizeof(diag->help), "%s",
            llvm_request
-             ? "use --backend llvm --emit llvm-ir only for scalar functions, direct calls, branches, loops, and readonly string writes"
+             ? "use --backend llvm --emit llvm-ir for scalar code, fixed arrays, byte views, readonly strings, and primitive std.mem helpers"
              : z_direct_backend_help(target));
   if (ir) z_diag_set_backend_blocker(diag, &ir->backend_blocker);
   complete_backend_blocker_diag(diag, target, command, emit_kind, "lower");
