@@ -315,7 +315,7 @@ int z_repository_graph_sync_command(const char *input, bool json, bool from_grap
   ZProgramGraphStore saved;
   ZDiag diag = {0};
   if (!z_program_graph_store_save_for_input(input, source_graph, &saved, &diag)) {
-    int rc = repo_graph_error(&state, json, "sync-from-source", "RGP003", "repository graph store could not be saved", "byte-stable zero.graph repository graph store", diag.message[0] ? diag.message : "save failed", "run zero graph status to inspect repository graph state", false);
+    int rc = repo_graph_error(&state, json, "sync-from-source", "RGP003", "repository graph store could not be saved", "byte-stable zero.graph repository graph store", diag.actual[0] ? diag.actual : (diag.message[0] ? diag.message : "save failed"), "run zero graph status to inspect repository graph state", false);
     repo_graph_state_free(&state);
     return rc;
   }

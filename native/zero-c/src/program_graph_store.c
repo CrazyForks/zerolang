@@ -7,6 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if !defined(_WIN32)
+#include <unistd.h>
+#endif
 
 typedef struct {
   char *id;
@@ -49,6 +52,117 @@ static char *store_join_path(const char *left, const char *right) {
   if (buf.len > 0 && buf.data[buf.len - 1] != '/') zbuf_append_char(&buf, '/');
   zbuf_append(&buf, right ? right : "");
   return buf.data;
+}
+
+static int store_text_cmp(const char *left, const char *right) {
+  return strcmp(left ? left : "", right ? right : "");
+}
+
+static bool store_text_eq(const char *left, const char *right) { return store_text_cmp(left, right) == 0; }
+
+static char *store_normalize_path_text(const char *path) {
+  bool absolute = path && path[0] == '/';
+  char *copy = z_strdup(path ? path : "");
+  char **segments = NULL;
+  size_t segment_count = 0;
+  char *cursor = copy;
+  while (*cursor) {
+    while (*cursor == '/') cursor++;
+    if (!*cursor) break;
+    char *start = cursor;
+    while (*cursor && *cursor != '/') cursor++;
+    char saved = *cursor;
+    *cursor = 0;
+    if (store_text_eq(start, ".")) {
+    } else if (store_text_eq(start, "..")) {
+      if (segment_count > 0 && !store_text_eq(segments[segment_count - 1], "..")) {
+        segment_count--;
+      } else if (!absolute) {
+        segments = z_checked_reallocarray(segments, segment_count + 1, sizeof(char *));
+        segments[segment_count++] = start;
+      }
+    } else {
+      segments = z_checked_reallocarray(segments, segment_count + 1, sizeof(char *));
+      segments[segment_count++] = start;
+    }
+    if (!saved) break;
+    cursor++;
+  }
+  ZBuf out;
+  zbuf_init(&out);
+  if (absolute) zbuf_append_char(&out, '/');
+  for (size_t i = 0; i < segment_count; i++) {
+    if ((absolute && out.len > 1) || (!absolute && out.len > 0)) zbuf_append_char(&out, '/');
+    zbuf_append(&out, segments[i]);
+  }
+  if (out.len == 0) zbuf_append(&out, absolute ? "/" : ".");
+  free(segments);
+  free(copy);
+  return out.data;
+}
+
+static bool store_path_relative_to_root(const char *root, const char *path, const char **relative) {
+  if (!root || !path || !relative) return false;
+  size_t root_len = strlen(root);
+  if (root_len == 0) return false;
+  if (store_text_eq(root, path)) {
+    *relative = ".";
+    return true;
+  }
+  if (store_text_eq(root, ".")) {
+    if (path[0] == '/') return false;
+    if (path[0] == '.' && path[1] == '/') *relative = path + 2;
+    else *relative = path;
+    return true;
+  }
+  if (strncmp(path, root, root_len) == 0 && path[root_len] == '/') {
+    *relative = path + root_len + 1;
+    return true;
+  }
+  return false;
+}
+
+static char *store_absolute_path_text(const char *path) {
+  if (!path || !path[0]) return NULL;
+  char *normalized = store_normalize_path_text(path);
+  if (normalized[0] == '/') return normalized;
+#if defined(_WIN32)
+  return normalized;
+#else
+  char cwd[4096];
+  if (!getcwd(cwd, sizeof(cwd))) return normalized;
+  char *joined = store_join_path(cwd, normalized);
+  free(normalized);
+  char *absolute = store_normalize_path_text(joined);
+  free(joined);
+  return absolute;
+#endif
+}
+
+static char *store_source_path_for_root(const char *root, const char *path) {
+  if (!path || !path[0]) return z_strdup("");
+  char *real_root = store_absolute_path_text(root && root[0] ? root : ".");
+  char *real_path = store_absolute_path_text(path);
+  const char *relative = NULL;
+  if (real_root && real_path && store_path_relative_to_root(real_root, real_path, &relative)) {
+    char *normalized = store_normalize_path_text(relative);
+    free(real_root);
+    free(real_path);
+    return normalized;
+  }
+  free(real_root);
+  free(real_path);
+
+  char *normalized_root = store_normalize_path_text(root && root[0] ? root : ".");
+  char *normalized_path = store_normalize_path_text(path);
+  if (store_path_relative_to_root(normalized_root, normalized_path, &relative)) {
+    char *result = store_normalize_path_text(relative);
+    free(normalized_root);
+    free(normalized_path);
+    return result;
+  }
+  free(normalized_root);
+  return normalized_path;
 }
 
 static bool store_same_existing_dir(const char *left, const char *right) {
@@ -150,12 +264,6 @@ static bool store_diag(ZDiag *diag, const char *path, size_t line, const char *m
   }
   return false;
 }
-
-static int store_text_cmp(const char *left, const char *right) {
-  return strcmp(left ? left : "", right ? right : "");
-}
-
-static bool store_text_eq(const char *left, const char *right) { return store_text_cmp(left, right) == 0; }
 
 static void store_append_quoted(ZBuf *buf, const char *text) {
   zbuf_append_char(buf, '"');
@@ -323,6 +431,80 @@ static bool store_source_locations_match_graph(const ZProgramGraphStore *store, 
       return false;
     }
   }
+  return true;
+}
+
+static char *store_nullable_strdup(const char *text) {
+  return text ? z_strdup(text) : NULL;
+}
+
+static void store_copy_graph(const ZProgramGraph *src, ZProgramGraph *dst) {
+  z_program_graph_init(dst);
+  if (!src) return;
+  dst->schema_version = src->schema_version;
+  dst->validation_state = src->validation_state;
+  dst->canonical_source = src->canonical_source;
+  dst->next_id = src->next_id;
+  free(dst->module_identity);
+  dst->module_identity = z_strdup(src->module_identity ? src->module_identity : "");
+  free(dst->graph_hash);
+  dst->graph_hash = z_strdup(src->graph_hash ? src->graph_hash : "");
+  if (src->node_len > 0) {
+    dst->nodes = z_checked_calloc(src->node_len, sizeof(ZProgramGraphNode));
+    dst->node_len = src->node_len;
+    dst->node_cap = src->node_len;
+    for (size_t i = 0; i < src->node_len; i++) {
+      const ZProgramGraphNode *from = &src->nodes[i];
+      ZProgramGraphNode *to = &dst->nodes[i];
+      to->id = store_nullable_strdup(from->id);
+      to->kind = from->kind;
+      to->name = store_nullable_strdup(from->name);
+      to->type = store_nullable_strdup(from->type);
+      to->value = store_nullable_strdup(from->value);
+      to->path = store_nullable_strdup(from->path);
+      to->symbol_id = store_nullable_strdup(from->symbol_id);
+      to->type_id = store_nullable_strdup(from->type_id);
+      to->effect_id = store_nullable_strdup(from->effect_id);
+      to->node_hash = store_nullable_strdup(from->node_hash);
+      to->line = from->line;
+      to->column = from->column;
+      to->is_public = from->is_public;
+      to->is_mutable = from->is_mutable;
+      to->is_static = from->is_static;
+      to->fallible = from->fallible;
+      to->export_c = from->export_c;
+    }
+  }
+  if (src->edge_len > 0) {
+    dst->edges = z_checked_calloc(src->edge_len, sizeof(ZProgramGraphEdge));
+    dst->edge_len = src->edge_len;
+    dst->edge_cap = src->edge_len;
+    for (size_t i = 0; i < src->edge_len; i++) {
+      const ZProgramGraphEdge *from = &src->edges[i];
+      ZProgramGraphEdge *to = &dst->edges[i];
+      to->from = store_nullable_strdup(from->from);
+      to->to = store_nullable_strdup(from->to);
+      to->kind = store_nullable_strdup(from->kind);
+      to->target = from->target;
+      to->order = from->order;
+    }
+  }
+}
+
+static void store_normalize_graph_paths_for_root(ZProgramGraph *graph, const char *root) {
+  if (!graph) return;
+  for (size_t i = 0; i < graph->node_len; i++) {
+    char *normalized = store_source_path_for_root(root, graph->nodes[i].path);
+    free(graph->nodes[i].path);
+    graph->nodes[i].path = normalized;
+  }
+  z_program_graph_finalize_identities(graph);
+}
+
+static bool store_normalized_source_graph(const char *root, const ZProgramGraph *source_graph, ZProgramGraph *out) {
+  if (!source_graph || !out) return false;
+  store_copy_graph(source_graph, out);
+  store_normalize_graph_paths_for_root(out, root && root[0] ? root : ".");
   return true;
 }
 
@@ -559,20 +741,43 @@ static bool store_byte_stability_fail(const char *path, ZDiag *diag) {
 }
 
 bool z_program_graph_store_save_path(const char *path, const ZProgramGraph *graph, ZDiag *diag) {
+  char *root = store_dirname(path ? path : "zero.graph");
+  ZProgramGraph normalized;
+  if (!store_normalized_source_graph(root, graph, &normalized)) {
+    free(root);
+    return store_diag(diag, path, 1, "repository graph store requires a source graph", "missing source graph");
+  }
   ZProgramGraphValidation validation = {0};
-  if (!z_program_graph_validate(graph, &validation)) return store_diag(diag, path, 1, "repository graph store failed graph validation", validation.code);
-  if (!graph || !graph->graph_hash || !graph->graph_hash[0]) return store_diag(diag, path, 1, "repository graph store requires graph hashes", "missing graph hash");
-  for (size_t i = 0; i < graph->node_len; i++) {
-    if (!graph->nodes[i].node_hash || !graph->nodes[i].node_hash[0]) return store_diag(diag, path, 1, "repository graph store requires node hashes", graph->nodes[i].id);
+  if (!z_program_graph_validate(&normalized, &validation)) {
+    z_program_graph_free(&normalized);
+    free(root);
+    return store_diag(diag, path, 1, "repository graph store failed graph validation", validation.code);
+  }
+  if (!normalized.graph_hash || !normalized.graph_hash[0]) {
+    z_program_graph_free(&normalized);
+    free(root);
+    return store_diag(diag, path, 1, "repository graph store requires graph hashes", "missing graph hash");
+  }
+  for (size_t i = 0; i < normalized.node_len; i++) {
+    if (!normalized.nodes[i].node_hash || !normalized.nodes[i].node_hash[0]) {
+      char *actual = z_strdup(normalized.nodes[i].id ? normalized.nodes[i].id : "");
+      z_program_graph_free(&normalized);
+      free(root);
+      bool ok = store_diag(diag, path, 1, "repository graph store requires node hashes", actual);
+      free(actual);
+      return ok;
+    }
   }
 
   ZBuf first;
   zbuf_init(&first);
-  store_append_text(&first, graph);
+  store_append_text(&first, &normalized);
 
   ZProgramGraphStore parsed;
   if (!store_parse_text(path, first.data ? first.data : "", &parsed, diag)) {
     zbuf_free(&first);
+    z_program_graph_free(&normalized);
+    free(root);
     return false;
   }
   ZBuf second;
@@ -583,11 +788,15 @@ bool z_program_graph_store_save_path(const char *path, const ZProgramGraph *grap
   if (!stable) {
     zbuf_free(&first);
     zbuf_free(&second);
+    z_program_graph_free(&normalized);
+    free(root);
     return store_byte_stability_fail(path, diag);
   }
   zbuf_free(&second);
   bool wrote = z_write_file(path, first.data ? first.data : "", diag);
   zbuf_free(&first);
+  z_program_graph_free(&normalized);
+  free(root);
   return wrote;
 }
 
@@ -602,11 +811,15 @@ bool z_program_graph_store_save_for_input(const char *input, const ZProgramGraph
 }
 
 bool z_program_graph_store_graph_matches_source(const ZProgramGraphStore *store, const ZProgramGraph *source_graph) {
-  return store && source_graph &&
-         store_text_eq(store->graph.module_identity, source_graph->module_identity) &&
-         store_text_eq(store->graph.graph_hash, source_graph->graph_hash) &&
-         store->graph.node_len == source_graph->node_len &&
-         store->graph.edge_len == source_graph->edge_len &&
-         store_source_paths_match_graph(store, source_graph) &&
-         store_source_locations_match_graph(store, source_graph);
+  if (!store || !source_graph) return false;
+  ZProgramGraph normalized;
+  if (!store_normalized_source_graph(store->root, source_graph, &normalized)) return false;
+  bool ok = store_text_eq(store->graph.module_identity, normalized.module_identity) &&
+            store_text_eq(store->graph.graph_hash, normalized.graph_hash) &&
+            store->graph.node_len == normalized.node_len &&
+            store->graph.edge_len == normalized.edge_len &&
+            store_source_paths_match_graph(store, &normalized) &&
+            store_source_locations_match_graph(store, &normalized);
+  z_program_graph_free(&normalized);
+  return ok;
 }
