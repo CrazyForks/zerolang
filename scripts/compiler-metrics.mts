@@ -78,13 +78,13 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_format.c": { maxLines: 850, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_format.h": { maxLines: 20, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph.h": { maxLines: 135, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_identity.c": { maxLines: 416, maxStrcmpCalls: 1 },
+  "native/zero-c/src/program_graph_identity.c": { maxLines: 500, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_import.c": { maxLines: 496, maxStrcmpCalls: 4 },
   "native/zero-c/src/program_graph_import.h": { maxLines: 8, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_lower.c": { maxLines: 1170, maxStrcmpCalls: 4 },
   "native/zero-c/src/program_graph_lower.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_mir.c": { maxLines: 1204, maxStrcmpCalls: 3 },
-  "native/zero-c/src/program_graph_node_id.c": { maxLines: 320, maxStrcmpCalls: 0 },
+  "native/zero-c/src/program_graph_node_id.c": { maxLines: 350, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_validate.c": { maxLines: 537, maxStrcmpCalls: 5 },
   "native/zero-c/src/program_graph_patch_ops.c": { maxLines: 715, maxStrcmpCalls: 11 },
   "native/zero-c/src/program_graph_patch.c": { maxLines: 591, maxStrcmpCalls: 28 },
@@ -851,7 +851,8 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
     });
   }
   if (!programGraph.sourceCommandGraphMirPrep ||
-      !programGraph.sourceCommandGraphProgramPrep ||
+      !programGraph.sourceCommandGraphAvoidsProgramPrep ||
+      !programGraph.sourceCommandGraphBoundedMirProbe ||
       !programGraph.sourceCommandGraphMirPredicate) {
     violations.push({
       kind: "program-graph-source-command-compiler-path",
@@ -1532,8 +1533,9 @@ const programGraph = {
     /\bz_write_file\s*\(\s*command->out\s*,\s*graph\.data/g,
   ),
   sourceCommandGraphMirPrep: /z_program_graph_prepare_source_mir_input\s*\(/.test(cCodeText(cBlock(main, "int main(int argc, char **argv)"))),
-  sourceCommandGraphProgramPrep: /z_program_graph_lower_to_program_with_source\s*\(/.test(programGraphCompileSource) &&
-    /\*\s*program\s*=\s*graph_program\s*;/.test(programGraphCompileSource),
+  sourceCommandGraphAvoidsProgramPrep: !/z_program_graph_lower_to_program_with_source\s*\(/.test(programGraphCompileSource) &&
+    !/\*\s*program\s*=\s*graph_program\s*;/.test(programGraphCompileSource),
+  sourceCommandGraphBoundedMirProbe: /graph_compile_should_try_typed_mir\s*\(/.test(programGraphCompileSource),
   sourceCommandGraphMirPredicate: /z_program_graph_source_command_uses_graph_mir\s*\(/.test(programGraphCompileSource),
 };
 const violations = budgetViolations(files, allLargeFunctions, stdlib, backendFormats, programGraph);

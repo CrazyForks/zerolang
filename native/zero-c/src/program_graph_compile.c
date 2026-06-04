@@ -13,6 +13,10 @@ bool z_program_graph_source_command_uses_graph_mir(const char *command) {
   return true;
 }
 
+static bool graph_compile_should_try_typed_mir(const ZProgramGraph *graph) {
+  return graph && graph->node_len <= 1024 && graph->edge_len <= 1024;
+}
+
 static bool graph_compile_diag(ZDiag *diag, const char *path, const char *message, const char *actual) {
   if (!diag) return false;
   *diag = (ZDiag){0};
@@ -23,61 +27,21 @@ static bool graph_compile_diag(ZDiag *diag, const char *path, const char *messag
   return false;
 }
 
-static void graph_compile_pin_diag_paths(ZDiag *diag) {
-  if (!diag) return;
-  if (diag->path) diag->path = z_strdup(diag->path);
-  for (size_t i = 0; i < diag->borrow_trace_count; i++) {
-    if (diag->borrow_traces[i].binding_decl_path) {
-      diag->borrow_traces[i].binding_decl_path = z_strdup(diag->borrow_traces[i].binding_decl_path);
-    }
-  }
-}
-
-static void graph_compile_replace_source_map(SourceInput *input, SourceInput *graph_input) {
-  if (!input || !graph_input) return;
-  for (size_t i = 0; i < input->source_line_count; i++) free(input->source_line_paths[i]);
-  free(input->source_line_paths); free(input->source_line_numbers);
-  input->source_line_paths = graph_input->source_line_paths; input->source_line_numbers = graph_input->source_line_numbers; input->source_line_count = graph_input->source_line_count;
-  graph_input->source_line_paths = NULL; graph_input->source_line_numbers = NULL; graph_input->source_line_count = 0;
-}
-
 bool z_program_graph_prepare_source_mir_input(const char *source_path, const ZTargetInfo *target, Program *program, SourceInput *input, IrProgram *ir, ZProgramGraphArtifactSource *source, ZDiag *diag) {
   if (!program || !input || !ir) return graph_compile_diag(diag, source_path, "failed to prepare source program graph", "missing compiler input");
   const char *path = input->source_file ? input->source_file : source_path;
   ZProgramGraph graph = {0};
   if (!z_program_graph_from_program(input, program, &graph)) return graph_compile_diag(diag, path, "failed to build source program graph", "source import failed");
   graph.canonical_source = input->canonical_text_source;
-  ZProgramGraphValidation validation = {0};
-  if (!z_program_graph_validate(&graph, &validation)) {
-    const char *actual = validation.message[0] ? validation.message : validation.code;
-    z_program_graph_free(&graph);
-    return graph_compile_diag(diag, path, "source program graph is not valid", actual);
-  }
 
-  Program graph_program = {0};
-  SourceInput graph_input = {0};
-  bool lowered = z_program_graph_lower_to_program_with_source(&graph, path, &graph_program, &graph_input, diag);
-  if (lowered) {
-    z_set_check_target(target);
-    lowered = input->allow_missing_main ? z_check_program_library(&graph_program, diag) : z_check_program(&graph_program, diag);
+  IrProgram graph_ir = {0};
+  bool graph_mir_valid = false;
+  if (graph_compile_should_try_typed_mir(&graph)) {
+    graph_ir = z_lower_program_graph_with_source(&graph, input, target);
+    graph_mir_valid = graph_ir.mir_valid;
   }
-  if (!lowered) {
-    if (graph_input.source_file) z_map_source_diag(&graph_input, diag);
-    if (diag && !diag->path) diag->path = path;
-    graph_compile_pin_diag_paths(diag);
-    z_free_program(&graph_program); z_free_source(&graph_input); z_program_graph_free(&graph);
-    return false;
-  }
-
-  IrProgram graph_ir = z_lower_program_graph_with_source(&graph, input, target);
-  bool graph_mir_valid = graph_ir.mir_valid;
   if (graph_mir_valid) *ir = graph_ir;
-  else { z_free_ir_program(&graph_ir); *ir = z_lower_program_with_source(&graph_program, input, target); }
-  z_free_program(program);
-  *program = graph_program;
-  graph_program = (Program){0};
-  graph_compile_replace_source_map(input, &graph_input);
-  z_free_source(&graph_input);
+  else { z_free_ir_program(&graph_ir); *ir = z_lower_program_with_source(program, input, target); }
   input->program_graph_hash = z_strdup(graph.graph_hash ? graph.graph_hash : "");
   input->program_graph_module_identity = z_strdup(graph.module_identity ? graph.module_identity : "");
   if (source) {
