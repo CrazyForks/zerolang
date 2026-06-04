@@ -36,7 +36,9 @@ zero build --emit obj examples/hello.0 --out .zero/out/hello.o
 ```
 
 Use LLVM only when the request is explicit. Textual IR is inspectable with
-`--emit llvm-ir`; host executable builds require a ready clang toolchain:
+`--emit llvm-ir`; host executable builds require a ready clang toolchain. LLVM
+currently lowers scalar code, direct calls, branches, loops, primitive fixed
+arrays, byte views, readonly strings, and primitive `std.mem` helpers:
 
 ```sh
 zero build --backend llvm --emit llvm-ir examples/hello.0 --out .zero/out/hello.ll

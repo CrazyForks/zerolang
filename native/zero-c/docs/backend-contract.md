@@ -21,8 +21,11 @@ backend requests.
 `llvm` is a known backend family. It can emit deterministic textual LLVM IR
 when selected with `--backend llvm --emit llvm-ir`. Native LLVM executable
 artifacts are buildable only for supported host targets with a ready clang
-toolchain. Native LLVM object output and unsupported targets must report a
-structured backend blocker; they must not fall back to direct emitters.
+toolchain. LLVM lowering currently supports scalar code, direct calls, branches,
+loops, primitive fixed arrays, byte views, readonly strings, and primitive
+`std.mem` helpers. Native LLVM object output, unsupported targets, and
+unsupported MIR constructs must report a structured backend blocker; they must
+not fall back to direct emitters.
 
 Textual LLVM IR artifacts that reference Zero runtime helpers must report that
 dependency in `objectBackend.linking.targetLibraries` and
