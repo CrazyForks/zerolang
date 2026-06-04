@@ -12229,7 +12229,7 @@ int main(int argc, char **argv) {
     bool repo_graph_command = false;
     SourceInput repo_graph_input = {0}; Program repo_graph_program = {0}; ZProgramGraph repo_source_graph = {0};
     bool repo_needs_source_graph = z_repository_graph_needs_source_graph(command.kind, command.input, command.graph_sync_from_graph, command.graph_sync_from_source);
-    if (repo_needs_source_graph && !load_graph_input_for_read(&command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &diag)) {
+    if (repo_needs_source_graph && !load_graph_from_current_source(&command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &diag)) {
       if (command.json) print_command_diag_json(&command, diag.path ? diag.path : command.input, &diag);
       else print_diag(diag.path ? diag.path : command.input, &diag);
       z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);

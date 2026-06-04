@@ -295,6 +295,37 @@ static bool store_source_path_present(const ZProgramGraphStore *store, const cha
   return false;
 }
 
+static bool store_source_paths_match_graph(const ZProgramGraphStore *store, const ZProgramGraph *source_graph) {
+  if (!store || !source_graph) return false;
+  ZProgramGraphStore current;
+  z_program_graph_store_init(&current);
+  store_collect_source_paths(&current, source_graph);
+  bool ok = store->source_path_len == current.source_path_len;
+  for (size_t i = 0; ok && i < current.source_path_len; i++) {
+    ok = store_source_path_present(store, current.source_paths[i]);
+  }
+  for (size_t i = 0; ok && i < store->source_path_len; i++) {
+    ok = store_source_path_present(&current, store->source_paths[i]);
+  }
+  z_program_graph_store_free(&current);
+  return ok;
+}
+
+static bool store_source_locations_match_graph(const ZProgramGraphStore *store, const ZProgramGraph *source_graph) {
+  if (!store || !source_graph || store->graph.node_len != source_graph->node_len) return false;
+  for (size_t i = 0; i < source_graph->node_len; i++) {
+    const ZProgramGraphNode *stored = &store->graph.nodes[i];
+    const ZProgramGraphNode *current = &source_graph->nodes[i];
+    if (!store_text_eq(stored->id, current->id) ||
+        !store_text_eq(stored->path, current->path) ||
+        stored->line != current->line ||
+        stored->column != current->column) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static void store_node_hash_vec_free(StoreNodeHashVec *hashes) {
   if (!hashes) return;
   for (size_t i = 0; i < hashes->len; i++) {
@@ -575,5 +606,7 @@ bool z_program_graph_store_graph_matches_source(const ZProgramGraphStore *store,
          store_text_eq(store->graph.module_identity, source_graph->module_identity) &&
          store_text_eq(store->graph.graph_hash, source_graph->graph_hash) &&
          store->graph.node_len == source_graph->node_len &&
-         store->graph.edge_len == source_graph->edge_len;
+         store->graph.edge_len == source_graph->edge_len &&
+         store_source_paths_match_graph(store, source_graph) &&
+         store_source_locations_match_graph(store, source_graph);
 }
