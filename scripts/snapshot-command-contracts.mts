@@ -677,6 +677,9 @@ writeFileSync(standaloneRepoGraphSource, readFileSync("examples/hello.0", "utf8"
 const standaloneRepoGraphStatus = json(["graph", "status", "--json", resolve(standaloneRepoGraphSource)]).body;
 assert.equal(standaloneRepoGraphStatus.repositoryGraph.root, resolve(standaloneRepoGraphRoot));
 assert.equal(standaloneRepoGraphStatus.repositoryGraph.storePath, join(resolve(standaloneRepoGraphRoot), "zero.graph"));
+const nestedRelativeRepoGraphStatus = JSON.parse(execFileSync(resolve("bin/zero"), ["graph", "status", "--json", "main.0"], { cwd: "examples/systems-package/src", encoding: "utf8", maxBuffer: execMaxBuffer, stdio: ["ignore", "pipe", "pipe"] }));
+assert.equal(nestedRelativeRepoGraphStatus.repositoryGraph.root, "..");
+assert.equal(nestedRelativeRepoGraphStatus.repositoryGraph.storePath, "../zero.graph");
 writeFileSync(join(standaloneRepoGraphRoot, "zero.graph"), "");
 const standaloneRepoGraphStatusWithStore = json(["graph", "status", "--json", resolve(standaloneRepoGraphSource)]).body;
 assert.equal(standaloneRepoGraphStatusWithStore.repositoryGraph.storePresent, true);

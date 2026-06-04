@@ -46,8 +46,42 @@ static char *repo_join_path(const char *left, const char *right) {
   return buf.data;
 }
 
+static bool repo_same_existing_dir(const char *left, const char *right) {
+  struct stat left_stat;
+  struct stat right_stat;
+  return left && right &&
+         stat(left, &left_stat) == 0 && stat(right, &right_stat) == 0 &&
+         S_ISDIR(left_stat.st_mode) && S_ISDIR(right_stat.st_mode) &&
+         left_stat.st_dev == right_stat.st_dev && left_stat.st_ino == right_stat.st_ino;
+}
+
+static bool repo_relative_dotdot_chain(const char *path) {
+  if (!path || !path[0] || path[0] == '/') return false;
+  const char *cursor = path;
+  while (*cursor) {
+    if (cursor[0] != '.' || cursor[1] != '.') return false;
+    cursor += 2;
+    if (!*cursor) return true;
+    if (*cursor != '/') return false;
+    cursor++;
+  }
+  return false;
+}
+
 static char *repo_parent_dir(const char *path) {
-  if (!path || strcmp(path, ".") == 0 || strcmp(path, "/") == 0) return NULL;
+  if (!path || !path[0] || (path[0] == '/' && path[1] == 0)) return NULL;
+  if (path[0] == '.' && path[1] == 0) {
+    if (repo_same_existing_dir(".", "..")) return NULL;
+    return z_strdup("..");
+  }
+  if (repo_relative_dotdot_chain(path)) {
+    char *parent = repo_join_path(path, "..");
+    if (repo_same_existing_dir(path, parent)) {
+      free(parent);
+      return NULL;
+    }
+    return parent;
+  }
   char *parent = repo_dirname(path);
   if (!parent || strcmp(parent, path) == 0) {
     free(parent);
