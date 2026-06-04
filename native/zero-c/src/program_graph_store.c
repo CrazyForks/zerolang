@@ -498,6 +498,7 @@ static void store_normalize_graph_paths_for_root(ZProgramGraph *graph, const cha
     free(graph->nodes[i].path);
     graph->nodes[i].path = normalized;
   }
+  z_program_graph_assign_source_node_ids(graph);
   z_program_graph_finalize_identities(graph);
 }
 
