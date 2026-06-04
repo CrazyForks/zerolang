@@ -804,6 +804,16 @@ json(["graph", "sync", "--from-source", "--json", partialProjectionRoot]);
 const partialProjectionStoreText = readFileSync(partialProjectionStore, "utf8");
 assert.match(partialProjectionStoreText, /^source path:"src\/helper\.0"$/m);
 assert.match(partialProjectionStoreText, /^projection path:"src\/helper\.0" text:/m);
+const swappedProjectionStoreText = partialProjectionStoreText.replace(
+  /^(projection path:"src\/helper\.0" text:[^\n]*\n)(projection path:"src\/main\.0" text:[^\n]*\n)/m,
+  "$2$1",
+);
+writeFileSync(partialProjectionStore, swappedProjectionStoreText);
+const swappedProjectionStatus = json(["graph", "status", "--json", partialProjectionRoot], { allowFailure: true });
+assert.notEqual(swappedProjectionStatus.code, 0);
+assert.equal(swappedProjectionStatus.body.diagnostics[0].code, "RGP003");
+assert.match(swappedProjectionStatus.body.diagnostics[0].actual, /byte-stable/);
+writeFileSync(partialProjectionStore, partialProjectionStoreText);
 writeFileSync(partialProjectionStore, partialProjectionStoreText.replace(/^projection path:"src\/helper\.0" text:[^\n]*\n/m, ""));
 const partialProjectionStatus = json(["graph", "status", "--json", partialProjectionRoot], { allowFailure: true });
 assert.notEqual(partialProjectionStatus.code, 0);

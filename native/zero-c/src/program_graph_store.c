@@ -763,6 +763,7 @@ static bool store_parse_text(const char *path, const char *text, ZProgramGraphSt
 
   if (!source_projection || !module_identity || !graph_hash || !module_hash || !*cursor) goto invalid;
   if (!z_program_graph_parse_dump(cursor, &out->graph, diag)) goto fail;
+  store_sort_projections(out);
   ZProgramGraphValidation validation = {0};
   if (!z_program_graph_validate(&out->graph, &validation)) {
     store_diag(diag, path, 1, "repository graph store failed graph validation", validation.code);
