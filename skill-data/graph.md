@@ -13,6 +13,7 @@ Use this when an agent needs to inspect, plan, patch, or validate Zero changes t
 - Use `zero graph view <input>` to render canonical source text from a source file or ProgramGraph artifact.
 - Use `zero graph patch <file.0> ...` for source-backed graph edits that rewrite the canonical source after validation.
 - Write explicit graph artifacts only when you need an interchange/debug file, using non-source paths such as `.zero/agent/app.program-graph`.
+- Use `zero graph status <input>` to inspect repository graph sync readiness. Until a checked-in `zero.graph` store is present, `verify-sync` and `sync` report the contract and do not write files.
 
 ## Graph-First Loop
 
@@ -21,6 +22,7 @@ Inspect the source through the graph interface:
 ```sh
 zero graph view <file-or-package>
 zero graph check <file-or-package>
+zero graph status <file-or-package>
 zero graph dump --json <file-or-package>
 ```
 
@@ -93,6 +95,18 @@ After a source-backed patch, validate the source:
 zero graph check <file.0>
 zero check <file.0>
 ```
+
+For repositories that opt into a checked-in graph store, verify graph/source
+projection sync before build/test gates:
+
+```sh
+zero graph verify-sync <file-or-package>
+zero graph sync --from-source <file-or-package>
+zero graph sync --from-graph <file-or-package>
+```
+
+When no `zero.graph` store is present, these sync commands report that sync is
+not enabled and leave files unchanged.
 
 For derived graph artifacts, validate the artifact before applying the accepted change to source:
 
