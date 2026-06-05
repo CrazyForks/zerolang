@@ -31,9 +31,12 @@ references are recorded as metadata without remote fetches.
 
 `repositoryGraph.compilerInput: true` opts a package into using a checked-in
 `zero.graph` store as the compiler input for normal check, build, run, test,
-size, ship, and mem commands. The commands verify that `zero.graph` and the
-checked-in `.0` source projections are in sync before compiling. Leave the field
-unset or `false` for source-text packages.
+size, ship, and mem commands. `zero check` reads and validates the graph store
+directly so source-free graph packages can still be checked. Use
+`zero graph verify-sync` when CI or review needs the no-write graph/source drift
+gate; build, run, test, size, ship, and mem still require the checked-in graph
+and `.0` source projection to be in sync before compiling. Leave the field unset
+or `false` for source-text packages.
 
 `zero graph --json <package>` reports:
 

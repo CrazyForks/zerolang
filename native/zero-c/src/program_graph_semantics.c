@@ -40,6 +40,45 @@ static bool graph_semantics_text_contains(const char *text, const char *needle) 
   return text && needle && strstr(text, needle) != NULL;
 }
 
+static void graph_semantics_capability_set(ZProgramGraphCapabilitySummary *caps, const char *capability, const ZProgramGraphNode *node) {
+  if (!caps || !capability) return;
+#define SET_GRAPH_CAP(field) do { caps->field = true; if (!caps->field##_node) caps->field##_node = node; } while (0)
+  if (graph_semantics_text_eq(capability, "args")) SET_GRAPH_CAP(args);
+  else if (graph_semantics_text_eq(capability, "env")) SET_GRAPH_CAP(env);
+  else if (graph_semantics_text_eq(capability, "fs")) SET_GRAPH_CAP(fs);
+  else if (graph_semantics_text_eq(capability, "memory")) SET_GRAPH_CAP(memory);
+  else if (graph_semantics_text_eq(capability, "alloc")) {
+    SET_GRAPH_CAP(alloc);
+    SET_GRAPH_CAP(memory);
+  } else if (graph_semantics_text_eq(capability, "path")) SET_GRAPH_CAP(path);
+  else if (graph_semantics_text_eq(capability, "codec")) SET_GRAPH_CAP(codec);
+  else if (graph_semantics_text_eq(capability, "parse")) SET_GRAPH_CAP(parse);
+  else if (graph_semantics_text_eq(capability, "time")) SET_GRAPH_CAP(time);
+  else if (graph_semantics_text_eq(capability, "rand")) SET_GRAPH_CAP(rand);
+  else if (graph_semantics_text_eq(capability, "net")) SET_GRAPH_CAP(net);
+  else if (graph_semantics_text_eq(capability, "proc")) SET_GRAPH_CAP(proc);
+  else if (graph_semantics_text_eq(capability, "web")) SET_GRAPH_CAP(web);
+  else if (graph_semantics_text_eq(capability, "world") || graph_semantics_text_eq(capability, "io")) SET_GRAPH_CAP(world);
+#undef SET_GRAPH_CAP
+}
+
+static void graph_semantics_capability_set_for_type(ZProgramGraphCapabilitySummary *caps, const char *type, const ZProgramGraphNode *node) {
+  if (!caps || !type) return;
+  if (graph_semantics_text_eq(type, "World")) graph_semantics_capability_set(caps, "world", node);
+  else if (graph_semantics_text_eq(type, "Fs")) graph_semantics_capability_set(caps, "fs", node);
+  else if (graph_semantics_text_eq(type, "Net")) graph_semantics_capability_set(caps, "net", node);
+  else if (graph_semantics_text_eq(type, "Proc")) graph_semantics_capability_set(caps, "proc", node);
+  else if (graph_semantics_text_eq(type, "Clock")) graph_semantics_capability_set(caps, "time", node);
+  else if (graph_semantics_text_eq(type, "Rand")) graph_semantics_capability_set(caps, "rand", node);
+  else if (graph_semantics_text_eq(type, "Alloc") || graph_semantics_text_eq(type, "FixedBufAlloc") || graph_semantics_text_eq(type, "NullAlloc")) {
+    graph_semantics_capability_set(caps, "alloc", node);
+  }
+  if (graph_semantics_text_contains(type, "Span<") || graph_semantics_text_contains(type, "MutSpan<") || graph_semantics_text_contains(type, "ByteBuf")) {
+    graph_semantics_capability_set(caps, "memory", node);
+  }
+}
+
+
 static void graph_semantics_append_quoted(ZBuf *buf, const char *text) {
   zbuf_append_char(buf, '"');
   for (const char *p = text ? text : ""; *p; p++) {
@@ -760,6 +799,19 @@ static size_t graph_semantics_target_requirement_count(const ZProgramGraph *grap
     if (graph_semantics_contract_has_target_requirement(&contract)) count++;
   }
   return count;
+}
+
+void z_program_graph_collect_capabilities(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, ZProgramGraphCapabilitySummary *out) {
+  if (!out) return;
+  *out = (ZProgramGraphCapabilitySummary){0};
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind == Z_PROGRAM_GRAPH_NODE_PARAM) graph_semantics_capability_set_for_type(out, node->type, node);
+    if (!graph_semantics_node_is_call(node) || !graph_semantics_call_reference(resolution, node)) continue;
+    ZGraphSemanticContract contract = graph_semantics_contract(graph, resolution, node);
+    if (!contract.present) continue;
+    graph_semantics_capability_set(out, graph_semantics_contract_capability(&contract), node);
+  }
 }
 
 static size_t graph_semantics_repair_fact_count(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution) {
