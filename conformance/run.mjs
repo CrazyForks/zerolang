@@ -61,9 +61,46 @@ function assertRepositoryGraphNativeCheck(body, sourceProjectionState = "clean")
   assert.equal(body.graphCompiler.checking.sourceTextAuthority, false);
   assert.equal(body.graphCompiler.semanticFacts.state, "typed-facts");
   assert.equal(body.graphCompiler.semanticFacts.ok, true);
+  assert.equal(body.graphCompiler.defaultReadiness.compilerInputReady, true);
+  assert.equal(body.graphCompiler.defaultReadiness.sourceFreeCompile, true);
+  assert.equal(body.graphCompiler.defaultReadiness.sourceProjectionRequired, false);
+  assert.equal(body.graphCompiler.defaultReadiness.sourceProjectionState, sourceProjectionState);
+  assert.equal(body.graphCompiler.defaultReadiness.fallback.astToMirFallbackUsed, false);
+  assert.equal(body.graphCompiler.defaultReadiness.performance.validationInLoad, true);
+  assert.equal(body.graphCompiler.defaultReadiness.cacheInvalidation.parserArtifactsInKey, false);
+  assert(body.graphCompiler.defaultReadiness.cacheInvalidation.keyedBy.includes("nodeHashes"));
+  assert(body.graphCompiler.defaultReadiness.cacheInvalidation.keyedBy.includes("symbolFacts"));
+  assert.equal(typeof body.graphCompiler.defaultReadiness.targetReadinessOk, "boolean");
   assert.equal(body.compileTime.deterministic, true);
   assert.equal(body.targetReadiness.languageOk, true);
   assert.equal(body.safetyFacts.schemaVersion, 1);
+}
+
+function assertSourceGraph(body, artifact, moduleIdentity, lowering = "typed-program-graph-mir", canonicalSource = false, sourceProjectionState = undefined) {
+  assert.equal(body.graph.artifact, artifact);
+  assert.equal(body.graph.canonicalSource, canonicalSource);
+  assert.equal(body.graph.moduleIdentity, moduleIdentity);
+  assert.match(body.graph.graphHash, /^graph:[0-9a-f]{16}$/);
+  assert.equal(body.graph.lowering, lowering);
+  if (sourceProjectionState !== undefined) assert.equal(body.graph.sourceProjectionState, sourceProjectionState);
+}
+
+function assertProgramGraphCompilerInput(body, artifact) {
+  assert(body.compilerCaches.every((cache) => cache.sourceKind === "program-graph" && cache.graphHash === body.graph.graphHash));
+  assert(body.compilerCaches.every((cache) => cache.parserArtifactsInKey === false));
+  assert(body.compilerCaches.every((cache) => cache.graphKeyInputs.includes("graphHash") && cache.graphKeyInputs.includes("nodeHashes") && cache.graphKeyInputs.includes("typeFacts") && cache.graphKeyInputs.includes("symbolFacts")));
+  assert.equal(body.compilerCaches.find((cache) => cache.name === "parseTree").invalidatesOn, "ProgramGraph input");
+  assert.equal(body.incrementalInvalidation.sourceKind, "program-graph");
+  assert.equal(body.incrementalInvalidation.graphInput.artifact, artifact);
+  assert.equal(body.incrementalInvalidation.graphInput.graphHash, body.graph.graphHash);
+  assert.equal(body.incrementalInvalidation.graphInput.parserArtifactsInKey, false);
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("graphHash"));
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("nodeHashes"));
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("typeFacts"));
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("symbolFacts"));
+  assert.equal(body.incrementalInvalidation.changedInputs.graphArtifact, artifact);
+  assert.equal(body.incrementalInvalidation.interfaceFingerprints.sourceKind, "program-graph");
+  assert.equal(body.incrementalInvalidation.interfaceFingerprints.graphHash, body.graph.graphHash);
 }
 
 function assertLlvmPhiPredecessors(ir) {
@@ -3490,7 +3527,9 @@ const programGraphSourceFixturePackage = "conformance/program-graph";
 const programGraphSourceFixtureStorePath = "conformance/program-graph/zero.graph";
 const programGraphSourceFixtureRunPath = `${outDir}/program-graph-fixture-run`;
 const programGraphSourceFreePackage = `${outDir}/program-graph-source-free`;
+const programGraphSourceFreeBuildPath = `${outDir}/program-graph-source-free-build`;
 const programGraphSourceFreeRunPath = `${outDir}/program-graph-source-free-run`;
+const programGraphSourceFreeShipPath = `${outDir}/program-graph-source-free-ship`;
 const programGraphSourceFreeCImportPackage = `${outDir}/program-graph-source-free-c-import`;
 const programGraphSourceFreeCImportRunPath = `${outDir}/program-graph-source-free-c-import-run`;
 const programGraphSourceFreeCImportCwdPackage = `${outDir}/program-graph-source-free-c-import-cwd`;
@@ -3515,7 +3554,9 @@ await rm(programGraphViewPath, { force: true });
 await rm(programGraphArtifactRoundtripPath, { force: true });
 await rm(programGraphSourceFixtureRunPath, { force: true });
 await rm(programGraphSourceFreePackage, { recursive: true, force: true });
+await rm(programGraphSourceFreeBuildPath, { force: true });
 await rm(programGraphSourceFreeRunPath, { force: true });
+await rm(programGraphSourceFreeShipPath, { recursive: true, force: true });
 await rm(programGraphSourceFreeCImportPackage, { recursive: true, force: true });
 await rm(programGraphSourceFreeCImportRunPath, { force: true });
 await rm(programGraphSourceFreeCImportCwdPackage, { recursive: true, force: true });
@@ -3561,7 +3602,12 @@ await mkdir(programGraphSourceFreePackage, { recursive: true });
 await writeFile(`${programGraphSourceFreePackage}/zero.json`, await readFile(`${programGraphSourceFixturePackage}/zero.json`, "utf8"));
 await writeFile(`${programGraphSourceFreePackage}/zero.graph`, programGraphSourceFixtureStoreText);
 const programGraphSourceFreeCheckJson = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphSourceFreePackage])).stdout);
+const programGraphSourceFreeSizeJson = JSON.parse((await execFileAsync(zero, ["size", "--json", "--target", "linux-musl-x64", programGraphSourceFreePackage])).stdout);
+const programGraphSourceFreeBuildJson = JSON.parse((await execFileAsync(zero, ["build", "--json", "--target", "linux-musl-x64", "--out", programGraphSourceFreeBuildPath, programGraphSourceFreePackage])).stdout);
 const programGraphSourceFreeRun = await execFileAsync(zero, ["run", "--out", programGraphSourceFreeRunPath, programGraphSourceFreePackage]);
+const programGraphSourceFreeTestJson = JSON.parse((await execFileAsync(zero, ["test", "--json", programGraphSourceFreePackage])).stdout);
+const programGraphSourceFreeShipJson = JSON.parse((await execFileAsync(zero, ["ship", "--json", "--target", "linux-musl-x64", "--out", programGraphSourceFreeShipPath, programGraphSourceFreePackage])).stdout);
+const programGraphSourceFreeMemJson = JSON.parse((await execFileAsync(zero, ["mem", "--json", programGraphSourceFreePackage])).stdout);
 const programGraphSourceFreeVerify = await execFileAsync(zero, ["graph", "verify-sync", "--json", programGraphSourceFreePackage]).catch((error) => error);
 const programGraphSourceFreeSyncFromGraph = JSON.parse((await execFileAsync(zero, ["graph", "sync", "--from-graph", "--json", programGraphSourceFreePackage])).stdout);
 const programGraphSourceFreeVerifyAfter = JSON.parse((await execFileAsync(zero, ["graph", "verify-sync", "--json", programGraphSourceFreePackage])).stdout);
@@ -3831,7 +3877,20 @@ assert.equal(programGraphSourceFreeCheckJson.sourceFile, `${programGraphSourceFr
 assert.equal(programGraphSourceFreeCheckJson.graph.artifact, `${programGraphSourceFreePackage}/zero.graph`);
 assert.equal(programGraphSourceFreeCheckJson.graph.sourceProjectionState, "missing");
 assertRepositoryGraphNativeCheck(programGraphSourceFreeCheckJson, "missing");
+assertSourceGraph(programGraphSourceFreeSizeJson, `${programGraphSourceFreePackage}/zero.graph`, "package:program-graph-fixture@0.1.0", "typed-program-graph-mir", false, "missing");
+assertProgramGraphCompilerInput(programGraphSourceFreeSizeJson, `${programGraphSourceFreePackage}/zero.graph`);
+assert.equal(programGraphSourceFreeBuildJson.sourceFile, `${programGraphSourceFreePackage}/zero.graph`);
+assertSourceGraph(programGraphSourceFreeBuildJson, `${programGraphSourceFreePackage}/zero.graph`, "package:program-graph-fixture@0.1.0", "typed-program-graph-mir", false, "missing");
+assertProgramGraphCompilerInput(programGraphSourceFreeBuildJson, `${programGraphSourceFreePackage}/zero.graph`);
 assert.equal(programGraphSourceFreeRun.stdout, "hello from zero\n");
+assert.equal(programGraphSourceFreeTestJson.ok, true);
+assertSourceGraph(programGraphSourceFreeTestJson, `${programGraphSourceFreePackage}/zero.graph`, "package:program-graph-fixture@0.1.0", "typed-program-graph-mir", false, "missing");
+assert.equal(programGraphSourceFreeTestJson.testDiscovery.mode, "package-graph");
+assert.equal(programGraphSourceFreeShipJson.ok, true);
+assertSourceGraph(programGraphSourceFreeShipJson, `${programGraphSourceFreePackage}/zero.graph`, "package:program-graph-fixture@0.1.0", "typed-program-graph-mir", false, "missing");
+assertProgramGraphCompilerInput(programGraphSourceFreeShipJson, `${programGraphSourceFreePackage}/zero.graph`);
+assertSourceGraph(programGraphSourceFreeMemJson, `${programGraphSourceFreePackage}/zero.graph`, "package:program-graph-fixture@0.1.0", "typed-program-graph-mir", false, "missing");
+assertProgramGraphCompilerInput(programGraphSourceFreeMemJson, `${programGraphSourceFreePackage}/zero.graph`);
 assert.notEqual(programGraphSourceFreeVerify.code, 0);
 const programGraphSourceFreeVerifyBody = JSON.parse(programGraphSourceFreeVerify.stdout);
 assert.equal(programGraphSourceFreeVerifyBody.diagnostics[0].actual, "missing source file");

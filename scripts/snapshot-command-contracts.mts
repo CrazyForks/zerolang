@@ -75,10 +75,17 @@ function assertSourceGraph(body, artifact, moduleIdentity, lowering = "typed-pro
 
 function assertProgramGraphCompilerInput(body, artifact) {
   assert(body.compilerCaches.every((cache) => cache.sourceKind === "program-graph" && cache.graphHash === body.graph.graphHash));
+  assert(body.compilerCaches.every((cache) => cache.parserArtifactsInKey === false));
+  assert(body.compilerCaches.every((cache) => cache.graphKeyInputs.includes("graphHash") && cache.graphKeyInputs.includes("nodeHashes") && cache.graphKeyInputs.includes("typeFacts") && cache.graphKeyInputs.includes("symbolFacts")));
   assert.equal(body.compilerCaches.find((cache) => cache.name === "parseTree").invalidatesOn, "ProgramGraph input");
   assert.equal(body.incrementalInvalidation.sourceKind, "program-graph");
   assert.equal(body.incrementalInvalidation.graphInput.artifact, artifact);
   assert.equal(body.incrementalInvalidation.graphInput.graphHash, body.graph.graphHash);
+  assert.equal(body.incrementalInvalidation.graphInput.parserArtifactsInKey, false);
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("graphHash"));
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("nodeHashes"));
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("typeFacts"));
+  assert(body.incrementalInvalidation.graphInput.keyedBy.includes("symbolFacts"));
   assert.equal(body.incrementalInvalidation.changedInputs.graphArtifact, artifact);
   assert.equal(body.incrementalInvalidation.interfaceFingerprints.sourceKind, "program-graph");
   assert.equal(body.incrementalInvalidation.interfaceFingerprints.graphHash, body.graph.graphHash);
@@ -105,6 +112,16 @@ function assertRepositoryGraphNativeCheck(body, sourceProjectionState = "clean")
   assert.equal(body.graphCompiler.checking.sourceTextAuthority, false);
   assert.equal(body.graphCompiler.semanticFacts.state, "typed-facts");
   assert.equal(body.graphCompiler.semanticFacts.ok, true);
+  assert.equal(body.graphCompiler.defaultReadiness.compilerInputReady, true);
+  assert.equal(body.graphCompiler.defaultReadiness.sourceFreeCompile, true);
+  assert.equal(body.graphCompiler.defaultReadiness.sourceProjectionRequired, false);
+  assert.equal(body.graphCompiler.defaultReadiness.sourceProjectionState, sourceProjectionState);
+  assert.equal(body.graphCompiler.defaultReadiness.fallback.astToMirFallbackUsed, false);
+  assert.equal(body.graphCompiler.defaultReadiness.performance.validationInLoad, true);
+  assert.equal(body.graphCompiler.defaultReadiness.cacheInvalidation.parserArtifactsInKey, false);
+  assert(body.graphCompiler.defaultReadiness.cacheInvalidation.keyedBy.includes("nodeHashes"));
+  assert(body.graphCompiler.defaultReadiness.cacheInvalidation.keyedBy.includes("symbolFacts"));
+  assert.equal(typeof body.graphCompiler.defaultReadiness.targetReadinessOk, "boolean");
   assert.equal(body.compileTime.deterministic, true);
   assert.equal(body.targetReadiness.languageOk, true);
   assert.equal(body.safetyFacts.schemaVersion, 1);
