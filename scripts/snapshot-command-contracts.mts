@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -1227,6 +1227,30 @@ const renameRepoGraphSync = json(["graph", "sync", "--from-source", "--json", re
 assert.equal(renameRepoGraphSync.code, 0);
 assert.equal(renameRepoGraphSync.body.repositoryGraph.syncState, "clean");
 assert(readFileSync(renameRepoGraphStore, "utf8").includes(`node ${renameRepoGraphBetaId} Function name:"gamma"`));
+const moduleIdentityRepoGraphRoot = join("/tmp", `zero-repo-graph-module-identity-${process.pid}`);
+const moduleIdentityRepoGraphSourceOne = join(moduleIdentityRepoGraphRoot, "one.0");
+const moduleIdentityRepoGraphSourceTwo = join(moduleIdentityRepoGraphRoot, "two.0");
+const moduleIdentityRepoGraphStore = join(moduleIdentityRepoGraphRoot, "zero.graph");
+rmSync(moduleIdentityRepoGraphRoot, { force: true, recursive: true });
+mkdirSync(moduleIdentityRepoGraphRoot, { recursive: true });
+writeFileSync(
+  moduleIdentityRepoGraphSourceOne,
+  `pub fn main(world: World) -> Void raises {
+    check world.out.write("module one\\n")
+}
+`,
+);
+json(["graph", "sync", "--from-source", "--json", moduleIdentityRepoGraphSourceOne]);
+const moduleIdentityRepoGraphStoreBefore = readFileSync(moduleIdentityRepoGraphStore, "utf8");
+renameSync(moduleIdentityRepoGraphSourceOne, moduleIdentityRepoGraphSourceTwo);
+const moduleIdentityRepoGraphSync = json(["graph", "sync", "--from-source", "--json", moduleIdentityRepoGraphSourceTwo], { allowFailure: true });
+assert.notEqual(moduleIdentityRepoGraphSync.code, 0);
+assert.equal(moduleIdentityRepoGraphSync.body.diagnostics[0].code, "RGP007");
+assert.equal(moduleIdentityRepoGraphSync.body.diagnostics[0].message, "repository graph source identity has a different module identity");
+assert.equal(moduleIdentityRepoGraphSync.body.diagnostics[0].expected, "module:one");
+assert.equal(moduleIdentityRepoGraphSync.body.diagnostics[0].actual, "module:two");
+assert.match(moduleIdentityRepoGraphSync.body.diagnostics[0].help, /module rename/);
+assert.equal(readFileSync(moduleIdentityRepoGraphStore, "utf8"), moduleIdentityRepoGraphStoreBefore);
 const ambiguousRepoGraphRoot = join("/tmp", `zero-repo-graph-ambiguous-${process.pid}`);
 const ambiguousRepoGraphSource = join(ambiguousRepoGraphRoot, "main.0");
 const ambiguousRepoGraphStore = join(ambiguousRepoGraphRoot, "zero.graph");

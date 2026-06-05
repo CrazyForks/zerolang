@@ -418,14 +418,15 @@ int z_repository_graph_sync_command(const char *input, const ZTargetInfo *target
   ZDiag diag = {0};
   if (!z_program_graph_store_save_for_input(input, source_graph, &saved, &diag)) {
     bool identity_error = repo_diag_is_identity_reconcile_error(&diag);
+    bool module_identity_error = identity_error && ((strncmp(diag.expected, "module:", 7) == 0) || (strncmp(diag.expected, "package:", 8) == 0));
     int rc = repo_graph_error(&state,
                               json,
                               "sync-from-source",
                               identity_error ? "RGP007" : "RGP003",
                               identity_error ? diag.message : "repository graph store could not be saved",
-                              identity_error ? "unambiguous graph identity match between zero.graph and edited source" : "byte-stable zero.graph repository graph store",
+                              module_identity_error ? diag.expected : (identity_error ? "unambiguous graph identity match between zero.graph and edited source" : "byte-stable zero.graph repository graph store"),
                               diag.actual[0] ? diag.actual : (diag.message[0] ? diag.message : "save failed"),
-                              identity_error ? "split the source edit or make it through zero graph patch so node identity is explicit" : "run zero graph status to inspect repository graph state",
+                              module_identity_error ? "sync from the original source path, or recreate zero.graph after reviewing the module rename" : (identity_error ? "split the source edit or make it through zero graph patch so node identity is explicit" : "run zero graph status to inspect repository graph state"),
                               false);
     repo_graph_state_free(&state);
     return rc;

@@ -629,8 +629,10 @@ static bool store_normalized_source_graph(const char *root, const ZProgramGraph 
 }
 
 static bool store_identity_reconcile_diag(const char *path, const ZProgramGraphIdentityReconcile *identity, ZDiag *diag) {
-  const char *message = identity && identity->module_identity_changed ? "repository graph source identity has a different module identity" : "repository graph source identity is ambiguous";
-  const char *actual = identity && identity->node_id[0] ? identity->node_id : (identity && identity->candidate_id[0] ? identity->candidate_id : "ambiguous source identity");
+  bool module_identity_changed = identity && identity->module_identity_changed;
+  const char *message = module_identity_changed ? "repository graph source identity has a different module identity" : "repository graph source identity is ambiguous";
+  const char *expected = module_identity_changed && identity && identity->node_id[0] ? identity->node_id : "unambiguous ProgramGraph source identity preservation";
+  const char *actual = module_identity_changed && identity && identity->candidate_id[0] ? identity->candidate_id : (identity && identity->node_id[0] ? identity->node_id : (identity && identity->candidate_id[0] ? identity->candidate_id : "ambiguous source identity"));
   if (diag) {
     *diag = (ZDiag){0};
     diag->code = 1002;
@@ -639,7 +641,7 @@ static bool store_identity_reconcile_diag(const char *path, const ZProgramGraphI
     diag->column = 1;
     diag->length = 1;
     snprintf(diag->message, sizeof(diag->message), "%s", message);
-    snprintf(diag->expected, sizeof(diag->expected), "unambiguous ProgramGraph source identity preservation");
+    snprintf(diag->expected, sizeof(diag->expected), "%s", expected);
     snprintf(diag->actual, sizeof(diag->actual), "%s", actual);
   }
   return false;
