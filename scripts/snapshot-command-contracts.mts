@@ -1504,6 +1504,52 @@ assert.equal(mergeStaleProjection.body.merge.conflicts, 0);
 const mergeStaleProjectionText = readFileSync(mergeStaleProjectionStore, "utf8");
 assert(mergeStaleProjectionText.includes('value:"10"'));
 assert(!mergeStaleProjectionText.includes('value:"999"'));
+const mergeProjectionOnlyConflictRoot = join("/tmp", `zero-repo-graph-merge-projection-only-conflict-${process.pid}`);
+const mergeProjectionOnlyConflictSource = join(mergeProjectionOnlyConflictRoot, "main.0");
+const mergeProjectionOnlyConflictStore = join(mergeProjectionOnlyConflictRoot, "zero.graph");
+rmSync(mergeProjectionOnlyConflictRoot, { force: true, recursive: true });
+mkdirSync(mergeProjectionOnlyConflictRoot, { recursive: true });
+const mergeProjectionOnlyConflictOriginal = `// base comment
+fn alpha() -> i32 {
+    return 1
+}
+
+pub fn main(world: World) -> Void raises {
+    check world.out.write("merge projection-only conflict ok\\n")
+}
+`;
+writeFileSync(mergeProjectionOnlyConflictSource, mergeProjectionOnlyConflictOriginal);
+json(["graph", "sync", "--from-source", "--json", mergeProjectionOnlyConflictSource]);
+writeFileSync(join(mergeProjectionOnlyConflictRoot, "base.graph"), readFileSync(mergeProjectionOnlyConflictStore, "utf8"));
+writeFileSync(mergeProjectionOnlyConflictSource, mergeProjectionOnlyConflictOriginal.replace("return 1", "return 10"));
+json(["graph", "sync", "--from-source", "--json", mergeProjectionOnlyConflictSource]);
+writeFileSync(join(mergeProjectionOnlyConflictRoot, "left.graph"), readFileSync(mergeProjectionOnlyConflictStore, "utf8"));
+writeFileSync(mergeProjectionOnlyConflictStore, readFileSync(join(mergeProjectionOnlyConflictRoot, "base.graph"), "utf8"));
+writeFileSync(mergeProjectionOnlyConflictSource, mergeProjectionOnlyConflictOriginal.replace("base comment", "right comment"));
+json(["graph", "sync", "--from-source", "--json", mergeProjectionOnlyConflictSource]);
+writeFileSync(join(mergeProjectionOnlyConflictRoot, "right.graph"), readFileSync(mergeProjectionOnlyConflictStore, "utf8"));
+writeFileSync(mergeProjectionOnlyConflictStore, readFileSync(join(mergeProjectionOnlyConflictRoot, "base.graph"), "utf8"));
+const mergeProjectionOnlyConflict = json([
+  "graph",
+  "merge",
+  "--json",
+  "--base",
+  join(mergeProjectionOnlyConflictRoot, "base.graph"),
+  "--left",
+  join(mergeProjectionOnlyConflictRoot, "left.graph"),
+  "--right",
+  join(mergeProjectionOnlyConflictRoot, "right.graph"),
+  mergeProjectionOnlyConflictRoot,
+], { allowFailure: true });
+assert.notEqual(mergeProjectionOnlyConflict.code, 0);
+assert.equal(mergeProjectionOnlyConflict.body.writes, false);
+assert.equal(mergeProjectionOnlyConflict.body.diagnostics[0].code, "RGM005");
+assert.equal(mergeProjectionOnlyConflict.body.diagnostics[0].message, "repository graph projection-only edit conflicts with graph changes");
+assert.equal(mergeProjectionOnlyConflict.body.merge.conflicts, 1);
+const mergeProjectionOnlyConflictText = readFileSync(mergeProjectionOnlyConflictStore, "utf8");
+assert(mergeProjectionOnlyConflictText.includes("base comment"));
+assert(!mergeProjectionOnlyConflictText.includes("right comment"));
+assert(!mergeProjectionOnlyConflictText.includes('value:"10"'));
 const mergeDeleteShiftRoot = join("/tmp", `zero-repo-graph-merge-delete-shift-${process.pid}`);
 const mergeDeleteShiftSource = join(mergeDeleteShiftRoot, "main.0");
 const mergeDeleteShiftStore = join(mergeDeleteShiftRoot, "zero.graph");

@@ -548,6 +548,30 @@ static bool merge_projection_candidate_valid(
          merge_graph_source_path_eq(&merged->graph, &side->graph, path);
 }
 
+static bool merge_projection_text_is_graph_view(const ZProgramGraphStore *store, const char *path, const char *text) {
+  if (!store || !path || !path[0] || text == NULL || !z_program_graph_store_source_path_is_local(path)) return false;
+  ZBuf view;
+  zbuf_init(&view);
+  bool ok = z_program_graph_append_source_view(&view, &store->graph, path, NULL);
+  bool matches = ok && merge_text_eq(view.data ? view.data : "", text);
+  zbuf_free(&view);
+  return matches;
+}
+
+static bool merge_projection_has_source_only_change(
+  const ZProgramGraphStore *side,
+  bool side_projections_match_graph,
+  const char *path,
+  const char *base_text,
+  const char *side_text
+) {
+  return side &&
+         side_projections_match_graph &&
+         !merge_projection_record_eq(base_text, side_text) &&
+         side_text != NULL &&
+         !merge_projection_text_is_graph_view(side, path, side_text);
+}
+
 static bool merge_store_projections_match_graph(const ZProgramGraphStore *store) {
   return store && store->projection_len > 0 && z_program_graph_projection_store_matches_graph(store, NULL, NULL);
 }
@@ -629,6 +653,12 @@ static bool merge_choose_projection_text(
   bool base_valid = merge_projection_candidate_valid(merged, base, base_projections_match_graph, path, base_text);
   bool left_valid = merge_projection_candidate_valid(merged, left, left_projections_match_graph, path, left_text);
   bool right_valid = merge_projection_candidate_valid(merged, right, right_projections_match_graph, path, right_text);
+  bool left_source_only = merge_projection_has_source_only_change(left, left_projections_match_graph, path, base_text, left_text);
+  bool right_source_only = merge_projection_has_source_only_change(right, right_projections_match_graph, path, base_text, right_text);
+
+  if ((left_source_only && !left_valid) || (right_source_only && !right_valid)) {
+    return merge_projection_conflict(result, diag, path, "repository graph projection-only edit conflicts with graph changes");
+  }
 
   if (!left_changed && !right_changed) {
     if (chosen && base_valid) *chosen = base_text;
