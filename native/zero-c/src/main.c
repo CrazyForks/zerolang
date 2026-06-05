@@ -12843,6 +12843,20 @@ int main(int argc, char **argv) {
     ZProgramGraphArtifactSource graph_source = {0};
     bool graph_mir_command = direct_graph_manifest_command || direct_graph_source_command || graph_build_command || graph_run_command;
     long long graph_lower_started = now_ms();
+    if (command.repository_graph_input && command.emit == EMIT_LLVM_IR) {
+      if (!z_backend_request_is_llvm(command.backend, emit_kind_name(command.emit))) {
+        init_direct_llvm_ir_unavailable_diag(&diag, &command, target, command.input);
+        if (command.json) print_command_diag_json(&command, diag.path ? diag.path : command.input, &diag);
+        else print_diag(diag.path ? diag.path : command.input, &diag);
+        return 1;
+      }
+      if (!graph_check_text_eq(command.command, "build")) {
+        init_llvm_ir_build_only_diag(&diag, &command, target, command.input);
+        if (command.json) print_command_diag_json(&command, diag.path ? diag.path : command.input, &diag);
+        else print_diag(diag.path ? diag.path : command.input, &diag);
+        return 1;
+      }
+    }
     bool prepared_graph = command.repository_graph_input
       ? z_program_graph_prepare_repository_store_mir_input(command.input, target, emit_kind_name(command.emit), command.backend, &program, &input, &graph_prepared_ir, &graph_source, &diag)
       : (graph_mir_command
