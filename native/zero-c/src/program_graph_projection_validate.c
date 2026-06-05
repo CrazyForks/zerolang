@@ -333,7 +333,8 @@ static bool projection_source_input_from_store(const ZProgramGraphStore *store, 
   return true;
 }
 
-bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *store, const ZTargetInfo *target, ZDiag *diag) {
+bool z_program_graph_projection_graph_from_store(const ZProgramGraphStore *store, const ZTargetInfo *target, ZProgramGraph *graph, ZDiag *diag) {
+  if (graph) z_program_graph_init(graph);
   SourceInput input = {0};
   if (!projection_source_input_from_store(store, &input, diag)) return false;
 
@@ -355,18 +356,24 @@ bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *st
     return projection_diag(store, diag, "repository graph source projection does not check", actual);
   }
 
-  ZProgramGraph graph;
-  z_program_graph_init(&graph);
-  ok = z_program_graph_from_program(&input, &program, &graph);
+  ok = graph && z_program_graph_from_program(&input, &program, graph);
   if (ok) {
-    graph.canonical_source = true;
+    graph->canonical_source = true;
+  }
+  z_free_program(&program);
+  z_free_source(&input);
+  return ok || (diag && diag->message[0] ? false : projection_diag(store, diag, "repository graph source projection does not match stored graph", "projection graph mismatch"));
+}
+
+bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *store, const ZTargetInfo *target, ZDiag *diag) {
+  ZProgramGraph graph;
+  bool ok = z_program_graph_projection_graph_from_store(store, target, &graph, diag);
+  if (ok) {
     size_t *store_to_graph = NULL;
     ok = projection_graph_matches_store_nodes(store, &graph, &store_to_graph, diag) &&
          projection_graph_matches_store_edges(store, &graph, store_to_graph, diag);
     free(store_to_graph);
   }
   z_program_graph_free(&graph);
-  z_free_program(&program);
-  z_free_source(&input);
   return ok || (diag && diag->message[0] ? false : projection_diag(store, diag, "repository graph source projection does not match stored graph", "projection graph mismatch"));
 }

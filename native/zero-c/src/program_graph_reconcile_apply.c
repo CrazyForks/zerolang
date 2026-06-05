@@ -167,10 +167,27 @@ static void identity_match_exact_ids(IdentityContext *context) {
 static bool identity_source_anchor_candidate(IdentityContext *context, size_t base_index, size_t edited_index) {
   const ZProgramGraphNode *base = &context->base->nodes[base_index];
   const ZProgramGraphNode *edited = &context->edited->nodes[edited_index];
-  return base->kind == edited->kind &&
-         base->line == edited->line &&
-         base->column == edited->column &&
-         identity_text_eq(base->path, edited->path);
+  if (base->kind != edited->kind ||
+      base->line != edited->line ||
+      base->column != edited->column ||
+      !identity_text_eq(base->path, edited->path)) {
+    return false;
+  }
+  if ((identity_text_present(base->name) || identity_text_present(edited->name)) &&
+      !identity_text_eq(base->name, edited->name)) {
+    return false;
+  }
+  size_t base_edge_index = identity_owner_edge_index(context->base, base_index);
+  size_t edited_edge_index = identity_owner_edge_index(context->edited, edited_index);
+  if (base_edge_index == identity_missing() && edited_edge_index == identity_missing()) return true;
+  if (base_edge_index == identity_missing() || edited_edge_index == identity_missing()) return false;
+  const ZProgramGraphEdge *base_edge = &context->base->edges[base_edge_index];
+  const ZProgramGraphEdge *edited_edge = &context->edited->edges[edited_edge_index];
+  if (!identity_text_eq(base_edge->kind, edited_edge->kind)) return false;
+  size_t base_owner = identity_edge_source_index(context->base, base_edge_index);
+  size_t edited_owner = identity_edge_source_index(context->edited, edited_edge_index);
+  if (base_owner == identity_missing() || edited_owner == identity_missing()) return false;
+  return context->base_to_edited[base_owner] == edited_owner;
 }
 
 static bool identity_symbol_candidate(IdentityContext *context, size_t base_index, size_t edited_index) {
