@@ -4186,6 +4186,8 @@ assert(programGraphAuthoringCliQuery.functions.some((fun) => fun.name === "add_u
 assert(!programGraphAuthoringCliQuery.functions.some((fun) => fun.name === "add"));
 assert(programGraphAuthoringCliQuery.functions.some((fun) => fun.test === "add_u32 works"));
 assert(programGraphAuthoringCliQuery.patchOperations.includes("setMainArgsAddCli fn=\"add_u32\""));
+assert(programGraphAuthoringCliQuery.patchOperations.includes("setMainGreetingCli prefix=\"hello \" fallback=\"anonymous\""));
+assert(programGraphAuthoringCliQuery.patchOperations.some((op) => op.startsWith("replaceFunctionBody main\n")));
 assert.equal(programGraphAuthoringCliCheck.ok, true);
 assert.equal(programGraphAuthoringCliCheck.sourceFile, `${programGraphAuthoringCliPackage}/zero.graph`);
 assert.equal(programGraphAuthoringCliCheck.graph.sourceProjectionState, "missing");

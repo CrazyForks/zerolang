@@ -20,6 +20,8 @@ static const char *const graph_patch_operation_examples[] = {
   "addCheckWriteValue fn=\"main\" value=\"message\" type=\"String\"",
   "addTest name=\"addition works\" call=\"add\" arg0=\"40\" arg1=\"2\" expect=\"42\" type=\"i32\"",
   "setMainArgsAddCli fn=\"add_u32\"",
+  "setMainGreetingCli prefix=\"hello \" fallback=\"anonymous\"",
+  "replaceFunctionBody main\n  let name Maybe<String> = std.args.get 1\n  if name.has\n    check world.out.write \"hello \"\n    check world.out.write name.value\n    check world.out.write \"\\n\"\n  else\n    check world.out.write \"hello anonymous\\n\"\nend",
   NULL,
 };
 

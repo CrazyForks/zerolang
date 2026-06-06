@@ -102,6 +102,35 @@ zero graph patch --op 'setMainArgsAddCli fn="add_u32"'
 zero run . -- 40 2
 ```
 
+For a simple greeting CLI, use the graph builder:
+
+```sh
+zero graph patch --op 'setMainGreetingCli prefix="hello " fallback="anonymous"'
+zero run . -- Ada
+```
+
+For custom body edits, write row syntax inside `replaceFunctionBody` and apply
+it as a graph patch:
+
+```text
+zero-program-graph-patch v1
+replaceFunctionBody main
+  let name Maybe<String> = std.args.get 1
+  if name.has
+    check world.out.write "hello "
+    check world.out.write name.value
+    check world.out.write "\n"
+  else
+    check world.out.write "hello anonymous\n"
+end
+```
+
+Preview repository graph patches without writing:
+
+```sh
+zero graph patch --check-only <package> /tmp/body.patch
+```
+
 When you need patch operation shapes, ask the compiler without loading or
 writing a graph:
 

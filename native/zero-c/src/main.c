@@ -105,6 +105,7 @@ typedef struct {
   bool graph_sync_from_graph;
   bool graph_sync_from_source;
   bool repository_graph_input;
+  bool graph_patch_check_only;
   EmitKind emit;
 } Command;
 
@@ -3962,7 +3963,7 @@ static void print_help(void) {
   printf("  zero graph sync (--from-source|--from-graph) [--json] <project|zero.json|file.0>\n");
   printf("  zero graph merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] <project|zero.json|file.0>\n");
   printf("  zero graph size [--json] [--target <target>] --out <artifact> <program-graph-or-package>\n");
-  printf("  zero graph patch [--json] [--out <program-graph-artifact>] [<program-graph-or-source>] (<patch-file>|--op <operation>)\n");
+  printf("  zero graph patch [--json] [--check-only|--dry-run] [--out <program-graph-artifact>] [<program-graph-or-source>] (<patch-file>|--op <operation>)\n");
   printf("  zero graph build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <program-graph-or-package>\n  zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <program-graph-or-package> [-- args...]\n  zero graph test [--json] [--filter <name>] [--target <target>] <program-graph-or-package>\n");
   printf("  zero doc [--json] <file.0|project|zero.json>\n");
   printf("  zero size [--json] [--out <artifact>] <file.0|project|zero.json>\n");
@@ -4147,6 +4148,13 @@ static bool parse_common_option(int argc, char **argv, int *index, Command *comm
     return true;
   } else if (strcmp(arg, "--json") == 0) {
     command->json = true;
+    return true;
+  } else if (cli_arg_is(arg, "--check-only") || cli_arg_is(arg, "--dry-run")) {
+    if (!command || !command->graph_patch_command) {
+      command->unknown_flag = arg;
+      return true;
+    }
+    command->graph_patch_check_only = true;
     return true;
   } else if (strcmp(arg, "--plan") == 0) {
     command->plan = true;
@@ -11944,6 +11952,7 @@ static void append_graph_patch_json(
   append_json_string(buf, command->input);
   zbuf_append(buf, ",\n  \"patch\": ");
   append_json_string(buf, graph_patch_source_label(command));
+  zbuf_appendf(buf, ",\n  \"checkOnly\": %s", command && command->graph_patch_check_only ? "true" : "false");
   zbuf_appendf(buf, ",\n  \"canonicalSource\": %s,\n  \"originalGraphHash\": ", graph && graph->canonical_source ? "true" : "false");
   append_json_string(buf, original_hash ? original_hash : "");
   zbuf_append(buf, ",\n  \"patchedGraphHash\": ");
@@ -12418,6 +12427,7 @@ static bool save_graph_patch_output(const Command *command, const ZTargetInfo *t
       snprintf(diag->help, sizeof(diag->help), "omit --out when patching canonical source");
       return false;
     }
+    if (command->graph_patch_check_only) return true;
     if (!write_source_backed_graph(command, graph, input, diag)) return false;
     *saved_path = command->input;
     return true;
@@ -12436,11 +12446,13 @@ static bool save_graph_patch_output(const Command *command, const ZTargetInfo *t
       return false;
     }
     if (!validate_repository_graph_patch_output(command, target, graph, diag)) return false;
+    if (command->graph_patch_check_only) return true;
     if (!z_program_graph_store_write_generated_path(command->input, graph, NULL, diag)) return false;
     *saved_path = command->input;
     return true;
   }
   if (!command->out) return true;
+  if (command->graph_patch_check_only) return true;
   if (command->out && z_program_graph_path_is_source_text(command->out)) {
     diag->code = 2002;
     diag->path = command->out;
@@ -12516,6 +12528,8 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
     append_graph_patch_json(&json, command, &graph, &result, original_hash, saved_path);
     fputs(json.data, stdout);
     zbuf_free(&json);
+  } else if (ok && command->graph_patch_check_only) {
+    printf("program graph patch ok (check-only)\n");
   } else if (ok && saved_path) {
     printf("program graph patch ok\n");
   } else if (ok) {

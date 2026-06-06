@@ -1,4 +1,5 @@
 #include "program_graph_patch.h"
+#include "program_graph_patch_body.h"
 #include "program_graph_patch_builders.h"
 #include "type_core.h"
 
@@ -1693,6 +1694,8 @@ bool z_program_graph_patch_apply_operation(ZProgramGraph *graph, ZProgramGraphPa
   if (patch_text_eq(op->op, "addCheckWrite")) return patch_apply_add_check_write(graph, result, op);
   if (patch_text_eq(op->op, "addTest")) return patch_apply_add_test(graph, result, op);
   if (patch_text_eq(op->op, "setMainArgsAddCli")) return patch_apply_set_main_args_add_cli(graph, result, op);
+  if (patch_text_eq(op->op, "setMainGreetingCli")) return z_program_graph_patch_apply_set_main_greeting_cli(graph, result, op);
+  if (patch_text_eq(op->op, "replaceFunctionBody")) return z_program_graph_patch_apply_replace_function_body(graph, result, op);
 
   ZProgramGraphNode *node = patch_find_node(graph, op->node);
   if (!node) {

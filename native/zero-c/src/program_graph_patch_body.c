@@ -1,0 +1,595 @@
+#include "program_graph_patch_body.h"
+#include "canonical_text.h"
+#include "program_graph_import.h"
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct {
+  const char *from;
+  char *to;
+} BodyIdMap;
+
+static bool body_text_eq(const char *left, const char *right) {
+  return strcmp(left ? left : "", right ? right : "") == 0;
+}
+
+static void body_replace(char **slot, const char *value) {
+  if (!slot) return;
+  free(*slot);
+  *slot = z_strdup(value ? value : "");
+}
+
+static void body_fail(ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, const char *code, const char *message, const char *expected, const char *actual) {
+  if (op) {
+    op->ok = false;
+    snprintf(op->code, sizeof(op->code), "%s", code ? code : "GPH000");
+    snprintf(op->message, sizeof(op->message), "%s", message ? message : "program graph patch operation failed");
+    body_replace(&op->expected, expected);
+    body_replace(&op->actual, actual);
+  }
+  if (result) {
+    result->ok = false;
+    snprintf(result->code, sizeof(result->code), "%s", code ? code : "GPH000");
+    snprintf(result->message, sizeof(result->message), "%s", message ? message : "program graph patch failed");
+    body_replace(&result->expected, expected);
+    body_replace(&result->actual, actual);
+  }
+}
+
+static char *body_trim(char *line) {
+  while (*line && isspace((unsigned char)*line)) line++;
+  char *end = line + strlen(line);
+  while (end > line && isspace((unsigned char)*(end - 1))) *(--end) = '\0';
+  return line;
+}
+
+static bool body_identifier(const char *text) {
+  if (!text || !text[0] || !(isalpha((unsigned char)text[0]) || text[0] == '_')) return false;
+  for (const unsigned char *p = (const unsigned char *)text + 1; *p; p++) {
+    if (!(isalnum(*p) || *p == '_')) return false;
+  }
+  return true;
+}
+
+static bool body_tokenize(const char *text, char ***out, size_t *out_len) {
+  char **items = NULL;
+  size_t len = 0, cap = 0;
+  const char *cursor = text ? text : "";
+  while (*cursor) {
+    while (*cursor && isspace((unsigned char)*cursor)) cursor++;
+    if (!*cursor) break;
+    ZBuf token;
+    zbuf_init(&token);
+    if (*cursor == '"') {
+      zbuf_append_char(&token, *cursor++);
+      bool escaped = false;
+      while (*cursor) {
+        char ch = *cursor++;
+        zbuf_append_char(&token, ch);
+        if (escaped) {
+          escaped = false;
+        } else if (ch == '\\') {
+          escaped = true;
+        } else if (ch == '"') {
+          break;
+        }
+      }
+    } else {
+      while (*cursor && !isspace((unsigned char)*cursor)) zbuf_append_char(&token, *cursor++);
+    }
+    if (len == cap) {
+      size_t next = cap ? cap * 2 : 4;
+      items = z_checked_reallocarray(items, next, sizeof(char *));
+      cap = next;
+    }
+    items[len++] = token.data ? token.data : z_strdup("");
+  }
+  *out = items;
+  *out_len = len;
+  return true;
+}
+
+static void body_tokens_free(char **items, size_t len) {
+  for (size_t i = 0; i < len; i++) free(items[i]);
+  free(items);
+}
+
+static void body_append_indent(ZBuf *out, size_t indent) {
+  for (size_t i = 0; i < indent; i++) zbuf_append(out, "    ");
+}
+
+static char *body_call_source(char **tokens, size_t len) {
+  ZBuf out;
+  zbuf_init(&out);
+  zbuf_append(&out, tokens[0]);
+  zbuf_append_char(&out, '(');
+  for (size_t i = 1; i < len; i++) {
+    if (i > 1) zbuf_append(&out, ", ");
+    zbuf_append(&out, tokens[i]);
+  }
+  zbuf_append_char(&out, ')');
+  return out.data ? out.data : z_strdup("");
+}
+
+static char *body_expr_source(const char *expr) {
+  char *copy = z_strdup(expr ? expr : "");
+  char *trimmed = body_trim(copy);
+  char *and = strstr(trimmed, " && ");
+  if (and) {
+    *and = '\0';
+    char *left = body_expr_source(trimmed);
+    char *right = body_expr_source(and + 4);
+    ZBuf out;
+    zbuf_init(&out);
+    zbuf_append(&out, left);
+    zbuf_append(&out, " && ");
+    zbuf_append(&out, right);
+    free(left);
+    free(right);
+    free(copy);
+    return out.data ? out.data : z_strdup("");
+  }
+  if (strchr(trimmed, '(') || trimmed[0] == '"' || trimmed[0] == '[' || trimmed[0] == 0) {
+    char *out = z_strdup(trimmed);
+    free(copy);
+    return out;
+  }
+  char **tokens = NULL;
+  size_t len = 0;
+  body_tokenize(trimmed, &tokens, &len);
+  char *out = NULL;
+  if (len > 1 && (strchr(tokens[0], '.') || body_identifier(tokens[0]))) {
+    out = body_call_source(tokens, len);
+  } else {
+    out = z_strdup(trimmed);
+  }
+  body_tokens_free(tokens, len);
+  free(copy);
+  return out;
+}
+
+static bool body_translate_row(const char *row, ZBuf *source, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  char *copy = z_strdup(row ? row : "");
+  char *line = body_trim(copy);
+  if (strncmp(line, "let ", 4) == 0 || strncmp(line, "var ", 4) == 0) {
+    bool mut = line[0] == 'v';
+    char *cursor = line + 4;
+    char *eq = strstr(cursor, " = ");
+    if (!eq) {
+      body_fail(result, op, "GPH001", "body row let/var is missing '='", "let name Type = expr", row);
+      free(copy);
+      return false;
+    }
+    *eq = '\0';
+    char **head = NULL;
+    size_t head_len = 0;
+    body_tokenize(cursor, &head, &head_len);
+    if (head_len != 2 || !body_identifier(head[0])) {
+      body_tokens_free(head, head_len);
+      body_fail(result, op, "GPH001", "body row let/var has invalid binding header", "let name Type = expr", row);
+      free(copy);
+      return false;
+    }
+    char *expr = body_expr_source(eq + 3);
+    if (mut && strncmp(eq + 3, "repeat ", 7) == 0) {
+      char **repeat = NULL;
+      size_t repeat_len = 0;
+      body_tokenize(eq + 3, &repeat, &repeat_len);
+      free(expr);
+      if (repeat_len == 3) {
+        ZBuf array;
+        zbuf_init(&array);
+        zbuf_append_char(&array, '[');
+        zbuf_append(&array, repeat[1]);
+        zbuf_append(&array, "; ");
+        zbuf_append(&array, repeat[2]);
+        zbuf_append_char(&array, ']');
+        expr = array.data ? array.data : z_strdup("");
+      } else {
+        expr = z_strdup(eq + 3);
+      }
+      body_tokens_free(repeat, repeat_len);
+    }
+    zbuf_append(source, mut ? "var " : "let ");
+    zbuf_append(source, head[0]);
+    zbuf_append(source, ": ");
+    zbuf_append(source, head[1]);
+    zbuf_append(source, " = ");
+    zbuf_append(source, expr);
+    body_tokens_free(head, head_len);
+    free(expr);
+    free(copy);
+    return true;
+  }
+  if (strncmp(line, "check ", 6) == 0) {
+    char *expr = body_expr_source(line + 6);
+    zbuf_append(source, "check ");
+    zbuf_append(source, expr);
+    free(expr);
+    free(copy);
+    return true;
+  }
+  if (strncmp(line, "return ", 7) == 0) {
+    char *expr = body_expr_source(line + 7);
+    zbuf_append(source, "return ");
+    zbuf_append(source, expr);
+    free(expr);
+    free(copy);
+    return true;
+  }
+  char *expr = body_expr_source(line);
+  zbuf_append(source, expr);
+  free(expr);
+  free(copy);
+  return true;
+}
+
+static bool body_append_source_rows(ZBuf *source, const char *rows, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  char *copy = z_strdup(rows ? rows : "");
+  char *cursor = copy;
+  size_t open = 0;
+  while (*cursor) {
+    char *line = cursor;
+    char *end = strchr(cursor, '\n');
+    if (end) {
+      *end = '\0';
+      cursor = end + 1;
+    } else {
+      cursor += strlen(cursor);
+    }
+    size_t spaces = 0;
+    while (line[spaces] == ' ') spaces++;
+    char *trimmed = body_trim(line);
+    if (!trimmed[0] || trimmed[0] == '#') continue;
+    size_t indent = spaces / 2;
+    if (strcmp(trimmed, "else") == 0) {
+      while (open > indent + 1) {
+        body_append_indent(source, open);
+        zbuf_append(source, "}\n");
+        open--;
+      }
+      body_append_indent(source, indent + 1);
+      zbuf_append(source, "} else {\n");
+      open = indent + 1;
+      continue;
+    }
+    while (open > indent) {
+      body_append_indent(source, open);
+      zbuf_append(source, "}\n");
+      open--;
+    }
+    body_append_indent(source, indent + 1);
+    if (strncmp(trimmed, "if ", 3) == 0) {
+      char *expr = body_expr_source(trimmed + 3);
+      zbuf_append(source, "if ");
+      zbuf_append(source, expr);
+      zbuf_append(source, " {\n");
+      free(expr);
+      open = indent + 1;
+    } else {
+      if (!body_translate_row(trimmed, source, result, op)) {
+        free(copy);
+        return false;
+      }
+      zbuf_append_char(source, '\n');
+    }
+  }
+  while (open > 0) {
+    body_append_indent(source, open);
+    zbuf_append(source, "}\n");
+    open--;
+  }
+  free(copy);
+  return true;
+}
+
+static ZProgramGraphNode *body_find_node(ZProgramGraph *graph, const char *id) {
+  for (size_t i = 0; graph && id && i < graph->node_len; i++) {
+    if (body_text_eq(graph->nodes[i].id, id)) return &graph->nodes[i];
+  }
+  return NULL;
+}
+
+static ZProgramGraphNode *body_find_function(ZProgramGraph *graph, const char *name, size_t *out_count) {
+  ZProgramGraphNode *found = NULL;
+  size_t count = 0;
+  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
+    if (graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_FUNCTION && body_text_eq(graph->nodes[i].name, name)) {
+      found = &graph->nodes[i];
+      count++;
+    }
+  }
+  if (out_count) *out_count = count;
+  return count == 1 ? found : NULL;
+}
+
+static ZProgramGraphNode *body_child(ZProgramGraph *graph, const char *from, const char *kind) {
+  for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
+    ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, from) && body_text_eq(edge->kind, kind)) return body_find_node(graph, edge->to);
+  }
+  return NULL;
+}
+
+static void body_mark_reachable(ZProgramGraph *graph, const char *id, bool *remove) {
+  for (size_t i = 0; graph && id && i < graph->node_len; i++) {
+    if (body_text_eq(graph->nodes[i].id, id)) {
+      if (remove[i]) return;
+      remove[i] = true;
+      break;
+    }
+  }
+  for (size_t i = 0; graph && id && i < graph->edge_len; i++) {
+    ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, id)) body_mark_reachable(graph, edge->to, remove);
+  }
+}
+
+static bool body_node_marked(ZProgramGraph *graph, bool *marked, const char *id) {
+  for (size_t i = 0; graph && id && i < graph->node_len; i++) {
+    if (body_text_eq(graph->nodes[i].id, id)) return marked[i];
+  }
+  return false;
+}
+
+static void body_free_node(ZProgramGraphNode *node) {
+  free(node->id); free(node->name); free(node->type); free(node->value); free(node->path);
+  free(node->symbol_id); free(node->type_id); free(node->effect_id); free(node->node_hash);
+}
+
+static void body_free_edge(ZProgramGraphEdge *edge) {
+  free(edge->from); free(edge->to); free(edge->kind);
+}
+
+static void body_clear_statements(ZProgramGraph *graph, const char *body_id) {
+  bool *remove = z_checked_calloc(graph->node_len ? graph->node_len : 1, sizeof(bool));
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, body_id) && body_text_eq(edge->kind, "statement")) body_mark_reachable(graph, edge->to, remove);
+  }
+  size_t edge_out = 0;
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    ZProgramGraphEdge edge = graph->edges[i];
+    bool drop = (edge.target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && (body_text_eq(edge.from, body_id) || body_node_marked(graph, remove, edge.from) || body_node_marked(graph, remove, edge.to)));
+    if (drop) body_free_edge(&edge);
+    else graph->edges[edge_out++] = edge;
+  }
+  graph->edge_len = edge_out;
+  size_t node_out = 0;
+  for (size_t i = 0; i < graph->node_len; i++) {
+    if (remove[i]) body_free_node(&graph->nodes[i]);
+    else graph->nodes[node_out++] = graph->nodes[i];
+  }
+  graph->node_len = node_out;
+  free(remove);
+}
+
+static void body_reserve_nodes(ZProgramGraph *graph, size_t len) {
+  if (graph->node_cap >= len) return;
+  size_t next = graph->node_cap ? graph->node_cap * 2 : 8;
+  while (next < len) next *= 2;
+  graph->nodes = z_checked_reallocarray(graph->nodes, next, sizeof(ZProgramGraphNode));
+  for (size_t i = graph->node_cap; i < next; i++) graph->nodes[i] = (ZProgramGraphNode){0};
+  graph->node_cap = next;
+}
+
+static void body_reserve_edges(ZProgramGraph *graph, size_t len) {
+  if (graph->edge_cap >= len) return;
+  size_t next = graph->edge_cap ? graph->edge_cap * 2 : 8;
+  while (next < len) next *= 2;
+  graph->edges = z_checked_reallocarray(graph->edges, next, sizeof(ZProgramGraphEdge));
+  for (size_t i = graph->edge_cap; i < next; i++) graph->edges[i] = (ZProgramGraphEdge){0};
+  graph->edge_cap = next;
+}
+
+static char *body_unique_id(ZProgramGraph *graph, const char *id) {
+  if (!body_find_node(graph, id)) return z_strdup(id ? id : "#node");
+  for (size_t suffix = 1; suffix < 100000; suffix++) {
+    ZBuf out;
+    zbuf_init(&out);
+    zbuf_append(&out, id ? id : "#node");
+    zbuf_appendf(&out, "_%zu", suffix);
+    if (!body_find_node(graph, out.data)) return out.data;
+    zbuf_free(&out);
+  }
+  return z_strdup("#node_conflict");
+}
+
+static const char *body_mapped_id(BodyIdMap *map, size_t len, const char *from) {
+  for (size_t i = 0; i < len; i++) {
+    if (body_text_eq(map[i].from, from)) return map[i].to;
+  }
+  return from;
+}
+
+static void body_copy_node(ZProgramGraph *graph, const ZProgramGraphNode *src, const char *id, const char *path) {
+  body_reserve_nodes(graph, graph->node_len + 1);
+  ZProgramGraphNode *node = &graph->nodes[graph->node_len++];
+  *node = *src;
+  node->id = z_strdup(id);
+  node->name = src->name ? z_strdup(src->name) : NULL;
+  node->type = src->type ? z_strdup(src->type) : NULL;
+  node->value = src->value ? z_strdup(src->value) : NULL;
+  node->path = z_strdup(path && path[0] ? path : (src->path ? src->path : "src/main.0"));
+  node->symbol_id = src->symbol_id ? z_strdup(src->symbol_id) : NULL;
+  node->type_id = src->type_id ? z_strdup(src->type_id) : NULL;
+  node->effect_id = src->effect_id ? z_strdup(src->effect_id) : NULL;
+  node->node_hash = src->node_hash ? z_strdup(src->node_hash) : NULL;
+}
+
+static void body_copy_edge(ZProgramGraph *graph, const ZProgramGraphEdge *src, const char *from, const char *to) {
+  body_reserve_edges(graph, graph->edge_len + 1);
+  ZProgramGraphEdge *edge = &graph->edges[graph->edge_len++];
+  edge->from = z_strdup(from);
+  edge->to = z_strdup(to);
+  edge->kind = z_strdup(src->kind ? src->kind : "");
+  edge->target = src->target;
+  edge->order = src->order;
+}
+
+static bool body_splice(ZProgramGraph *target, ZProgramGraph *source, const char *function_name, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  size_t target_count = 0, source_count = 0;
+  ZProgramGraphNode *target_fn = body_find_function(target, function_name, &target_count);
+  ZProgramGraphNode *source_fn = body_find_function(source, function_name, &source_count);
+  if (!target_fn || !source_fn) {
+    body_fail(result, op, "GPH004", "replaceFunctionBody function was not found", function_name, "");
+    return false;
+  }
+  ZProgramGraphNode *target_body = body_child(target, target_fn->id, "body");
+  ZProgramGraphNode *source_body = body_child(source, source_fn->id, "body");
+  if (!target_body || !source_body) {
+    body_fail(result, op, "GPH004", "replaceFunctionBody function body was not found", "body Block node", function_name);
+    return false;
+  }
+  char *target_body_id = z_strdup(target_body->id ? target_body->id : "");
+  char *source_body_id = z_strdup(source_body->id ? source_body->id : "");
+  char *target_path = z_strdup(target_body->path && target_body->path[0] ? target_body->path : "src/main.0");
+  body_clear_statements(target, target_body_id);
+  bool *copy = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(bool));
+  for (size_t i = 0; i < source->edge_len; i++) {
+    ZProgramGraphEdge *edge = &source->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, source_body_id) && body_text_eq(edge->kind, "statement")) body_mark_reachable(source, edge->to, copy);
+  }
+  BodyIdMap *map = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(BodyIdMap));
+  size_t map_len = 0;
+  for (size_t i = 0; i < source->node_len; i++) {
+    if (!copy[i]) continue;
+    map[map_len].from = source->nodes[i].id;
+    map[map_len].to = body_unique_id(target, source->nodes[i].id);
+    body_copy_node(target, &source->nodes[i], map[map_len].to, target_path);
+    map_len++;
+  }
+  for (size_t i = 0; i < source->edge_len; i++) {
+    ZProgramGraphEdge *edge = &source->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE) continue;
+    bool from_body = body_text_eq(edge->from, source_body_id) && body_text_eq(edge->kind, "statement");
+    bool from_copy = body_node_marked(source, copy, edge->from);
+    bool to_copy = body_node_marked(source, copy, edge->to);
+    if (from_body && to_copy) body_copy_edge(target, edge, target_body_id, body_mapped_id(map, map_len, edge->to));
+    else if (from_copy && to_copy) body_copy_edge(target, edge, body_mapped_id(map, map_len, edge->from), body_mapped_id(map, map_len, edge->to));
+  }
+  for (size_t i = 0; i < map_len; i++) free(map[i].to);
+  free(target_body_id);
+  free(source_body_id);
+  free(target_path);
+  free(map);
+  free(copy);
+  return true;
+}
+
+static bool body_signature_source(ZProgramGraph *graph, const char *function_name, ZBuf *source, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  size_t count = 0;
+  ZProgramGraphNode *fn = body_find_function(graph, function_name, &count);
+  if (!fn) {
+    body_fail(result, op, count > 1 ? "GPH003" : "GPH004", count > 1 ? "replaceFunctionBody function name is ambiguous" : "replaceFunctionBody function was not found", function_name, "");
+    return false;
+  }
+  if (fn->is_public) zbuf_append(source, "pub ");
+  zbuf_append(source, "fn ");
+  zbuf_append(source, fn->name ? fn->name : function_name);
+  zbuf_append_char(source, '(');
+  bool wrote = false;
+  for (size_t order = 0; order < graph->edge_len; order++) {
+    for (size_t i = 0; i < graph->edge_len; i++) {
+      ZProgramGraphEdge *edge = &graph->edges[i];
+      if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !body_text_eq(edge->from, fn->id) || !body_text_eq(edge->kind, "param") || edge->order != order) continue;
+      ZProgramGraphNode *param = body_find_node(graph, edge->to);
+      if (!param) continue;
+      if (wrote) zbuf_append(source, ", ");
+      zbuf_append(source, param->name ? param->name : "arg");
+      zbuf_append(source, ": ");
+      zbuf_append(source, param->type ? param->type : "Unknown");
+      wrote = true;
+    }
+  }
+  zbuf_append(source, ") -> ");
+  zbuf_append(source, fn->type && fn->type[0] ? fn->type : "Void");
+  if (fn->fallible) zbuf_append(source, " raises");
+  zbuf_append(source, " {\n");
+  return true;
+}
+
+bool z_program_graph_patch_apply_replace_function_body(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *function_name = op && op->function && op->function[0] ? op->function : "main";
+  if (!body_identifier(function_name)) {
+    body_fail(result, op, "GPH003", "replaceFunctionBody function must be a Zero identifier", "identifier", function_name);
+    return false;
+  }
+  ZBuf source;
+  zbuf_init(&source);
+  if (!body_signature_source(graph, function_name, &source, result, op)) {
+    zbuf_free(&source);
+    return false;
+  }
+  if (!body_append_source_rows(&source, op ? op->value : "", result, op)) {
+    zbuf_free(&source);
+    return false;
+  }
+  zbuf_append(&source, "}\n");
+  Program program = {0};
+  ZDiag diag = {0};
+  bool ok = z_parse_canonical_text_program_source(source.data ? source.data : "", &program, &diag);
+  if (!ok) {
+    body_fail(result, op, "GPH001", "replaceFunctionBody rows did not parse as a Zero function body", diag.expected[0] ? diag.expected : "valid body rows", diag.message[0] ? diag.message : (source.data ? source.data : ""));
+    zbuf_free(&source);
+    return false;
+  }
+  SourceInput input = {0};
+  input.source_file = z_strdup("src/main.0");
+  input.source = z_strdup(source.data ? source.data : "");
+  input.canonical_text_source = true;
+  ZProgramGraph body_graph = {0};
+  ok = z_program_graph_from_program(&input, &program, &body_graph);
+  if (ok) ok = body_splice(graph, &body_graph, function_name, result, op);
+  if (!ok && result && !result->message[0]) body_fail(result, op, "GPH006", "replaceFunctionBody could not build ProgramGraph body", "lowerable Zero body rows", source.data ? source.data : "");
+  z_program_graph_free(&body_graph);
+  z_free_source(&input);
+  z_free_program(&program);
+  zbuf_free(&source);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+bool z_program_graph_patch_apply_set_main_greeting_cli(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *prefix = op && op->value && op->value[0] ? op->value : "hello ";
+  const char *fallback = op && op->right && op->right[0] ? op->right : "anonymous";
+  ZBuf rows;
+  zbuf_init(&rows);
+  zbuf_append(&rows, "let name Maybe<String> = std.args.get 1\n");
+  zbuf_append(&rows, "if name.has\n");
+  zbuf_append(&rows, "  check world.out.write \"");
+  for (const char *p = prefix; *p; p++) {
+    if (*p == '"' || *p == '\\') zbuf_append_char(&rows, '\\');
+    if (*p == '\n') zbuf_append(&rows, "\\n");
+    else zbuf_append_char(&rows, *p);
+  }
+  zbuf_append(&rows, "\"\n");
+  zbuf_append(&rows, "  check world.out.write name.value\n");
+  zbuf_append(&rows, "  check world.out.write \"\\n\"\n");
+  zbuf_append(&rows, "else\n");
+  zbuf_append(&rows, "  check world.out.write \"");
+  for (const char *p = prefix; *p; p++) {
+    if (*p == '"' || *p == '\\') zbuf_append_char(&rows, '\\');
+    if (*p == '\n') zbuf_append(&rows, "\\n");
+    else zbuf_append_char(&rows, *p);
+  }
+  for (const char *p = fallback; *p; p++) {
+    if (*p == '"' || *p == '\\') zbuf_append_char(&rows, '\\');
+    if (*p == '\n') zbuf_append(&rows, "\\n");
+    else zbuf_append_char(&rows, *p);
+  }
+  zbuf_append(&rows, "\\n\"\n");
+  ZProgramGraphPatchOpResult body_op = *op;
+  body_op.op = "replaceFunctionBody";
+  body_op.function = op && op->function && op->function[0] ? op->function : "main";
+  body_op.value = rows.data ? rows.data : "";
+  bool ok = z_program_graph_patch_apply_replace_function_body(graph, result, &body_op);
+  zbuf_free(&rows);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}

@@ -3,7 +3,6 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
-
 typedef struct {
   const char *name;
   ZProgramGraphInputMode input_mode;
@@ -134,8 +133,8 @@ void z_program_graph_print_command_help(void) {
   printf("Reconcile usage: zero graph reconcile [--json] <base-program-graph-or-source> --source <edited-file.0|project|zero.json>\n");
   printf("Repository sync usage: zero graph status|verify-sync [--json] <project|zero.json|file.0>; zero graph sync (--from-source|--from-graph) [--json] <project|zero.json|file.0>; zero graph merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] <project|zero.json|file.0>\n");
   printf("Size output usage: zero graph size [--json] [--target <target>] --out <artifact> <input>\n");
-  printf("Patch output usage: zero graph patch [--json] [--out <program-graph-artifact>] [<program-graph-or-source>] (<patch-file>|--op <operation>)\n");
-  printf("  In a graph-first package, zero graph patch --op <operation> defaults to the current directory.\n\nPatch operation help: zero graph patch --op help\n\n");
+  printf("Patch output usage: zero graph patch [--json] [--check-only|--dry-run] [--out <program-graph-artifact>] [<input>] (<patch-file>|--op <operation>)\n");
+  printf("  In a graph-first package, zero graph patch --op <operation> defaults to the current directory.\nPatch operation help: zero graph patch --op help\n\n");
   printf("Build usage: zero graph build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <program-graph-or-package>\n\n");
   printf("Run usage: zero graph run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] <program-graph-or-package> [-- args...]\n\n");
   printf("Test usage: zero graph test [--json] [--filter <name>] [--target <target>] <program-graph-or-package>\n\n");
@@ -171,4 +170,6 @@ void z_program_graph_print_command_help(void) {
   printf("  addCheckWriteValue fn=\"main\" value=\"message\" type=\"String\"\n");
   printf("  addTest name=\"addition works\" call=\"add\" arg0=\"40\" arg1=\"2\" expect=\"42\" type=\"i32\"\n");
   printf("  setMainArgsAddCli fn=\"add_u32\"\n");
+  printf("  setMainGreetingCli prefix=\"hello \" fallback=\"anonymous\"\n");
+  printf("  replaceFunctionBody main ... end\n");
 }

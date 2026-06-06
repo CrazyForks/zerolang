@@ -81,6 +81,37 @@ zero graph patch --op 'setMainArgsAddCli fn="add_u32"'
 zero run . -- 40 2
 ```
 
+Create a simple greeting CLI without writing source:
+
+```sh
+zero graph patch --op 'setMainGreetingCli prefix="hello " fallback="anonymous"'
+zero run . -- Ada
+```
+
+For custom function bodies, use row syntax in a graph patch file. This keeps the
+write on `zero.graph`; the `.0` file is only the human projection you sync later:
+
+```text
+zero-program-graph-patch v1
+expect graphHash "graph:a7f7e6899a73f3b4"
+replaceFunctionBody main
+  let name Maybe<String> = std.args.get 1
+  if name.has
+    check world.out.write "hello "
+    check world.out.write name.value
+    check world.out.write "\n"
+  else
+    check world.out.write "hello anonymous\n"
+end
+```
+
+Preview repository graph patches without writing:
+
+```sh
+zero graph patch --check-only <package> /tmp/body.patch
+zero graph patch --dry-run --json <package> /tmp/body.patch
+```
+
 Inspect an existing package through the graph interface:
 
 ```sh
@@ -200,7 +231,20 @@ addReturnValue fn="identity" value="input" type="i32"
 addCheckWriteValue fn="main" value="message" type="String"
 addTest name="addition works" call="add" arg0="40" arg1="2" expect="42" type="i32"
 setMainArgsAddCli fn="add_u32"
+setMainGreetingCli prefix="hello " fallback="anonymous"
+replaceFunctionBody main
+  let name Maybe<String> = std.args.get 1
+  if name.has
+    check world.out.write "hello "
+    check world.out.write name.value
+    check world.out.write "\n"
+  else
+    check world.out.write "hello anonymous\n"
+end
 ```
+
+`insert` and `insertEdge` default `order` to `0` when it is omitted, which is
+usually right for singular edges like `expr`, `left`, and `declaredType`.
 
 For precise existing-node edits, use graph hashes and node facts:
 

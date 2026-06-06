@@ -836,9 +836,11 @@ assert.match(graphHelp, /zero graph status\|verify-sync \[--json\] <project\|zer
 assert.match(graphHelp, /zero graph sync \(--from-source\|--from-graph\) \[--json\] <project\|zero\.json\|file\.0>/);
 assert.match(graphHelp, /zero graph merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] <project\|zero\.json\|file\.0>/);
 assert.match(graphHelp, /zero graph size \[--json\] \[--target <target>\] --out <artifact> <input>/);
-assert.match(graphHelp, /zero graph patch \[--json\] \[--out <program-graph-artifact>\] \[<program-graph-or-source>\] \(<patch-file>\|--op <operation>\)/);
+assert.match(graphHelp, /zero graph patch \[--json\] \[--check-only\|--dry-run\] \[--out <program-graph-artifact>\] \[<program-graph-or-source>\] \(<patch-file>\|--op <operation>\)/);
 assert.match(graphHelp, /Patch operation help: zero graph patch --op help/);
 assert.match(graphHelp, /setMainArgsAddCli fn="add_u32"/);
+assert.match(graphHelp, /setMainGreetingCli prefix="hello " fallback="anonymous"/);
+assert.match(graphHelp, /replaceFunctionBody main \.\.\. end/);
 assert.match(graphHelp, /addLetBinary fn="add" name="sum" type="i32" operator="\+"/);
 assert.match(graphHelp, /zero graph build \[--json\] \[--emit exe\|obj\|llvm-ir\].*<program-graph-or-package>/);
 assert.match(graphHelp, /zero graph run \[--target <host-target>\].*<program-graph-or-package> \[-- args\.\.\.\]/);
@@ -858,7 +860,7 @@ assert.match(rootHelp, /zero graph status\|verify-sync \[--json\] <project\|zero
 assert.match(rootHelp, /zero graph sync \(--from-source\|--from-graph\) \[--json\] <project\|zero\.json\|file\.0>/);
 assert.match(rootHelp, /zero graph merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] <project\|zero\.json\|file\.0>/);
 assert.match(rootHelp, /zero graph size \[--json\] \[--target <target>\] --out <artifact> <program-graph-or-package>/);
-assert.match(rootHelp, /zero graph patch \[--json\] \[--out <program-graph-artifact>\] \[<program-graph-or-source>\] \(<patch-file>\|--op <operation>\)/);
+assert.match(rootHelp, /zero graph patch \[--json\] \[--check-only\|--dry-run\] \[--out <program-graph-artifact>\] \[<program-graph-or-source>\] \(<patch-file>\|--op <operation>\)/);
 assert.match(rootHelp, /zero graph build \[--json\] \[--emit exe\|obj\|llvm-ir\].*<program-graph-or-package>/);
 assert.match(rootHelp, /zero graph run \[--target <host-target>\].*<program-graph-or-package> \[-- args\.\.\.\]/);
 assert.match(rootHelp, /zero graph test \[--json\] \[--filter <name>\] \[--target <target>\] <program-graph-or-package>/);
@@ -869,6 +871,8 @@ assert.match(graphPatchHelp, /insert node="#id" kind="Literal"/);
 assert.match(graphPatchHelp, /insertEdge from="#from" to="#to"/);
 assert.match(graphPatchHelp, /replace node="#id" expect="nodehash:abc123"/);
 assert.match(graphPatchHelp, /setMainArgsAddCli fn="add_u32"/);
+assert.match(graphPatchHelp, /setMainGreetingCli prefix="hello " fallback="anonymous"/);
+assert.match(graphPatchHelp, /replaceFunctionBody main/);
 assert.match(graphPatchHelp, /addLetLiteral fn="main" name="count" type="u32" value="0"/);
 assert.match(graphPatchHelp, /addReturnValue fn="identity" value="input" type="i32"/);
 const graphPatchHelpJson = json(["graph", "patch", "--op", "help", "--json"]).body;
@@ -878,6 +882,8 @@ assert.equal(graphPatchHelpJson.operations.includes("insert node=\"#id\" kind=\"
 assert.equal(graphPatchHelpJson.operations.includes("insertEdge from=\"#from\" to=\"#to\" edge=\"arg\" target=\"node\" order=\"0\""), true);
 assert.equal(graphPatchHelpJson.operations.includes("replace node=\"#id\" expect=\"nodehash:abc123\" kind=\"Literal\" type=\"String\" value=\"text\""), true);
 assert.equal(graphPatchHelpJson.operations.includes("setMainArgsAddCli fn=\"add_u32\""), true);
+assert.equal(graphPatchHelpJson.operations.includes("setMainGreetingCli prefix=\"hello \" fallback=\"anonymous\""), true);
+assert.equal(graphPatchHelpJson.operations.some((op) => op.startsWith("replaceFunctionBody main\n")), true);
 assert.equal(graphPatchHelpJson.operations.includes("addLetBinary fn=\"add\" name=\"sum\" type=\"i32\" operator=\"+\" left=\"left\" right=\"right\""), true);
 assert.equal(graphPatchHelpJson.operations.includes("addCheckWriteValue fn=\"main\" value=\"message\" type=\"String\""), true);
 
@@ -2157,6 +2163,8 @@ const graphPatchDeleteThenInsertPath = join(outDir, "hello.delete-then-insert.pr
 const graphDeleteThenInsertedPath = join(outDir, "hello.delete-then-insert.program-graph");
 const graphPatchDeleteNodeFactPath = join(outDir, "hello.delete-node-fact.program-graph.patch");
 const graphDeletedNodeFactPath = join(outDir, "hello.delete-node-fact.program-graph");
+const graphRepositoryPatchPackageDir = join(outDir, "repository-graph-patch-package");
+const graphRepositoryBodyPatchPath = join(outDir, "repository-graph.replace-body.patch");
 const graphPatchDeleteExternalRootRefPath = join(outDir, "hello.delete-external-root-ref.program-graph.patch");
 const graphPatchDeleteExtraOwnerPath = join(outDir, "hello.delete-extra-owner.program-graph.patch");
 const graphPatchReplacePath = join(outDir, "hello.replace.program-graph.patch");
@@ -2423,8 +2431,47 @@ assert.equal(checkedInGraphQueryJson.functions.some((fun) => fun.name === "main"
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("insert node=\"#id\" kind=\"Literal\" parent=\"#parent\" edge=\"arg\" order=\"0\" type=\"String\" value=\"text\""), true);
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("replace node=\"#id\" expect=\"nodehash:abc123\" kind=\"Literal\" type=\"String\" value=\"text\""), true);
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("setMainArgsAddCli fn=\"add_u32\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.includes("setMainGreetingCli prefix=\"hello \" fallback=\"anonymous\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.some((op) => op.startsWith("replaceFunctionBody main\n")), true);
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("addLetLiteral fn=\"main\" name=\"count\" type=\"u32\" value=\"0\""), true);
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("addReturnValue fn=\"identity\" value=\"input\" type=\"i32\""), true);
+rmSync(graphRepositoryPatchPackageDir, { recursive: true, force: true });
+mkdirSync(graphRepositoryPatchPackageDir, { recursive: true });
+writeFileSync(join(graphRepositoryPatchPackageDir, "zero.json"), readFileSync(join(checkedInGraphPackageDir, "zero.json"), "utf8"));
+writeFileSync(join(graphRepositoryPatchPackageDir, "zero.graph"), readFileSync(checkedInRepositoryGraphStorePath, "utf8"));
+writeFileSync(join(graphRepositoryPatchPackageDir, "hello.0"), checkedInGraphSource);
+const repositoryPatchQueryJson = json(["graph", "query", "--json", graphRepositoryPatchPackageDir]).body;
+writeFileSync(graphRepositoryBodyPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryPatchQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  let name Maybe<String> = std.args.get 1",
+  "  if name.has",
+  "    check world.out.write \"hello \"",
+  "    check world.out.write name.value",
+  "    check world.out.write \"\\n\"",
+  "  else",
+  "    check world.out.write \"hello anonymous\\n\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryPatchDryRunJson = json(["graph", "patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryBodyPatchPath]).body;
+assert.equal(repositoryPatchDryRunJson.ok, true);
+assert.equal(repositoryPatchDryRunJson.checkOnly, true);
+assert.equal(repositoryPatchDryRunJson.saved, null);
+assert.equal(zero(["graph", "view", graphRepositoryPatchPackageDir]).stdout, checkedInGraphSource);
+const repositoryBodyPatchJson = json(["graph", "patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryBodyPatchPath]).body;
+assert.equal(repositoryBodyPatchJson.ok, true);
+assert.equal(repositoryBodyPatchJson.checkOnly, false);
+assert.equal(repositoryBodyPatchJson.operations[0].op, "replaceFunctionBody");
+assert.equal(repositoryBodyPatchJson.saved.path, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.match(zero(["graph", "view", graphRepositoryPatchPackageDir]).stdout, /let name: Maybe<String> = std\.args\.get\(1\)/);
+assert.equal(zero(["graph", "check", graphRepositoryPatchPackageDir]).stdout, "program graph check ok\n");
+assert.equal(zero(["check", graphRepositoryPatchPackageDir]).stdout, "ok\n");
+assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "hello Ada\n");
+assert.match(zero(["graph", "status", graphRepositoryPatchPackageDir]).stdout, /source-stale/);
+assert.match(zero(["graph", "sync", "--from-graph", graphRepositoryPatchPackageDir]).stdout, /repository graph sync ok/);
+assert.equal(zero(["graph", "verify-sync", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-sync ok\n");
 const checkedInGraphCallsJson = json(["graph", "query", "--json", "--fn", "main", "--calls", "write", checkedInGraphPackageDir]).body;
 assert.equal(checkedInGraphCallsJson.ok, true);
 assert.equal(checkedInGraphCallsJson.query.function, "main");
@@ -3500,7 +3547,7 @@ writeFileSync(graphPatchInsertPath, [
   "zero-program-graph-patch v1",
   `expect graphHash "${graphDumpJson.graphHash}"`,
   `insert node="#patch_check" kind="Check" parent="${graphMainBodyNode.id}" edge="statement" order="1" path="examples/hello.0" line="3" column="3"`,
-  `insert node="#patch_call" kind="MethodCall" parent="#patch_check" edge="expr" order="0" name="write" type="Void" path="examples/hello.0" line="3" column="25"`,
+  `insert node="#patch_call" kind="MethodCall" parent="#patch_check" edge="expr" name="write" type="Void" path="examples/hello.0" line="3" column="25"`,
   `insert node="#patch_write" kind="FieldAccess" parent="#patch_call" edge="left" order="0" name="write" path="examples/hello.0" line="3" column="18"`,
   `insert node="#patch_out" kind="FieldAccess" parent="#patch_write" edge="left" order="0" name="out" path="examples/hello.0" line="3" column="14"`,
   `insert node="#patch_world" kind="Identifier" parent="#patch_out" edge="left" order="0" name="world" path="examples/hello.0" line="3" column="9"`,
@@ -3514,6 +3561,7 @@ assert.equal(graphInsertPatchJson.operations[0].op, "insert");
 assert.equal(graphInsertPatchJson.operations[0].parent, graphMainBodyNode.id);
 assert.equal(graphInsertPatchJson.operations[0].edge, "statement");
 assert.equal(graphInsertPatchJson.operations[0].order, 1);
+assert.equal(graphInsertPatchJson.operations[1].order, 0);
 assert.equal(graphInsertPatchJson.operations[5].kind, "Literal");
 assert.equal(graphInsertPatchJson.operations[5].type, "String");
 assert.equal(graphInsertPatchJson.operations[5].value, "second line\n");
