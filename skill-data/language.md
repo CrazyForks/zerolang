@@ -66,16 +66,31 @@ Operators are normal infix expressions: `a + b`, `a - b`, `a * b`, `a % b`, `a =
 
 ## Types
 
-Common primitive types:
+Primitive and scalar types:
 
 ```text
-Bool Void String char
+Bool Void String char Type
 i8 i16 i32 i64 isize
 u8 u16 u32 u64 usize
 f32 f64
 ```
 
 Integer literals are checked against context. Use suffixes such as `_u8` or `_usize` when needed. Use `as` for intentional integer casts.
+
+Core capability, resource, and helper types recognized by the compiler:
+
+```text
+World WorldStream
+Fs File ByteBuf
+NullAlloc FixedBufAlloc PageAlloc GeneralAlloc
+Vec Duration RandSource ProcStatus
+Address Net Conn Listener
+HttpMethod HttpClient HttpServer HttpResult HttpError HttpHeaderValue
+JsonDoc BufferedReader BufferedWriter
+Env Args Clock Rand Proc Alloc
+Maybe<T> Span<T> MutSpan<T>
+ref<T> mutref<T> owned<T>
+```
 
 ## Shapes, Enums, And Choices
 

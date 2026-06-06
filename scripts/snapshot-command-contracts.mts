@@ -4100,16 +4100,53 @@ const languageSkill = json(["skills", "get", "language", "--json"]).body;
 assert.equal(languageSkill.success, true);
 assert.match(languageSkill.data[0].content, /# zerolang Language/);
 assert.match(languageSkill.data[0].content, /pub fn main/);
+for (const typeName of [
+  "Bool",
+  "Void",
+  "String",
+  "Type",
+  "World",
+  "Maybe<T>",
+  "Span<T>",
+  "MutSpan<T>",
+  "ref<T>",
+  "mutref<T>",
+  "owned<T>",
+]) {
+  assert.match(languageSkill.data[0].content, new RegExp(typeName.replace(/[<>]/g, "\\$&")));
+}
 
 const graphSkill = json(["skills", "get", "graph", "--json"]).body;
 assert.equal(graphSkill.success, true);
 assert.match(graphSkill.data[0].content, /# Zero Graph Authoring/);
 assert.match(graphSkill.data[0].content, /primary agent authoring surface/);
+for (const op of graphPatchHelpJson.operations) {
+  assert(graphSkill.data[0].content.includes(op), `graph skill should include patch operation ${op}`);
+}
+for (const lowLevelOp of [
+  "expect graphHash",
+  "insert node=",
+  "insertEdge from=",
+  "replace node=",
+]) {
+  assert(graphSkill.data[0].content.includes(lowLevelOp), `graph skill should include low-level operation ${lowLevelOp}`);
+}
 
 const stdlibSkill = json(["skills", "get", "stdlib", "--json"]).body;
 assert.equal(stdlibSkill.success, true);
 assert.match(stdlibSkill.data[0].content, /std\.str/);
 assert.match(stdlibSkill.data[0].content, /non-overlapping reverse/);
+assert.match(stdlibSkill.data[0].content, /## Function Signatures/);
+const stdSigText = readFileSync("native/zero-c/src/std_sig.c", "utf8");
+const stdHelperNames = [...stdSigText.matchAll(/^\s*\{"(std\.[^"]+)",/gm)].map((match) => match[1]);
+const stdlibCatalog = stdlibSkill.data[0].content.split("## Function Signatures")[1].split("## Maybe Pattern")[0];
+assert.equal((stdlibCatalog.match(/^[A-Za-z_][A-Za-z0-9_]*\(.*\) -> /gm) ?? []).length, stdHelperNames.length);
+for (const helperName of stdHelperNames) {
+  const moduleName = helperName.split(".").slice(0, 2).join(".");
+  const shortName = helperName.slice(moduleName.length + 1);
+  assert(stdlibCatalog.includes(`### ${moduleName}`), `stdlib skill should include module ${moduleName}`);
+  assert(stdlibCatalog.includes(`${shortName}(`), `stdlib skill should include helper ${helperName}`);
+}
 
 const diagnosticSkill = json(["skills", "get", "diagnostics", "--json"]).body;
 assert.equal(diagnosticSkill.success, true);

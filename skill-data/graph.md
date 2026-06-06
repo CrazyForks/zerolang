@@ -179,6 +179,29 @@ List supported patch operation shapes without loading or writing a graph:
 zero graph patch --op help
 ```
 
+Supported graph patch operations:
+
+```text
+expect graphHash "graph:a7f7e6899a73f3b4"
+set node="#id" field="value" expect="old" value="new"
+insert node="#id" kind="Literal" parent="#parent" edge="arg" order="0" type="String" value="text"
+insertEdge from="#from" to="#to" edge="arg" target="node" order="0"
+replace node="#id" expect="nodehash:abc123" kind="Literal" type="String" value="text"
+delete node="#id" expect="nodehash:abc123"
+rename node="#id" expect="old" value="new"
+addMain
+addCheckWrite fn="main" text="hello\n"
+addFunction name="add" ret="i32"
+addParam fn="add" name="left" type="i32"
+addReturnBinary fn="add" name="+" left="left" right="right" type="i32"
+addLetLiteral fn="main" name="count" type="u32" value="0"
+addLetBinary fn="add" name="sum" type="i32" operator="+" left="left" right="right"
+addReturnValue fn="identity" value="input" type="i32"
+addCheckWriteValue fn="main" value="message" type="String"
+addTest name="addition works" call="add" arg0="40" arg1="2" expect="42" type="i32"
+setMainArgsAddCli fn="add_u32"
+```
+
 For precise existing-node edits, use graph hashes and node facts:
 
 ```sh
@@ -194,6 +217,7 @@ For larger edits, use a patch file:
 zero-program-graph-patch v1
 expect graphHash "graph:a7f7e6899a73f3b4"
 set node="#expr_653eeb6e" field="value" expect="hello from zero\n" value="hello agent\n"
+insert node="#patch001" kind="Literal" parent="#expr_c403020c" edge="arg" order="1" type="String" value="again\n"
 rename node="#decl_ad8d9028" expect="main" value="start"
 delete node="#patch001"
 ```
