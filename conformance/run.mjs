@@ -114,6 +114,17 @@ function assertProgramGraphCompilerInput(body, artifact) {
   assertCacheInputs("interface", ["graphHash", "modulePaths", "symbolFacts", "importGraph"], ["targetFacts", "profile", "compilerVersion", "packageDependencies"]);
   assertCacheInputs("checkedBody", ["graphHash", "importPaths", "targetFacts", "compilerVersion", "packageDependencies"], ["sourceFiles", "profile"]);
   assertCacheInputs("specialization", ["graphHash", "importPaths", "targetFacts", "profile", "compilerVersion", "packageDependencies"], ["sourceFiles"]);
+  if (body.graph.lowering === "mapped-final-mir") {
+    assertCacheInputs("mappedFinalMir", ["graphHash", "importPaths", "targetFacts", "compilerVersion", "packageDependencies", "emitKind", "backend"], ["sourceFiles", "profile"]);
+    const mappedMirCache = caches.get("mappedFinalMir");
+    assert.match(mappedMirCache.path, /\.zero\/cache\/native\/mir-[0-9a-f]+\.zmir$/);
+    assert.equal(mappedMirCache.memoryMapped, true);
+    assert.equal(mappedMirCache.borrowedStorage, true);
+    assert.equal(mappedMirCache.byteLength > 0, true);
+    assert.equal(body.incrementalInvalidation.graphInput.mappedFinalMir.path, mappedMirCache.path);
+    assert.equal(body.incrementalInvalidation.graphInput.mappedFinalMir.memoryMapped, true);
+    assert.equal(body.incrementalInvalidation.graphInput.mappedFinalMir.borrowedStorage, true);
+  }
   assertCacheInputs("emittedObject", ["graphHash", "importPaths", "targetFacts", "profile", "compilerVersion", "packageDependencies"], ["sourceFiles"]);
   const parseTreeCache = caches.get("parseTree");
   assert.equal(parseTreeCache.invalidatesOn, "ProgramGraph input");

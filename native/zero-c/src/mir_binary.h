@@ -6,6 +6,7 @@
 typedef struct {
   bool hit;
   bool mapped;
+  bool borrowed_storage;
   size_t byte_len;
   char path[512];
 } ZMirBinaryCacheFacts;

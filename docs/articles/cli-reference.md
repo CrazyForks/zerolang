@@ -131,8 +131,11 @@ Repository graph build/run/test/size/ship/mem commands can also report
 `lowering: "mapped-final-mir"`. That means the graph-backed package was lowered
 to compact final MIR, written under `.zero/cache/native/mir-*.zmir`,
 memory-mapped, verified against the compiler version, graph hash, target, emit
-kind, and backend request, then passed to codegen. `zero.graph` remains the
-authoring store; `.zmir` files are derived compiler caches.
+kind, and backend request, then passed to codegen. The `compilerCaches` array
+includes a `mappedFinalMir` row with the cache path, byte length, whether the
+cache was reused or written by this command, and whether codegen borrowed stable
+storage from the mapped file. `zero.graph` remains the authoring store; `.zmir`
+files are derived compiler caches.
 
 `zero check --json` and `zero inspect --json` also include `compileTime`.
 That object records bounded `meta` evaluation, sandbox denials, cache key

@@ -91,9 +91,12 @@ Repository graph artifact commands also maintain a final MIR cache under
 `.zero/cache/native/mir-*.zmir`. The cache is keyed by graph hash, compiler
 version, target, emit kind, and backend request. On a miss, the compiler lowers
 the graph once, writes compact final MIR, memory-maps and verifies that cache,
-then sends the verified MIR to codegen. On a hit, codegen can skip graph-to-MIR
-lowering. JSON build, size, run, test, ship, and mem outputs report graph
-`lowering: "mapped-final-mir"` when this path is used.
+borrows stable string and readonly-data storage from the mapped file, then sends
+the verified MIR to codegen. On a hit, codegen can skip graph-to-MIR lowering.
+JSON build, size, run, test, ship, and mem outputs report graph
+`lowering: "mapped-final-mir"` when this path is used and include a
+`mappedFinalMir` compiler cache row with `path`, `hit`, `written`,
+`memoryMapped`, `borrowedStorage`, and `byteLength` facts.
 
 Use normal build and run commands against `.program-graph` only when you
 intentionally need to validate a derived interchange artifact:

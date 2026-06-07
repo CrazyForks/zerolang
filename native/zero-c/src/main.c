@@ -2236,6 +2236,7 @@ static const char *GRAPH_CACHE_INPUTS_PARSE = "[\"graphHash\",\"moduleHash\",\"n
 static const char *GRAPH_CACHE_INPUTS_INTERFACE = "[\"graphHash\",\"moduleHash\",\"modulePaths\",\"symbolFacts\",\"importGraph\"]";
 static const char *GRAPH_CACHE_INPUTS_CHECK = "[\"graphHash\",\"moduleHash\",\"nodeHashes\",\"typeFacts\",\"symbolFacts\",\"importGraph\",\"importPaths\",\"targetFacts\",\"compilerVersion\",\"packageDependencies\"]";
 static const char *GRAPH_CACHE_INPUTS_SPECIALIZATION = "[\"graphHash\",\"moduleHash\",\"nodeHashes\",\"typeFacts\",\"symbolFacts\",\"importGraph\",\"importPaths\",\"targetFacts\",\"profile\",\"compilerVersion\",\"packageDependencies\"]";
+static const char *GRAPH_CACHE_INPUTS_MAPPED_MIR = "[\"graphHash\",\"moduleHash\",\"nodeHashes\",\"typeFacts\",\"symbolFacts\",\"importGraph\",\"importPaths\",\"targetFacts\",\"compilerVersion\",\"packageDependencies\",\"emitKind\",\"backend\"]";
 static const char *GRAPH_CACHE_INPUTS_OBJECT = "[\"graphHash\",\"moduleHash\",\"nodeHashes\",\"typeFacts\",\"symbolFacts\",\"importGraph\",\"importPaths\",\"targetFacts\",\"profile\",\"compilerVersion\",\"packageDependencies\"]";
 static const char *GRAPH_CACHE_INPUTS_AGGREGATE = "[\"graphHash\",\"moduleHash\",\"modulePaths\",\"nodeHashes\",\"typeFacts\",\"symbolFacts\",\"importGraph\",\"importPaths\",\"targetFacts\",\"profile\",\"compilerVersion\",\"packageDependencies\"]";
 
@@ -2282,6 +2283,33 @@ static void append_compiler_caches_json_ex(ZBuf *buf, const SourceInput *input, 
   APPEND_CACHE("interface", interface_key, input && input->interface_cache_hit, graph_input ? "graph public symbols/import graph" : "public symbols/import graph", GRAPH_CACHE_INPUTS_INTERFACE);
   APPEND_CACHE("checkedBody", check_key, input && input->check_cache_hit, graph_input ? "ProgramGraph input or target" : "source or target", GRAPH_CACHE_INPUTS_CHECK);
   APPEND_CACHE("specialization", specialization_key, input && input->specialization_cache_hit, graph_input ? "ProgramGraph input, target, or profile" : "source, target, or profile", GRAPH_CACHE_INPUTS_SPECIALIZATION);
+  if (graph_input && input && input->mapped_mir_cache_path) {
+    uint64_t mapped_mir_key = graph_compile_cache_key(input, target, profile, "mapped-final-mir", graph_hash);
+    if (wrote) zbuf_append(buf, ", ");
+    zbuf_append(buf, "{\"name\":\"mappedFinalMir\",\"key\":\"");
+    zbuf_appendf(buf, "%016llx", (unsigned long long)mapped_mir_key);
+    zbuf_appendf(buf, "\",\"hit\":%s,\"stored\":true,\"compilerVersion\":\"%s\",\"packageVersion\":",
+                 input->mapped_mir_cache_hit ? "true" : "false",
+                 ZERO_VERSION);
+    append_json_string(buf, input->package_version ? input->package_version : "");
+    zbuf_append(buf, ",\"sourceKind\":\"program-graph\",\"graphHash\":");
+    append_json_string(buf, graph_hash ? graph_hash : "");
+    zbuf_append(buf, ",\"graphKeyInputs\":");
+    zbuf_append(buf, GRAPH_CACHE_INPUTS_MAPPED_MIR);
+    zbuf_append(buf, ",\"parserArtifactsInKey\":false");
+    zbuf_appendf(buf, ",\"dependencyGraphHash\":\"%016llx\",\"lockfileHash\":\"%016llx\",\"invalidatesOn\":",
+                 (unsigned long long)input->dependency_graph_hash,
+                 (unsigned long long)input->lockfile_hash);
+    append_json_string(buf, "ProgramGraph input, target, emit kind, backend, or compiler version");
+    zbuf_append(buf, ",\"path\":");
+    append_json_string(buf, input->mapped_mir_cache_path);
+    zbuf_appendf(buf, ",\"byteLength\":%zu,\"memoryMapped\":%s,\"borrowedStorage\":%s,\"written\":%s}",
+                 input->mapped_mir_cache_bytes,
+                 input->mapped_mir_memory_mapped ? "true" : "false",
+                 input->mapped_mir_borrowed_storage ? "true" : "false",
+                 input->mapped_mir_cache_written ? "true" : "false");
+    wrote = true;
+  }
   APPEND_CACHE("emittedObject", object_key, input && input->emitted_object_cache_hit, graph_input ? "ProgramGraph input, target, profile, or backend" : "source, target, profile, or backend", GRAPH_CACHE_INPUTS_OBJECT);
 #undef APPEND_CACHE
   zbuf_append(buf, "]");
@@ -2297,6 +2325,10 @@ static void source_cache_hit_miss_counts(const SourceInput *input, size_t *hits,
   COUNT_CACHE_HIT(interface_cache_hit);
   COUNT_CACHE_HIT(check_cache_hit);
   COUNT_CACHE_HIT(specialization_cache_hit);
+  if (input && input->mapped_mir_cache_path) {
+    if (input->mapped_mir_cache_hit) (*hits)++;
+    else (*misses)++;
+  }
   COUNT_CACHE_HIT(emitted_object_cache_hit);
 #undef COUNT_CACHE_HIT
 }
@@ -2330,6 +2362,16 @@ static void append_incremental_invalidations_json_ex(ZBuf *buf, const SourceInpu
     append_json_string(buf, graph_lowering && graph_lowering[0] ? graph_lowering : "direct-program-graph");
     zbuf_append(buf, ",\"parserArtifactsInKey\":false,\"keyedBy\":");
     zbuf_append(buf, GRAPH_CACHE_INPUTS_AGGREGATE);
+    if (input && input->mapped_mir_cache_path) {
+      zbuf_append(buf, ",\"mappedFinalMir\":{\"path\":");
+      append_json_string(buf, input->mapped_mir_cache_path);
+      zbuf_appendf(buf, ",\"byteLength\":%zu,\"hit\":%s,\"written\":%s,\"memoryMapped\":%s,\"borrowedStorage\":%s}",
+                   input->mapped_mir_cache_bytes,
+                   input->mapped_mir_cache_hit ? "true" : "false",
+                   input->mapped_mir_cache_written ? "true" : "false",
+                   input->mapped_mir_memory_mapped ? "true" : "false",
+                   input->mapped_mir_borrowed_storage ? "true" : "false");
+    }
     zbuf_append(buf, "}");
   }
   zbuf_appendf(buf, ",\"affectedModules\":%zu,\"recheckStrategy\":\"fingerprint changed modules and dependent bodies\"", input ? input->module_count : 0);

@@ -2094,7 +2094,7 @@ static void elf_emit_item_copy_loop(ZBuf *code, IrTypeKind element_type) {
   z_x64_emit_cmp_reg_reg(code, 2, 8, true);
   size_t done = z_x64_emit_jcc32_placeholder(code, 0x86);
   z_x64_emit_mov_reg_from_reg(code, 0, 8, true);
-  elf_emit_scale_index_into_rax(code, element_type);
+  elf_emit_scale_len_reg(code, 0, element_type);
   z_x64_emit_mov_reg_from_reg(code, 11, 6, true);
   z_x64_emit_add_reg_reg(code, 11, 0, true);
   elf_emit_load_ptr_element(code, 10, 11, element_type);
@@ -2126,7 +2126,7 @@ static void elf_emit_item_fill_loop(ZBuf *code, IrTypeKind element_type) {
   z_x64_emit_cmp_reg_reg(code, 2, 8, true);
   size_t done = z_x64_emit_jcc32_placeholder(code, 0x86);
   z_x64_emit_mov_reg_from_reg(code, 0, 8, true);
-  elf_emit_scale_index_into_rax(code, element_type);
+  elf_emit_scale_len_reg(code, 0, element_type);
   z_x64_emit_mov_reg_from_reg(code, 11, 7, true);
   z_x64_emit_add_reg_reg(code, 11, 0, true);
   elf_emit_store_ptr_element(code, 11, 10, element_type);
@@ -2163,7 +2163,7 @@ static bool elf_emit_item_contains_value(ZBuf *code, const IrFunction *fun, cons
   z_x64_emit_cmp_reg_reg(code, 2, 8, true);
   size_t done_without_match = z_x64_emit_jcc32_placeholder(code, 0x86);
   z_x64_emit_mov_reg_from_reg(code, 0, 8, true);
-  elf_emit_scale_index_into_rax(code, element_type);
+  elf_emit_scale_len_reg(code, 0, element_type);
   z_x64_emit_mov_reg_from_reg(code, 11, 6, true);
   z_x64_emit_add_reg_reg(code, 11, 0, true);
   elf_emit_load_ptr_element(code, 9, 11, element_type);

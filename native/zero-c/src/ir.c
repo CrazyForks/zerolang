@@ -10,6 +10,10 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #define IR_READONLY_DATA_BASE 1024u
 #define IR_READONLY_DATA_LIMIT 65536u
@@ -5205,11 +5209,14 @@ IrProgram z_lower_program(const Program *program) {
 
 void z_free_ir_program(IrProgram *program) {
   if (!program) return;
+  bool borrowed_binary_storage = program->mir_binary_storage_borrowed;
   for (size_t i = 0; i < program->function_len; i++) {
     IrFunction *fun = &program->functions[i];
-    free(fun->name);
-    free(fun->stable_id);
-    free(fun->world_param_name);
+    if (!borrowed_binary_storage) {
+      free(fun->name);
+      free(fun->stable_id);
+      free(fun->world_param_name);
+    }
     for (size_t binding_index = 0; binding_index < fun->generic_binding_len; binding_index++) {
       free(fun->generic_param_names[binding_index]);
       free(fun->generic_arg_types[binding_index]);
@@ -5217,8 +5224,10 @@ void z_free_ir_program(IrProgram *program) {
     free(fun->generic_param_names);
     free(fun->generic_arg_types);
     for (size_t local_index = 0; local_index < fun->local_len; local_index++) {
-      free(fun->locals[local_index].name);
-      free(fun->locals[local_index].shape_name);
+      if (!borrowed_binary_storage) {
+        free(fun->locals[local_index].name);
+        free(fun->locals[local_index].shape_name);
+      }
     }
     ir_free_instrs(fun->instrs, fun->instr_len);
     free(fun->locals);
@@ -5226,9 +5235,11 @@ void z_free_ir_program(IrProgram *program) {
   }
   free(program->functions);
   for (size_t i = 0; i < program->external_function_len; i++) {
-    free(program->external_functions[i].symbol);
-    free(program->external_functions[i].import_header);
-    free(program->external_functions[i].import_resolved_header);
+    if (!borrowed_binary_storage) {
+      free(program->external_functions[i].symbol);
+      free(program->external_functions[i].import_header);
+      free(program->external_functions[i].import_resolved_header);
+    }
     free(program->external_functions[i].param_types);
   }
   free(program->external_functions);
@@ -5236,8 +5247,16 @@ void z_free_ir_program(IrProgram *program) {
   ir_active_local_restore(program, 0);
   free(program->active_local_names);
   for (size_t i = 0; i < program->data_segment_len; i++) {
-    free(program->data_segments[i].bytes);
+    if (!borrowed_binary_storage) free(program->data_segments[i].bytes);
   }
   free(program->data_segments);
   z_free_program(&program->program);
+#if !defined(_WIN32)
+  if (program->mir_binary_storage && program->mir_binary_storage_mapped) {
+    munmap((void *)program->mir_binary_storage, program->mir_binary_storage_len);
+    if (program->mir_binary_storage_fd >= 0) close(program->mir_binary_storage_fd);
+  }
+#else
+  if (program->mir_binary_storage && !program->mir_binary_storage_mapped) free((void *)program->mir_binary_storage);
+#endif
 }

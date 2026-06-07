@@ -15,18 +15,18 @@ type CScanState = {
 };
 
 const fileBudgets = {
-  "native/zero-c/include/zero.h": { maxLines: 1160, maxStrcmpCalls: 0 },
+  "native/zero-c/include/zero.h": { maxLines: 1171, maxStrcmpCalls: 0 },
   "native/zero-c/include/zero_contracts.h": { maxLines: 20, maxStrcmpCalls: 0 },
   "native/zero-c/include/zero_runtime.h": { maxLines: 226, maxStrcmpCalls: 0 },
   "native/zero-c/src/checker.c": { maxLines: 11753, maxStrcmpCalls: 287 },
-  "native/zero-c/src/main.c": { maxLines: 14506, maxStrcmpCalls: 500 },
-  "native/zero-c/src/ir.c": { maxLines: 5243, maxStrcmpCalls: 400 },
+  "native/zero-c/src/main.c": { maxLines: 14546, maxStrcmpCalls: 500 },
+  "native/zero-c/src/ir.c": { maxLines: 5262, maxStrcmpCalls: 400 },
   "native/zero-c/src/llvm_backend_metadata.c": { maxLines: 80, maxStrcmpCalls: 0 },
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
   "native/zero-c/src/manifest_toml.c": { maxLines: 367, maxStrcmpCalls: 19 },
   "native/zero-c/src/manifest_toml.h": { maxLines: 8, maxStrcmpCalls: 0 },
-  "native/zero-c/src/mir_binary.c": { maxLines: 1253, maxStrcmpCalls: 1 },
-  "native/zero-c/src/mir_binary.h": { maxLines: 36, maxStrcmpCalls: 0 },
+  "native/zero-c/src/mir_binary.c": { maxLines: 1282, maxStrcmpCalls: 1 },
+  "native/zero-c/src/mir_binary.h": { maxLines: 37, maxStrcmpCalls: 0 },
   "native/zero-c/src/ast.c": { maxLines: 250, maxStrcmpCalls: 0 },
   "native/zero-c/src/backend_family.c": { maxLines: 75, maxStrcmpCalls: 5 },
   "native/zero-c/src/buildability.c": { maxLines: 352, maxStrcmpCalls: 2 },
@@ -92,7 +92,7 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_manifest.c": { maxLines: 240, maxStrcmpCalls: 8 },
   "native/zero-c/src/program_graph_manifest.h": { maxLines: 15, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_manifest_identity.c": { maxLines: 92, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_mir.c": { maxLines: 4354, maxStrcmpCalls: 4 },
+  "native/zero-c/src/program_graph_mir.c": { maxLines: 4368, maxStrcmpCalls: 4 },
   "native/zero-c/src/program_graph_query.c": { maxLines: 350, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_query.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_query_internal.h": { maxLines: 20, maxStrcmpCalls: 0 },
@@ -1696,7 +1696,12 @@ const programGraph = {
   repositoryGraphMirPrepMappedFinalMir: /z_mir_binary_load_path\s*\(/.test(repositoryGraphMirPrepBody) &&
     /z_mir_binary_write_path\s*\(/.test(repositoryGraphMirPrepBody) &&
     /z_lower_program_graph_with_source\s*\(/.test(repositoryGraphMirPrepBody) &&
-    /source\s*->\s*lowering\s*=\s*"mapped-final-mir"/.test(repositoryGraphMirPrepRawBody),
+    /source\s*->\s*lowering\s*=\s*"mapped-final-mir"/.test(repositoryGraphMirPrepRawBody) &&
+    /ir_graph_set_mapped_mir_cache_facts\s*\(/.test(repositoryGraphMirPrepRawBody),
+  repositoryGraphMirCacheFacts: /mappedFinalMir/.test(main) &&
+    /borrowedStorage/.test(main) &&
+    /memoryMapped/.test(main) &&
+    /mapped_mir_cache_written/.test(main),
   repositoryGraphMirPrepSourceFreeFirst: repositoryGraphMirPrepBody.indexOf("z_mir_binary_load_path(") >= 0 &&
     repositoryGraphMirPrepBody.indexOf("ir_graph_lower_checked_program(&store.graph") >= 0 &&
     repositoryGraphMirPrepBody.indexOf("z_mir_binary_load_path(") < repositoryGraphMirPrepBody.indexOf("ir_graph_lower_checked_program(&store.graph") &&

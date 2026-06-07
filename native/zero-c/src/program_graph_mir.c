@@ -35,6 +35,17 @@ static bool ir_text_eq(const char *left, const char *right) {
   return strcmp(left ? left : "", right ? right : "") == 0;
 }
 
+static void ir_graph_set_mapped_mir_cache_facts(SourceInput *input, const ZMirBinaryCacheFacts *facts, bool reused, bool written) {
+  if (!input || !facts || !facts->hit) return;
+  free(input->mapped_mir_cache_path);
+  input->mapped_mir_cache_path = z_strdup(facts->path);
+  input->mapped_mir_cache_bytes = facts->byte_len;
+  input->mapped_mir_cache_hit = reused;
+  input->mapped_mir_cache_written = written;
+  input->mapped_mir_memory_mapped = facts->mapped;
+  input->mapped_mir_borrowed_storage = facts->borrowed_storage;
+}
+
 static IrTypeKind ir_span_element_kind(const char *type) {
   if (!type) return IR_TYPE_UNSUPPORTED;
   if (ir_text_eq(type, "Bool") || ir_text_eq(type, "bool")) return IR_TYPE_BOOL;
@@ -4286,6 +4297,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
       z_program_graph_seed_source_metadata_facts(input, &store.graph);
       input->program_graph_hash = z_strdup(store.graph.graph_hash ? store.graph.graph_hash : "");
       input->program_graph_module_identity = z_strdup(store.graph.module_identity ? store.graph.module_identity : "");
+      ir_graph_set_mapped_mir_cache_facts(input, &mir_cache, true, false);
     }
     if (source) {
       source->artifact = store_path;
@@ -4310,6 +4322,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
         if (z_mir_binary_load_path(mir_cache_path, store.graph.graph_hash, target, emit_kind, requested_backend, &mapped_ir, &mir_cache, NULL)) {
           z_free_ir_program(&graph_ir);
           graph_ir = mapped_ir;
+          ir_graph_set_mapped_mir_cache_facts(input, &mir_cache, false, true);
         }
       }
     }
@@ -4339,6 +4352,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
     z_program_graph_seed_source_metadata_facts(input, &store.graph);
     input->program_graph_hash = z_strdup(store.graph.graph_hash ? store.graph.graph_hash : "");
     input->program_graph_module_identity = z_strdup(store.graph.module_identity ? store.graph.module_identity : "");
+    ir_graph_set_mapped_mir_cache_facts(input, &mir_cache, false, mir_cache.hit);
   }
   if (source) {
     source->artifact = store_path;

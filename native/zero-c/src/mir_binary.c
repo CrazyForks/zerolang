@@ -211,11 +211,11 @@ typedef struct {
   MirExternalFlat *externals;
   uint32_t *external_param_types;
   MirDataFlat *data_segments;
-  unsigned char *data_bytes;
+  const unsigned char *data_bytes;
 } MirDecoded;
 
 static const unsigned char MIR_BINARY_MAGIC[8] = {'Z', 'M', 'I', 'R', 'B', 'I', 'N', '1'};
-enum { MIR_BINARY_SCHEMA_VERSION = 2 };
+enum { MIR_BINARY_SCHEMA_VERSION = 3 };
 static const uint64_t MIR_NULL_LEN = UINT64_MAX;
 
 static void mir_diag(ZDiag *diag, const char *path, const char *message, const char *actual) {
@@ -262,6 +262,7 @@ static MirStringRef mir_add_string(MirStringTable *table, const char *text) {
   size_t len = strlen(text);
   MirStringRef ref = {.offset = (uint64_t)table->bytes.len, .len = (uint64_t)len};
   mir_append_bytes(&table->bytes, text, len);
+  zbuf_append_char(&table->bytes, '\0');
   return ref;
 }
 
@@ -684,9 +685,17 @@ static bool mir_ref_string(const MirHeader *header, MirStringRef ref, char **out
 }
 
 static bool mir_ref_borrow_string(const MirHeader *header, MirStringRef ref, const char **out) {
-  char *copy = NULL;
-  if (!mir_ref_string(header, ref, &copy)) return false;
-  *out = copy;
+  if (ref.len == MIR_NULL_LEN) {
+    *out = NULL;
+    return true;
+  }
+  if (ref.offset > (uint64_t)header->strings_len_size ||
+      ref.len > (uint64_t)header->strings_len_size - ref.offset ||
+      ref.len >= (uint64_t)header->strings_len_size - ref.offset ||
+      ref.len > (uint64_t)SIZE_MAX) return false;
+  const char *text = (const char *)header->strings + (size_t)ref.offset;
+  if (text[(size_t)ref.len] != '\0') return false;
+  *out = text;
   return true;
 }
 
@@ -807,8 +816,9 @@ static bool mir_read_instr(MirReader *reader, const MirHeader *header, MirInstrF
 
 static bool mir_read_value(MirReader *reader, const MirHeader *header, MirValueFlat *record) {
   uint32_t kind = 0, type = 0, element_type = 0, external_call = 0, binary_op = 0, compare_op = 0;
+  uint64_t int_value = 0;
   int32_t line = 0, column = 0;
-  if (!mir_get_u32(reader, &kind) || !mir_get_u32(reader, &type) || !mir_get_u64(reader, &record->int_value) ||
+  if (!mir_get_u32(reader, &kind) || !mir_get_u32(reader, &type) || !mir_get_u64(reader, &int_value) ||
       !mir_get_u32(reader, &record->local_index) || !mir_get_u32(reader, &record->callee_index) ||
       !mir_get_u32(reader, &record->array_index) || !mir_get_u32(reader, &record->field_offset) ||
       !mir_get_u32(reader, &record->data_offset) || !mir_get_u32(reader, &record->data_len) ||
@@ -824,6 +834,7 @@ static bool mir_read_value(MirReader *reader, const MirHeader *header, MirValueF
       !mir_refs_fit(record->arg_ref_start, record->arg_ref_len, header->value_ref_count)) return false;
   record->kind = (IrValueKind)kind;
   record->type = (IrTypeKind)type;
+  record->int_value = (unsigned long long)int_value;
   record->element_type = (IrTypeKind)element_type;
   record->external_call = external_call != 0;
   record->binary_op = (IrBinaryOp)binary_op;
@@ -866,23 +877,9 @@ static void mir_decoded_free(MirDecoded *decoded) {
     free(decoded->externals);
     free(decoded->external_param_types);
     free(decoded->data_segments);
-    free(decoded->data_bytes);
+    free((void *)decoded->data_bytes);
     *decoded = (MirDecoded){0};
     return;
-  }
-  for (size_t i = 0; i < decoded->header->function_count; i++) {
-    free((char *)decoded->functions[i].name);
-    free((char *)decoded->functions[i].stable_id);
-    free((char *)decoded->functions[i].world_param_name);
-  }
-  for (size_t i = 0; i < decoded->header->local_count; i++) {
-    free((char *)decoded->locals[i].name);
-    free((char *)decoded->locals[i].shape_name);
-  }
-  for (size_t i = 0; i < decoded->header->external_count; i++) {
-    free((char *)decoded->externals[i].symbol);
-    free((char *)decoded->externals[i].import_header);
-    free((char *)decoded->externals[i].import_resolved_header);
   }
   free(decoded->functions);
   free(decoded->locals);
@@ -893,7 +890,6 @@ static void mir_decoded_free(MirDecoded *decoded) {
   free(decoded->externals);
   free(decoded->external_param_types);
   free(decoded->data_segments);
-  free(decoded->data_bytes);
   *decoded = (MirDecoded){0};
 }
 
@@ -908,7 +904,6 @@ static bool mir_decode(MirReader *reader, const MirHeader *header, MirDecoded *d
   if (header->external_count) decoded->externals = z_checked_calloc((size_t)header->external_count, sizeof(MirExternalFlat));
   if (header->external_param_type_count) decoded->external_param_types = z_checked_calloc((size_t)header->external_param_type_count, sizeof(uint32_t));
   if (header->data_segment_count) decoded->data_segments = z_checked_calloc((size_t)header->data_segment_count, sizeof(MirDataFlat));
-  if (header->data_bytes_len) decoded->data_bytes = z_checked_calloc((size_t)header->data_bytes_len, sizeof(unsigned char));
   for (size_t i = 0; i < (size_t)header->function_count; i++) if (!mir_read_function(reader, header, &decoded->functions[i])) return false;
   for (size_t i = 0; i < (size_t)header->local_count; i++) if (!mir_read_local(reader, header, &decoded->locals[i])) return false;
   for (size_t i = 0; i < (size_t)header->instr_count; i++) if (!mir_read_instr(reader, header, &decoded->instrs[i])) return false;
@@ -926,7 +921,11 @@ static bool mir_decode(MirReader *reader, const MirHeader *header, MirDecoded *d
     decoded->external_param_types[i] = type;
   }
   for (size_t i = 0; i < (size_t)header->data_segment_count; i++) if (!mir_read_data_segment(reader, header, &decoded->data_segments[i])) return false;
-  if (header->data_bytes_len && !mir_get_bytes(reader, decoded->data_bytes, (size_t)header->data_bytes_len)) return false;
+  if (header->data_bytes_len) {
+    if (reader->cursor > reader->len || header->data_bytes_len > (uint64_t)(reader->len - reader->cursor)) return false;
+    decoded->data_bytes = reader->data + reader->cursor;
+    reader->cursor += (size_t)header->data_bytes_len;
+  }
   return reader->cursor == header->strings_offset;
 }
 
@@ -997,20 +996,30 @@ static IrInstr mir_materialize_instr(const MirDecoded *decoded, uint64_t index) 
   return out;
 }
 
-static bool mir_materialize_program(const MirDecoded *decoded, const char *path, const ZTargetInfo *target, IrProgram *out) {
+static char *mir_materialize_required_string(const char *text, bool borrow_storage) {
+  return borrow_storage ? (char *)(text ? text : "") : z_strdup(text ? text : "");
+}
+
+static char *mir_materialize_optional_string(const char *text, bool borrow_storage) {
+  if (!text) return NULL;
+  return borrow_storage ? (char *)text : z_strdup(text);
+}
+
+static bool mir_materialize_program(const MirDecoded *decoded, const char *path, const ZTargetInfo *target, bool borrow_storage, IrProgram *out) {
   if (!decoded || !out) return false;
   *out = (IrProgram){0};
   const MirHeader *header = decoded->header;
   out->target = target;
+  out->mir_binary_storage_borrowed = borrow_storage;
   out->function_len = (size_t)header->function_count;
   out->function_cap = out->function_len;
   if (out->function_len) out->functions = z_checked_calloc(out->function_len, sizeof(IrFunction));
   for (size_t i = 0; i < out->function_len; i++) {
     const MirFunctionFlat *record = &decoded->functions[i];
     IrFunction *fun = &out->functions[i];
-    fun->name = z_strdup(record->name ? record->name : "");
-    fun->stable_id = z_strdup(record->stable_id ? record->stable_id : "");
-    fun->world_param_name = record->world_param_name ? z_strdup(record->world_param_name) : NULL;
+    fun->name = mir_materialize_required_string(record->name, borrow_storage);
+    fun->stable_id = mir_materialize_required_string(record->stable_id, borrow_storage);
+    fun->world_param_name = mir_materialize_optional_string(record->world_param_name, borrow_storage);
     fun->return_type = record->return_type;
     fun->value_return_type = record->value_return_type;
     fun->return_element_type = record->return_element_type;
@@ -1028,8 +1037,8 @@ static bool mir_materialize_program(const MirDecoded *decoded, const char *path,
     for (size_t local_index = 0; local_index < fun->local_len; local_index++) {
       const MirLocalFlat *local_record = &decoded->locals[(size_t)record->local_start + local_index];
       IrLocal *local = &fun->locals[local_index];
-      local->name = z_strdup(local_record->name ? local_record->name : "");
-      local->shape_name = local_record->shape_name ? z_strdup(local_record->shape_name) : NULL;
+      local->name = mir_materialize_required_string(local_record->name, borrow_storage);
+      local->shape_name = mir_materialize_optional_string(local_record->shape_name, borrow_storage);
       local->type = local_record->type;
       local->element_type = local_record->element_type;
       local->index = local_record->index;
@@ -1053,9 +1062,9 @@ static bool mir_materialize_program(const MirDecoded *decoded, const char *path,
   for (size_t i = 0; i < out->external_function_len; i++) {
     const MirExternalFlat *record = &decoded->externals[i];
     IrExternalFunction *external = &out->external_functions[i];
-    external->symbol = z_strdup(record->symbol ? record->symbol : "");
-    external->import_header = record->import_header ? z_strdup(record->import_header) : NULL;
-    external->import_resolved_header = record->import_resolved_header ? z_strdup(record->import_resolved_header) : NULL;
+    external->symbol = mir_materialize_required_string(record->symbol, borrow_storage);
+    external->import_header = mir_materialize_optional_string(record->import_header, borrow_storage);
+    external->import_resolved_header = mir_materialize_optional_string(record->import_resolved_header, borrow_storage);
     external->return_type = record->return_type;
     external->param_len = (size_t)record->param_type_len;
     external->param_cap = external->param_len;
@@ -1073,8 +1082,12 @@ static bool mir_materialize_program(const MirDecoded *decoded, const char *path,
     segment->offset = record->offset;
     segment->len = record->len;
     if (segment->len) {
-      segment->bytes = z_checked_calloc(segment->len, sizeof(unsigned char));
-      memcpy(segment->bytes, decoded->data_bytes + record->data_start, segment->len);
+      if (borrow_storage) {
+        segment->bytes = (unsigned char *)(decoded->data_bytes + record->data_start);
+      } else {
+        segment->bytes = z_checked_calloc(segment->len, sizeof(unsigned char));
+        memcpy(segment->bytes, decoded->data_bytes + record->data_start, segment->len);
+      }
     }
   }
   out->readonly_data_bytes = (size_t)header->readonly_data_bytes;
@@ -1207,12 +1220,28 @@ bool z_mir_binary_load_path(const char *path, const char *expected_graph_hash, c
   bool ok = mir_read_header(&reader, &header, mapped.len) &&
             mir_validate_identity(&header, expected_graph_hash, target, emit_kind, backend, diag, path) &&
             mir_decode(&reader, &header, &decoded) &&
-            mir_materialize_program(&decoded, path, target, out);
+            mir_materialize_program(&decoded, path, target, true, out);
   if (!ok && diag && diag->code == 0) mir_diag(diag, path, "invalid mapped MIR cache", "invalid MIR binary");
+  if (ok) {
+    out->mir_binary_storage = mapped.data;
+    out->mir_binary_storage_len = mapped.len;
+    out->mir_binary_storage_mapped = mapped.mapped;
+    out->mir_binary_storage_borrowed = true;
+#if !defined(_WIN32)
+    out->mir_binary_storage_fd = mapped.fd;
+    mapped.fd = -1;
+#else
+    out->mir_binary_storage_fd = -1;
+#endif
+    mapped.data = NULL;
+    mapped.len = 0;
+    mapped.mapped = false;
+  }
   if (facts) {
     facts->hit = ok;
-    facts->mapped = mapped.mapped;
-    facts->byte_len = mapped.len;
+    facts->mapped = ok ? out->mir_binary_storage_mapped : mapped.mapped;
+    facts->borrowed_storage = ok && out->mir_binary_storage_borrowed;
+    facts->byte_len = ok ? out->mir_binary_storage_len : mapped.len;
   }
   mir_decoded_free(&decoded);
   mir_unmap_file(&mapped);

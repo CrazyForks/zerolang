@@ -784,6 +784,11 @@ typedef struct {
   char mir_message[256];
   char mir_help[256];
   char *mir_path;
+  const unsigned char *mir_binary_storage;
+  size_t mir_binary_storage_len;
+  bool mir_binary_storage_mapped;
+  bool mir_binary_storage_borrowed;
+  int mir_binary_storage_fd;
   ZBackendBlocker backend_blocker;
   int mir_line;
   int mir_column;
@@ -866,6 +871,12 @@ typedef struct {
   long long object_ms;
   long long link_ms;
   size_t lowered_ir_bytes;
+  char *mapped_mir_cache_path;
+  size_t mapped_mir_cache_bytes;
+  bool mapped_mir_cache_hit;
+  bool mapped_mir_cache_written;
+  bool mapped_mir_memory_mapped;
+  bool mapped_mir_borrowed_storage;
   size_t direct_function_count;
   size_t direct_export_count;
   size_t direct_stack_bytes;

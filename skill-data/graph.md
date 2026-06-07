@@ -48,7 +48,11 @@ run, test, size, ship, and mem commands may additionally write
 `.zero/cache/native/mir-*.zmir`, a derived final-MIR cache. The compiler
 memory-maps and verifies that cache before codegen; stale caches are rejected by
 compiler version, graph hash, target, emit kind, and backend request. Agents
-should not patch `.zmir` files.
+should not patch `.zmir` files. JSON outputs expose this path as a
+`mappedFinalMir` compiler cache entry; `hit: true` means the cache was reused,
+`written: true` means the current command generated it before mapping it, and
+`borrowedStorage: true` means codegen is reading stable strings/readonly data
+from the mapped cache instead of copied source text.
 
 ## Graph-First Loop
 
