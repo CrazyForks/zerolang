@@ -4490,7 +4490,7 @@ assert.equal(programGraphAuthoringCliTest.passedTests, 1);
 assert.equal(programGraphAuthoringCliGraphTest.stdout, "1 test(s) ok\n");
 assert.equal(programGraphAuthoringCliRun.stdout, "42\n");
 assert.equal(programGraphAuthoringCliGraphRun.stdout, "15\n");
-assertSourceGraph(programGraphAuthoringCliSize, `${programGraphAuthoringCliPackage}/zero.graph`, "package:program-graph-authoring-cli@0.1.0", "mapped-final-mir", false, "missing");
+assertSourceGraph(programGraphAuthoringCliSize, `${programGraphAuthoringCliPackage}/zero.graph`, "package:program-graph-authoring-cli@0.1.0", "mapped-final-mir", true, "missing");
 assert(programGraphAuthoringCliSize.sizeBreakdown.stdlibHelpers.some((helper) => helper.name === "std.args.parseU32"));
 assert(programGraphAuthoringCliSize.sizeBreakdown.stdlibHelpers.some((helper) => helper.name === "std.fmt.u32"));
 assert.equal(programGraphAuthoringCliSync.ok, true);

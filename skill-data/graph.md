@@ -28,24 +28,26 @@ packages, `.0` files are the human-readable source projection, and
 
 ## Repository Store Encoding
 
-`zero.graph` defaults to the text repository graph store. The compiler also
-supports an explicit binary store that is loaded through typed graph tables
-without parsing the text wrapper:
+`zero.graph` defaults to the binary repository graph store. The compiler loads
+that store through typed graph tables without parsing a text wrapper. Text
+stores remain available only when explicitly requested for debugging or
+inspection:
 
 ```sh
-zero init --format binary app
-zero sync --from-source --format binary <package>
-zero patch --format binary <package> --op 'addMain'
+zero init app
+zero init --format text app-debug
+zero sync --from-source --format text <package>
+zero patch --format text <package> --op 'addMain'
 zero validate --format binary --out /tmp/app.graph <input>
 ```
 
 Reads auto-detect text and binary `zero.graph` stores and binary graph
-artifacts. Plain package writes preserve an existing binary store, and
-`zero status <package>` reports `store format: text|binary`. Do not make binary
-the default for user packages in prompts; use it when the task is to test or opt
-into binary graph storage. The standard library is the exception:
-`std/*.graph` files are binary graph stores used by the compiler, while
-`std/*.0` files remain human-readable projections for review.
+artifacts. Plain package writes preserve an existing text or binary store, and
+`zero status <package>` reports `store format: text|binary`. Prefer the binary
+default for agent-authored packages. Use `--format text` only when the task
+needs a readable repository store artifact. The standard library also uses
+binary `std/*.graph` stores for the compile path, while `std/*.0` files remain
+human-readable projections for review.
 
 `zero.graph` remains the authoring and repository compiler-input store.
 Repository graph build, run, test, size, ship, and mem commands, plus

@@ -182,13 +182,15 @@ not materialize `.0` files. Agents can patch the package with
 store from current `.0` source, preserves existing graph node handles where the
 source edit is unambiguous, and stores exact checked-in source projection bytes
 for tracked local files. Ambiguous identity changes fail instead of guessing.
-Text is the default `zero.graph` encoding. `--format binary` opts `zero init`,
-`zero patch`, `zero sync --from-source`, or `zero merge` into a binary
-repository graph store that is decoded as typed graph tables instead of parsed
-as the text wrapper. `zero dump`, `zero import`, `zero validate`, `zero patch
---out`, and `zero roundtrip --out` can also write binary graph artifacts with
-`--format binary`. Reads auto-detect both encodings, plain package writes
-preserve an existing binary store, and `zero status` reports the active store
+Binary is the default `zero.graph` encoding. `zero init`, `zero patch`,
+`zero sync --from-source`, and `zero merge` write a binary repository graph
+store unless an existing text store is being preserved or `--format text` is
+explicitly requested. Binary stores are decoded as typed graph tables instead
+of parsed as a text wrapper. `zero dump`, `zero import`, `zero validate`,
+`zero patch --out`, and `zero roundtrip --out` still write readable text
+artifacts by default, but can write binary graph artifacts with `--format
+binary`. Reads auto-detect both encodings, plain package writes preserve an
+existing text or binary store, and `zero status` reports the active store
 format. Stdlib `std/*.graph` stores are binary graph stores used by the
 compiler path; sibling `std/*.0` files are human-readable projections, not the
 stdlib compile source.

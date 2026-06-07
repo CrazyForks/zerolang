@@ -83,9 +83,8 @@ zero build . --out .zero/out/app
 Use `zero sync --from-graph <package>` when humans need checked-in `.0`
 projections. If a human edits a projection, run
 `zero sync --from-source <package>` before the next graph-store compile.
-If the package has opted into binary graph storage, normal build and run
-commands still read `zero.graph` directly; `zero status <package>` reports the
-store format.
+Normal build and run commands read binary `zero.graph` stores directly by
+default; `zero status <package>` reports the active store format.
 
 Repository graph build/run/test/size/ship/mem commands and standalone
 `.program-graph` build, run, and size artifact commands also maintain a final

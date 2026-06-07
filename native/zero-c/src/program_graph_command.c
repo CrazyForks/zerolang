@@ -154,8 +154,9 @@ void z_program_graph_print_command_help(void) {
   printf("  merge     combine independent repository graph store edits by durable node id\n");
   printf("  roundtrip compare graph semantics after direct ProgramGraph lowering\n");
   printf("\nRepository store encoding:\n");
-  printf("  text is the default zero.graph encoding\n");
-  printf("  --format binary opts repository graph writes and explicit graph artifact outputs into binary storage\n");
+  printf("  binary is the default zero.graph encoding\n");
+  printf("  --format text writes readable repository stores when explicitly requested\n");
+  printf("  --format binary opts explicit graph artifact outputs into binary storage\n");
   printf("  reads auto-detect text and binary stores and graph artifacts\n");
   printf("\nCommon patch operations:\n");
   printf("  addMain\n");

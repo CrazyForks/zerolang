@@ -196,7 +196,7 @@ static bool repo_requested_store_format(const char *format_name, ZProgramGraphSt
     snprintf(diag->message, sizeof(diag->message), "repository graph store format is not supported");
     snprintf(diag->expected, sizeof(diag->expected), "--format text|binary");
     snprintf(diag->actual, sizeof(diag->actual), "%s", format_name);
-    snprintf(diag->help, sizeof(diag->help), "use --format binary to opt into binary zero.graph stores; omit --format for text");
+    snprintf(diag->help, sizeof(diag->help), "omit --format for the binary zero.graph default, or pass --format text for a readable debug store");
   }
   return false;
 }
@@ -295,8 +295,8 @@ static void repo_append_state_json(ZBuf *buf, const RepositoryGraphState *state,
     zbuf_append(buf, "}");
   }
   zbuf_append(buf, ",\n  \"storage\": {\"encoding\":");
-  repo_append_json_string(buf, state->store_valid && state->store_format == Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY ? "single-file-binary" : "single-file-text");
-  zbuf_append(buf, ",\"artifact\":\"zero.graph\",\"interface\":\"ProgramGraphStore\",\"schemaVersion\":1,\"evolvable\":true,\"binaryAvailable\":true,\"defaultEncoding\":\"text\"}");
+  repo_append_json_string(buf, !state->store_valid || state->store_format == Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY ? "single-file-binary" : "single-file-text");
+  zbuf_append(buf, ",\"artifact\":\"zero.graph\",\"interface\":\"ProgramGraphStore\",\"schemaVersion\":1,\"evolvable\":true,\"binaryAvailable\":true,\"defaultEncoding\":\"binary\"}");
   zbuf_appendf(buf, ",\n  \"scale\": {\"nodes\":%zu,\"edges\":%zu,\"sources\":%zu}", state->node_count, state->edge_count, state->source_count);
   zbuf_append(buf, ",\n  \"contract\": ");
   repo_append_contract_json(buf, state);
@@ -632,9 +632,9 @@ int z_repository_graph_sync_command(const char *input, const ZTargetInfo *target
   }
   ZProgramGraphStore saved;
   ZDiag diag = {0};
-  ZProgramGraphStoreFormat requested_format = z_program_graph_store_path_is_binary(state.store_path)
-    ? Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY
-    : Z_PROGRAM_GRAPH_STORE_FORMAT_TEXT;
+  ZProgramGraphStoreFormat requested_format = state.store_valid
+    ? state.store_format
+    : Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY;
   if (!repo_requested_store_format(store_format, requested_format, &requested_format, &diag)) {
     int rc = repo_graph_error(&state,
                               json,
@@ -803,9 +803,9 @@ int z_repository_graph_merge_command(const char *input, const ZTargetInfo *targe
   }
   char *root = z_program_graph_store_root_for_input(input && input[0] ? input : ".");
   char *target_path = z_program_graph_store_path_for_root(root);
-  ZProgramGraphStoreFormat requested_format = z_program_graph_store_path_is_binary(target_path)
-    ? Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY
-    : Z_PROGRAM_GRAPH_STORE_FORMAT_TEXT;
+  ZProgramGraphStoreFormat requested_format = state.store_valid
+    ? state.store_format
+    : Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY;
   if (!repo_requested_store_format(store_format, requested_format, &requested_format, &diag)) {
     int rc = repo_graph_error(&state,
                               json,

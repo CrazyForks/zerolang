@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
-import { lstat, mkdir, readFile, readdir, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -118,7 +118,7 @@ assert.equal((await zeroRun(["verify-sync", checkedInBinaryCrmRoot])).stdout, "r
 
 await rm(binaryRoot, { recursive: true, force: true });
 await mkdir(binaryRoot, { recursive: true });
-await zeroRun(["init", "--format", "binary", binaryRoot]);
+await zeroRun(["init", binaryRoot]);
 let binaryStore = await readFile(`${binaryRoot}/zero.graph`);
 assert.equal(binaryStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
 
@@ -129,7 +129,7 @@ assert.equal(binaryStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
 const binaryStatus = JSON.parse((await zeroRun(["status", "--json", binaryRoot])).stdout);
 assert.equal(binaryStatus.store.encoding, "binary");
 assert.equal(binaryStatus.storage.encoding, "single-file-binary");
-assert.equal(binaryStatus.storage.defaultEncoding, "text");
+assert.equal(binaryStatus.storage.defaultEncoding, "binary");
 assert.equal(binaryStatus.storage.binaryAvailable, true);
 
 assert.equal((await zeroRun(["check", binaryRoot])).stdout, "ok\n");
@@ -140,7 +140,7 @@ assert.equal((await zeroRun(["verify-sync", binaryRoot])).stdout, "repository gr
 const textRoot = `/tmp/zero-program-graph-binary-convert-${process.pid}`;
 await rm(textRoot, { recursive: true, force: true });
 await mkdir(textRoot, { recursive: true });
-await zeroRun(["init", textRoot]);
+await zeroRun(["init", "--format", "text", textRoot]);
 await zeroRun(["patch", textRoot, "--op", "addMain", "--op", 'addCheckWrite fn="main" text="convert me\\n"']);
 assert.match((await readFile(`${textRoot}/zero.graph`, "utf8")).slice(0, 64), /^zero-repository-graph v1/);
 await zeroRun(["sync", "--from-graph", textRoot]);
@@ -149,6 +149,22 @@ const convertedStore = await readFile(`${textRoot}/zero.graph`);
 assert.equal(convertedStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
 assert.equal((await zeroRun(["run", textRoot])).stdout, "convert me\n");
 assert.equal((await zeroRun(["verify-sync", textRoot])).stdout, "repository graph verify-sync ok\n");
+
+const syncDefaultRoot = `/tmp/zero-program-graph-sync-default-${process.pid}`;
+await rm(syncDefaultRoot, { recursive: true, force: true });
+await mkdir(syncDefaultRoot, { recursive: true });
+await writeFile(
+  `${syncDefaultRoot}/main.0`,
+  'pub fn main(world: World) -> Void raises {\n    check world.out.write("sync default\\n")\n}\n',
+);
+await writeFile(
+  `${syncDefaultRoot}/zero.toml`,
+  '[package]\nname = "sync-default"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "main.0"\n\n[repositoryGraph]\ncompilerInput = true\n',
+);
+await zeroRun(["sync", "--from-source", syncDefaultRoot]);
+const syncDefaultStore = await readFile(`${syncDefaultRoot}/zero.graph`);
+assert.equal(syncDefaultStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
+assert.equal((await zeroRun(["run", syncDefaultRoot])).stdout, "sync default\n");
 
 const invalidFormat = await zeroRun(["sync", "--from-source", "--format", "pickle", textRoot]).catch((error) => error);
 assert.notEqual(invalidFormat.code ?? invalidFormat.status, 0);

@@ -153,10 +153,10 @@ for human review and `zero sync --from-source <package>` after humans edit
 that projection. Keep derived graph artifacts out of the package source unless
 the user explicitly asks for them.
 
-Repository graph stores are text by default. Use `zero init --format binary` or
-`zero sync --from-source --format binary <package>` only when the package is
-intentionally opting into binary `zero.graph` storage. Normal reads auto-detect
-both encodings, and normal writes preserve an existing binary store. Stdlib
+Repository graph stores are binary by default. Use `zero init --format text` or
+`zero sync --from-source --format text <package>` only when the package
+intentionally needs a readable debug store. Normal reads auto-detect both
+encodings, and normal writes preserve an existing text or binary store. Stdlib
 `std/*.graph` stores are binary graph stores; `std/*.0` siblings are human
 projections and are not used as the stdlib compile source.
 

@@ -38,7 +38,7 @@ writeFileSync(
   `${functions.join("\n")}\npub fn main(world: World) -> Void raises {\n    check world.out.write("repository graph scale ok\\n")\n}\n`,
 );
 
-const sync = elapsed(() => json(["sync", "--from-source", "--json", source]));
+const sync = elapsed(() => json(["sync", "--from-source", "--format", "text", "--json", source]));
 assert.equal(sync.value.code, 0);
 assert.equal(sync.value.body.repositoryGraph.syncState, "clean");
 assert(sync.ms < maxMs, `repository graph sync took ${sync.ms}ms`);

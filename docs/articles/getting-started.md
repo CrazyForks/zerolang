@@ -77,12 +77,12 @@ hello/
 
 `zero.graph` is the repository graph store and the normal compiler input for
 this package. Agents should usually inspect and patch that graph with
-`zero query` and `zero patch`. Its default encoding is text; binary
-`zero.graph` storage is available with `--format binary` when you specifically
-want to test or opt into direct binary graph loading. Binary graph artifacts are
-also supported for explicit graph outputs. The standard library already uses
-binary `std/*.graph` stores for compilation while keeping `std/*.0` projections
-for human review.
+`zero query` and `zero patch`. Its default encoding is binary so the compiler
+can load typed graph tables directly. Use `--format text` only when you
+specifically want a readable repository store artifact for debugging. Binary
+graph artifacts are also supported for explicit graph outputs. The standard
+library already uses binary `std/*.graph` stores for compilation while keeping
+`std/*.0` projections for human review.
 
 `src/main.0` is the human-readable projection. It is deliberately readable and
 bidirectional: humans can review it, and humans may edit it directly when that

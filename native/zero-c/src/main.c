@@ -7623,7 +7623,7 @@ static bool command_repository_store_format(const Command *command, ZProgramGrap
     snprintf(diag->message, sizeof(diag->message), "repository graph store format is not supported");
     snprintf(diag->expected, sizeof(diag->expected), "--format text|binary");
     snprintf(diag->actual, sizeof(diag->actual), "%s", command->store_format);
-    snprintf(diag->help, sizeof(diag->help), "use --format binary to opt into binary zero.graph stores or binary graph artifacts; omit --format for text");
+    snprintf(diag->help, sizeof(diag->help), "omit --format for the binary zero.graph default, pass --format text for readable debug stores, or pass --format binary for explicit binary graph artifacts");
   }
   return false;
 }
@@ -7689,8 +7689,8 @@ static int run_graph_init_command(const Command *command, ZDiag *diag) {
     print_command_diag(command, diag->path ? diag->path : command->input, diag);
     return 1;
   }
-  ZProgramGraphStoreFormat store_format = Z_PROGRAM_GRAPH_STORE_FORMAT_TEXT;
-  if (!command_repository_store_format(command, Z_PROGRAM_GRAPH_STORE_FORMAT_TEXT, &store_format, diag)) {
+  ZProgramGraphStoreFormat store_format = Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY;
+  if (!command_repository_store_format(command, Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY, &store_format, diag)) {
     print_command_diag(command, diag->path ? diag->path : command->input, diag);
     return 1;
   }
