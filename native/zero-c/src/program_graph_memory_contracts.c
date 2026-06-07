@@ -105,6 +105,9 @@ static bool memory_expr_negative_has_guard_for(const ZProgramGraph *graph, const
   if (!expr || expr->kind != Z_PROGRAM_GRAPH_NODE_CALL) return false;
   const ZProgramGraphNode *left = memory_child(graph, expr, "left", 0);
   const ZProgramGraphNode *right = memory_child(graph, expr, "right", 1);
+  if (memory_text_eq(expr->name, "||")) {
+    return memory_expr_negative_has_guard_for(graph, left, subject_name) || memory_expr_negative_has_guard_for(graph, right, subject_name);
+  }
   return memory_text_eq(expr->name, "==") &&
          ((memory_expr_is_has_access_for(graph, left, subject_name) && memory_expr_is_false(right)) ||
           (memory_expr_is_false(left) && memory_expr_is_has_access_for(graph, right, subject_name)));

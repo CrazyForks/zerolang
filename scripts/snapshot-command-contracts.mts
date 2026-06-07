@@ -141,8 +141,8 @@ function assertRepositoryGraphNativeCheck(body, sourceProjectionState = "clean",
   assert.equal(body.graphCompiler.resolution.state, "resolved-graph-facts");
   assert.equal(body.graphCompiler.checking.ok, true);
   assert.equal(body.graphCompiler.checking.state, "checked-graph-readiness-facts");
-  assert.equal(body.graphCompiler.checking.scope, "resolution-package-target-and-graph-mir-readiness");
-  assert.equal(body.graphCompiler.checking.semanticDiagnosticsEnforced, false);
+  assert.equal(body.graphCompiler.checking.scope, "semantic-resolution-package-target-and-graph-mir-readiness");
+  assert.equal(body.graphCompiler.checking.semanticDiagnosticsEnforced, true);
   assert.equal(body.graphCompiler.checking.authority, "ProgramGraphStore");
   assert.equal(body.graphCompiler.checking.sourceTextAuthority, false);
   assert.equal(body.graphCompiler.semanticFacts.state, "typed-facts");
@@ -2293,6 +2293,7 @@ const graphDeletedNodeFactPath = join(outDir, "hello.delete-node-fact.program-gr
 const graphRepositoryPatchPackageDir = join(outDir, "repository-graph-patch-package");
 const graphRepositoryBodyPatchPath = join(outDir, "repository-graph.replace-body.patch");
 const graphRepositoryBlockPatchPath = join(outDir, "repository-graph.replace-block.patch");
+const graphRepositoryInvalidBodyPatchPath = join(outDir, "repository-graph.invalid-body.patch");
 const graphPatchDeleteExternalRootRefPath = join(outDir, "hello.delete-external-root-ref.program-graph.patch");
 const graphPatchDeleteExtraOwnerPath = join(outDir, "hello.delete-extra-owner.program-graph.patch");
 const graphPatchReplacePath = join(outDir, "hello.replace.program-graph.patch");
@@ -2623,6 +2624,24 @@ assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, 
 assert.match(zero(["status", graphRepositoryPatchPackageDir]).stdout, /source-stale/);
 assert.match(zero(["sync", "--from-graph", graphRepositoryPatchPackageDir]).stdout, /repository graph sync ok/);
 assert.equal(zero(["verify-sync", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-sync ok\n");
+const repositorySyncedQueryJson = json(["query", "--json", graphRepositoryPatchPackageDir]).body;
+writeFileSync(graphRepositoryInvalidBodyPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositorySyncedQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  world.out.write \"bad\\n\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryInvalidBodyDryRun = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryInvalidBodyPatchPath], { allowFailure: true });
+assert.notEqual(repositoryInvalidBodyDryRun.code, 0);
+assert.equal(repositoryInvalidBodyDryRun.body.diagnostics[0].code, "ERR003");
+assert.equal(repositoryInvalidBodyDryRun.body.diagnostics[0].message, "fallible function call must be checked");
+assert.equal(repositoryInvalidBodyDryRun.body.diagnostics[0].path, "hello.0");
+const repositoryInvalidBodyPatch = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryInvalidBodyPatchPath], { allowFailure: true });
+assert.notEqual(repositoryInvalidBodyPatch.code, 0);
+assert.equal(repositoryInvalidBodyPatch.body.diagnostics[0].code, "ERR003");
+assert.equal(json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash, repositorySyncedQueryJson.graphHash);
 const checkedInGraphCallsJson = json(["query", "--json", "--fn", "main", "--calls", "write", checkedInGraphPackageDir]).body;
 assert.equal(checkedInGraphCallsJson.ok, true);
 assert.equal(checkedInGraphCallsJson.query.function, "main");

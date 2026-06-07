@@ -2569,6 +2569,7 @@ static void append_compile_time_json(ZBuf *buf, const Program *program, const So
 static void append_program_graph_artifact_source_json(ZBuf *buf, const ZProgramGraphArtifactSource *source);
 static void append_safety_facts_json(ZBuf *buf, const char *profile);
 static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, long long *lower_ms_out, bool *graph_mir_used_out);
+static bool validate_package_dependencies_for_target(const SourceInput *input, const ZTargetInfo *target, ZDiag *diag);
 
 static bool graph_check_text_eq(const char *left, const char *right) {
   const unsigned char *a = (const unsigned char *)(left ? left : "");
@@ -2664,6 +2665,13 @@ static bool graph_check_target_capabilities_ok(const ZProgramGraph *graph, const
   return true;
 }
 
+static bool graph_native_compiler_input_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const SourceInput *input, const ZTargetInfo *target, const char *path, ZDiag *diag) {
+  if (!graph_check_resolution_ok(graph, resolution, path, diag)) return false;
+  if (!z_program_graph_semantic_contracts_ok(graph, resolution, path, diag)) return false;
+  if (!graph_check_target_capabilities_ok(graph, resolution, target, diag)) return false;
+  return validate_package_dependencies_for_target(input, target, diag);
+}
+
 static void append_repository_graph_default_readiness_json(ZBuf *buf, const char *projection_state, const ZProgramGraphResolutionFacts *resolution, long long load_ms, long long validate_ms, long long resolve_ms, long long check_ms, long long lower_ms, long long cache_ms, bool validation_in_load, bool target_ready, bool graph_mir_used) {
   bool resolution_ok = resolution && resolution->diagnostic_len == 0;
   bool compiler_input_ready = resolution_ok && graph_mir_used && target_ready;
@@ -2723,7 +2731,7 @@ static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetI
   zbuf_appendf(buf, ",\"references\":%zu,\"diagnostics\":%zu}", resolution ? resolution->reference_len : 0, resolution ? resolution->diagnostic_len : 0);
   zbuf_append(buf, ",\"checking\":{\"state\":\"checked-graph-readiness-facts\",\"ok\":");
   zbuf_append(buf, resolution && resolution->diagnostic_len == 0 ? "true" : "false");
-  zbuf_append(buf, ",\"scope\":\"resolution-package-target-and-graph-mir-readiness\",\"semanticDiagnosticsEnforced\":false,\"authority\":\"ProgramGraphStore\",\"sourceTextAuthority\":false}");
+  zbuf_append(buf, ",\"scope\":\"semantic-resolution-package-target-and-graph-mir-readiness\",\"semanticDiagnosticsEnforced\":true,\"authority\":\"ProgramGraphStore\",\"sourceTextAuthority\":false}");
   zbuf_append(buf, ",\"semanticFacts\":");
   z_program_graph_append_semantics_json(buf, store ? &store->graph : NULL);
   zbuf_append(buf, "}");
@@ -11046,7 +11054,7 @@ static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput
                                                                        target,
                                                                        emit_kind,
                                                                        command ? command->backend : NULL,
-                                                                       true,
+                                                                       false,
                                                                        &readiness_program,
                                                                        &readiness_input,
                                                                        &ir,
@@ -12094,23 +12102,17 @@ static bool write_projection_backed_graph(const Command *command, const ZProgram
 }
 
 static bool validate_repository_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, ZDiag *diag) {
-  SourceInput checked_input = {0};
-  Program checked_program = {0};
-  bool ok = z_program_graph_lower_to_program_with_source(graph, command->input, &checked_program, &checked_input, diag);
-  if (ok) {
-    z_set_check_target(target);
-    ok = z_check_program(&checked_program, diag);
-  }
+  SourceInput input = {.source_file = z_strdup(command && command->input ? command->input : "<repository-graph>")};
+  z_program_graph_seed_source_metadata(&input, graph);
   const char *manifest_input = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
-  if (ok) ok = z_program_graph_manifest_attach_metadata_to_input(&checked_input, manifest_input, diag);
-  if (ok) ok = validate_target_capabilities(&checked_program, target, diag, command->input);
-  if (ok) ok = validate_package_dependencies_for_target(&checked_input, target, diag);
-  if (!ok) {
-    if (checked_input.source_file) z_map_source_diag(&checked_input, diag);
-    if (!diag->path) diag->path = checked_input.source_file ? checked_input.source_file : command->input;
-  }
-  z_free_program(&checked_program);
-  z_free_source(&checked_input);
+  bool ok = z_program_graph_manifest_attach_metadata_to_input(&input, manifest_input, diag);
+  ZProgramGraphResolutionFacts resolution; z_program_graph_resolution_facts_init(&resolution);
+  if (ok) ok = z_program_graph_name_contracts_ok(graph, command->input, diag);
+  if (ok) ok = z_program_graph_collect_resolution_facts(graph, &resolution);
+  if (ok) ok = graph_native_compiler_input_ok(graph, &resolution, &input, target, command->input, diag);
+  if (!ok && !diag->path) diag->path = input.source_file ? input.source_file : command->input;
+  z_program_graph_resolution_facts_free(&resolution);
+  z_free_source(&input);
   return ok;
 }
 
@@ -13276,13 +13278,11 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   ZProgramGraphResolutionFacts resolution;
   z_program_graph_resolution_facts_init(&resolution);
   long long resolve_started = now_ms();
-  bool collected_resolution = z_program_graph_collect_resolution_facts(&store.graph, &resolution);
+  bool collected_resolution = z_program_graph_name_contracts_ok(&store.graph, store.path ? store.path : command->input, &diag) && z_program_graph_collect_resolution_facts(&store.graph, &resolution);
   long long resolve_ms = now_ms() - resolve_started;
   long long check_started = now_ms();
   bool ok = collected_resolution &&
-            graph_check_resolution_ok(&store.graph, &resolution, store.path ? store.path : command->input, &diag);
-  if (ok) ok = graph_check_target_capabilities_ok(&store.graph, &resolution, target, &diag);
-  if (ok) ok = validate_package_dependencies_for_target(&input, target, &diag);
+            graph_native_compiler_input_ok(&store.graph, &resolution, &input, target, store.path ? store.path : command->input, &diag);
   input.check_ms = now_ms() - check_started;
   long long cache_started = now_ms();
   touch_program_graph_compiler_caches(&input, target, command->profile, store.graph.graph_hash);
