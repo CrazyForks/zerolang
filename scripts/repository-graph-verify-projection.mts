@@ -16,7 +16,7 @@ const skippedDirs = new Set([
 ]);
 
 function usage() {
-  console.error("usage: repository-graph-verify-sync [--root <path>] [--target <target>]");
+  console.error("usage: repository-graph-verify-projection [--root <path>] [--target <target>]");
 }
 
 let root = process.cwd();
@@ -54,12 +54,12 @@ const zeroBin = process.env.ZERO_BIN
 const absoluteRoot = resolve(root);
 
 if (!existsSync(zeroBin)) {
-  console.error("repository graph verify-sync requires a built Zero compiler from the repository root");
+  console.error("repository graph verify-projection requires a built Zero compiler from the repository root");
   process.exit(1);
 }
 
 if (!existsSync(absoluteRoot)) {
-  console.error(`repository graph verify-sync root does not exist: ${absoluteRoot}`);
+  console.error(`repository graph verify-projection root does not exist: ${absoluteRoot}`);
   process.exit(1);
 }
 
@@ -86,7 +86,7 @@ findStores(absoluteRoot, stores);
 stores.sort();
 
 if (stores.length === 0) {
-  console.log("repository graph verify-sync ok (0 stores)");
+  console.log("repository graph verify-projection ok (0 stores)");
   process.exit(0);
 }
 
@@ -94,8 +94,8 @@ let failures = 0;
 for (const store of stores) {
   const input = sourceInputForStore(store);
   const display = relative(repoRoot, input) || ".";
-  console.log(`repository graph verify-sync: ${display}`);
-  const args = ["verify-sync"];
+  console.log(`repository graph verify-projection: ${display}`);
+  const args = ["verify-projection"];
   if (target) args.push("--target", target);
   args.push(input);
   try {
@@ -103,16 +103,16 @@ for (const store of stores) {
   } catch {
     failures++;
     const targetArgs = target ? ` --target ${target}` : "";
-    console.error(`repository graph verify-sync failed: bin/zero verify-sync${targetArgs} ${display}`);
+    console.error(`repository graph verify-projection failed: bin/zero verify-projection${targetArgs} ${display}`);
   }
 }
 
 if (failures > 0) {
-  console.error(`repository graph verify-sync failed (${failures}/${stores.length} stores)`);
+  console.error(`repository graph verify-projection failed (${failures}/${stores.length} stores)`);
   process.exit(1);
 }
 
-console.log(`repository graph verify-sync ok (${stores.length} ${stores.length === 1 ? "store" : "stores"})`);
+console.log(`repository graph verify-projection ok (${stores.length} ${stores.length === 1 ? "store" : "stores"})`);
 
 function sourceInputForStore(store: string) {
   const root = dirname(store);

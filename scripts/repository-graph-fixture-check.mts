@@ -13,9 +13,9 @@ const execMaxBuffer = 16 * 1024 * 1024;
 
 const budgets = {
   statusMs: 2000,
-  verifySyncMs: 3000,
-  syncFromSourceMs: 5000,
-  syncFromGraphMs: 5000,
+  verifyProjectionMs: 3000,
+  importMs: 5000,
+  exportMs: 5000,
 };
 
 function run(args: string[]) {
@@ -47,7 +47,7 @@ const status = runJson(["status", "--json", "--target", target, root]);
 assert.equal(status.body.ok, true);
 assert.equal(status.body.repositoryGraph.storePresent, true);
 assert.equal(status.body.repositoryGraph.storeValid, true);
-assert.equal(status.body.repositoryGraph.syncState, "clean");
+assert.equal(status.body.repositoryGraph.projectionState, "clean");
 assert.equal(status.body.repositoryGraph.compilerInput, "repository-graph");
 assertBudget("status", status.elapsedMs, budgets.statusMs);
 
@@ -58,28 +58,28 @@ assert.equal(check.body.graph.artifact, storePath);
 assert.equal(check.body.graph.canonicalSource, false);
 assert.equal(check.body.graph.moduleIdentity, "package:program-graph-fixture@0.1.0");
 
-const verify = runJson(["verify-sync", "--json", "--target", target, root]);
+const verify = runJson(["verify-projection", "--json", "--target", target, root]);
 assert.equal(verify.body.ok, true);
 assert.equal(verify.body.writes, false);
-assert.equal(verify.body.repositoryGraph.syncState, "clean");
-assertBudget("verify-sync", verify.elapsedMs, budgets.verifySyncMs);
+assert.equal(verify.body.repositoryGraph.projectionState, "clean");
+assertBudget("verify-projection", verify.elapsedMs, budgets.verifyProjectionMs);
 
-const fromSource = runJson(["sync", "--from-source", "--json", "--target", target, root]);
+const fromSource = runJson(["import", "--json", "--target", target, root]);
 assert.equal(fromSource.body.ok, true);
-assert.equal(fromSource.body.repositoryGraph.syncState, "clean");
+assert.equal(fromSource.body.repositoryGraph.projectionState, "clean");
 assert.deepEqual(fromSource.body.changedPaths, [storePath]);
 assert.equal(readFileSync(`${root}/hello.0`, "utf8"), sourceBefore);
 assert.equal(Buffer.compare(readFileSync(storePath), storeBefore), 0);
-assertBudget("sync --from-source", fromSource.elapsedMs, budgets.syncFromSourceMs);
+assertBudget("import", fromSource.elapsedMs, budgets.importMs);
 
-const fromGraph = runJson(["sync", "--from-graph", "--json", "--target", target, root]);
+const fromGraph = runJson(["export", "--json", "--target", target, root]);
 assert.equal(fromGraph.body.ok, true);
-assert.equal(fromGraph.body.repositoryGraph.syncState, "clean");
+assert.equal(fromGraph.body.repositoryGraph.projectionState, "clean");
 assert.deepEqual(fromGraph.body.changedPaths, []);
 assert.equal(readFileSync(`${root}/hello.0`, "utf8"), sourceBefore);
 assert.equal(Buffer.compare(readFileSync(storePath), storeBefore), 0);
-assertBudget("sync --from-graph", fromGraph.elapsedMs, budgets.syncFromGraphMs);
+assertBudget("export", fromGraph.elapsedMs, budgets.exportMs);
 
 console.log(
-  `repository graph fixture ok (status ${status.elapsedMs.toFixed(1)}ms, verify ${verify.elapsedMs.toFixed(1)}ms, sync-source ${fromSource.elapsedMs.toFixed(1)}ms, sync-graph ${fromGraph.elapsedMs.toFixed(1)}ms)`,
+  `repository graph fixture ok (status ${status.elapsedMs.toFixed(1)}ms, verify ${verify.elapsedMs.toFixed(1)}ms, import ${fromSource.elapsedMs.toFixed(1)}ms, export ${fromGraph.elapsedMs.toFixed(1)}ms)`,
 );

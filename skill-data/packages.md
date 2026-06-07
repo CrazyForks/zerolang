@@ -16,11 +16,11 @@ zero init hello
 cd hello
 zero patch --op 'addMain'
 zero check .
-zero sync --from-graph .
+zero export .
 ```
 
 `zero.graph` is the package graph store and compiler input. `.0` files are the
-human-readable projection; sync them after graph checks pass. Use `zero new`
+human-readable projection; export them after graph checks pass. Use `zero new`
 only when the user explicitly asks for a source-text package template.
 Use `zero init --manifest toml <package>` when the user wants TOML metadata.
 
@@ -112,8 +112,8 @@ Set `repositoryGraph.compilerInput` to `true` only for packages that check in a
 valid `zero.graph` store. Normal compiler commands validate and compile from
 that store, including target and package metadata, and can operate when `.0`
 source projections are missing. Commands report projection state and never
-rewrite `.0` files. Use `zero verify-sync` when drift must fail the
-workflow, and `zero sync --from-graph` to regenerate projections. Leave
+rewrite `.0` files. Use `zero verify-projection` when drift must fail the
+workflow, and `zero export` to regenerate projections. Leave
 the field unset or `false` for source-text packages.
 
 ## Inspect
@@ -148,13 +148,13 @@ zero patch <package> --op 'addMain'
 ```
 
 When `repositoryGraph.compilerInput` is true, package-level patches write
-`zero.graph`; use `zero sync --from-graph <package>` to materialize `.0`
-for human review and `zero sync --from-source <package>` after humans edit
+`zero.graph`; use `zero export <package>` to materialize `.0`
+for human review and `zero import <package>` after humans edit
 that projection. Keep derived graph artifacts out of the package source unless
 the user explicitly asks for them.
 
 Repository graph stores are binary by default. Use `zero init --format text` or
-`zero sync --from-source --format text <package>` only when the package
+`zero import --format text <package>` only when the package
 intentionally needs a readable debug store. Normal reads auto-detect both
 encodings, and normal writes preserve an existing text or binary store. Stdlib
 `std/*.graph` stores are binary graph stores; `std/*.0` siblings are human

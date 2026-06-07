@@ -29,7 +29,7 @@ zero skills get graph
 zero skills get language
 
 Create a hello world Zero program. Use the graph to read and write. `.0` files
-are for humans only; sync them from the graph after the graph checks and runs.
+are for humans only; export them from the graph after the graph checks and runs.
 ```
 
 A typical agent conversation should look like this:
@@ -41,7 +41,7 @@ You:
 
 Agent:
   I will initialize a graph-first package, patch zero.graph, validate it, run it,
-  then sync the `.0` projection for review.
+  then export the `.0` projection for review.
 
 Agent runs:
   zero init hello
@@ -49,8 +49,8 @@ Agent runs:
   zero patch --op 'addMain' --op 'addCheckWrite fn="main" text="hello from zero\n"'
   zero check .
   zero run .
-  zero sync --from-graph .
-  zero verify-sync .
+  zero export .
+  zero verify-projection .
 
 Agent reports:
   The package compiles from zero.graph, zero run . prints "hello from zero",
@@ -86,10 +86,10 @@ library already uses binary `std/*.graph` stores for compilation while keeping
 
 `src/main.0` is the human-readable projection. It is deliberately readable and
 bidirectional: humans can review it, and humans may edit it directly when that
-is the right workflow. After a human edit, run `zero sync --from-source .`
+is the right workflow. After a human edit, run `zero import .`
 to refresh `zero.graph`. Agents should not normally hand-write `.0` files.
 
-After `zero sync --from-graph .`, the projection should look like this:
+After `zero export .`, the projection should look like this:
 
 ```zero
 pub fn main(world: World) -> Void raises {
@@ -113,8 +113,8 @@ zero build --target linux-musl-x64 --out .zero/out/hello .
 Normal compiler commands compile from `zero.graph` when
 `repositoryGraph.compilerInput: true` is set in `zero.toml`.
 They report source
-projection state, but they do not rewrite `.0` files. Sync explicitly when the
-human projection needs to be refreshed.
+projection state, but they do not rewrite `.0` files. Export explicitly when
+the human projection needs to be refreshed.
 
 ## Ask For The Next Change
 
@@ -122,12 +122,12 @@ Keep the same graph-first instruction in the prompt:
 
 ```text
 Add a function add(x, y) that returns x + y, and add a test for it.
-Use the graph to read and write. Do not hand-edit `.0`; sync the projection
+Use the graph to read and write. Do not hand-edit `.0`; export the projection
 from the graph after checks pass.
 ```
 
 The agent should use `zero patch` operations, validate with `zero check .` and
-`zero test .`, then run `zero sync --from-graph .` only for the human
+`zero test .`, then run `zero export .` only for the human
 projection.
 
 ## Learn The Core Syntax
@@ -191,5 +191,6 @@ codegen so later graph builds can stay closer to the compiler.
 - Load `zero skills get agent`, `zero skills get graph`, and
   `zero skills get stdlib` before asking an agent for larger changes.
 - Use the examples index to pick the next concept by projection.
-- Use the CLI reference for `zero patch`, `zero query`, and sync commands.
+- Use the CLI reference for `zero patch`, `zero query`, `zero import`, and
+  `zero export`.
 - Use Building From Source when you want to validate a local checkout.

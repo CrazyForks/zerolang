@@ -22,8 +22,8 @@ For packages with `repositoryGraph.compilerInput: true`, normal check, build,
 run, test, size, ship, and mem commands compile from the checked-in
 `zero.graph` store. Source projections may be clean, missing, stale, or in
 conflict; commands report that state and do not rewrite `.0` files. Use
-`zero verify-sync` when CI or review needs graph/source drift to fail, and
-`zero sync --from-graph` to regenerate projections from the store. Other
+`zero verify-projection` when CI or review needs graph/source drift to fail, and
+`zero export` to regenerate projections from the store. Other
 packages compile from `.0` source text.
 
 ## Run
@@ -80,9 +80,9 @@ zero run .
 zero build . --out .zero/out/app
 ```
 
-Use `zero sync --from-graph <package>` when humans need checked-in `.0`
+Use `zero export <package>` when humans need checked-in `.0`
 projections. If a human edits a projection, run
-`zero sync --from-source <package>` before the next graph-store compile.
+`zero import <package>` before the next graph-store compile.
 Normal build and run commands read binary `zero.graph` stores directly by
 default; `zero status <package>` reports the active store format.
 

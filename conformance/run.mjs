@@ -3817,9 +3817,9 @@ const programGraphSourceFreeRun = await execFileAsync(zero, ["run", "--out", pro
 const programGraphSourceFreeTestJson = JSON.parse((await execFileAsync(zero, ["test", "--json", programGraphSourceFreePackage])).stdout);
 const programGraphSourceFreeShipJson = JSON.parse((await execFileAsync(zero, ["ship", "--json", "--target", "linux-musl-x64", "--out", programGraphSourceFreeShipPath, programGraphSourceFreePackage])).stdout);
 const programGraphSourceFreeMemJson = JSON.parse((await execFileAsync(zero, ["mem", "--json", programGraphSourceFreePackage])).stdout);
-const programGraphSourceFreeVerify = await execFileAsync(zero, ["verify-sync", "--json", programGraphSourceFreePackage]).catch((error) => error);
-const programGraphSourceFreeSyncFromGraph = JSON.parse((await execFileAsync(zero, ["sync", "--from-graph", "--json", programGraphSourceFreePackage])).stdout);
-const programGraphSourceFreeVerifyAfter = JSON.parse((await execFileAsync(zero, ["verify-sync", "--json", programGraphSourceFreePackage])).stdout);
+const programGraphSourceFreeVerify = await execFileAsync(zero, ["verify-projection", "--json", programGraphSourceFreePackage]).catch((error) => error);
+const programGraphSourceFreeExport = JSON.parse((await execFileAsync(zero, ["export", "--json", programGraphSourceFreePackage])).stdout);
+const programGraphSourceFreeVerifyAfter = JSON.parse((await execFileAsync(zero, ["verify-projection", "--json", programGraphSourceFreePackage])).stdout);
 await mkdir(programGraphSourceFreeStdStrPackage, { recursive: true });
 await writeZeroToml(programGraphSourceFreeStdStrPackage, {
   package: { name: "program-graph-source-free-std-str", version: "0.1.0" },
@@ -3827,7 +3827,7 @@ await writeZeroToml(programGraphSourceFreeStdStrPackage, {
   repositoryGraph: { compilerInput: true },
 });
 await writeFile(`${programGraphSourceFreeStdStrPackage}/main.0`, await readFile("examples/std-str.0", "utf8"));
-const programGraphSourceFreeStdStrSync = JSON.parse((await execFileAsync(zero, ["sync", "--from-source", "--json", programGraphSourceFreeStdStrPackage])).stdout);
+const programGraphSourceFreeStdStrSync = JSON.parse((await execFileAsync(zero, ["import", "--json", programGraphSourceFreeStdStrPackage])).stdout);
 await rm(`${programGraphSourceFreeStdStrPackage}/main.0`, { force: true });
 const programGraphSourceFreeStdStrCheckJson = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphSourceFreeStdStrPackage])).stdout);
 const programGraphCrmApiCheckJson = JSON.parse((await execFileAsync(zero, ["check", "--json", "examples/crm-api"])).stdout);
@@ -3859,18 +3859,18 @@ const programGraphAuthoringPatch = JSON.parse((await execFileAsync(zero, [
 ], { cwd: programGraphAuthoringPackage })).stdout);
 const programGraphAuthoringProjectionExistsAfterPatch = await fileExists(`${programGraphAuthoringPackage}/src/main.0`);
 const programGraphAuthoringStatusMissing = JSON.parse((await execFileAsync(zero, ["status", "--json", programGraphAuthoringPackage])).stdout);
-const programGraphAuthoringVerifyMissing = await execFileAsync(zero, ["verify-sync", "--json", programGraphAuthoringPackage]).catch((error) => error);
+const programGraphAuthoringVerifyMissing = await execFileAsync(zero, ["verify-projection", "--json", programGraphAuthoringPackage]).catch((error) => error);
 const programGraphAuthoringCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphAuthoringPackage])).stdout);
 const programGraphAuthoringRun = await execFileAsync(zero, ["run", "--out", programGraphAuthoringRunPath, programGraphAuthoringPackage]);
 const programGraphAuthoringTest = JSON.parse((await execFileAsync(zero, ["test", "--json", programGraphAuthoringPackage])).stdout);
-const programGraphAuthoringSyncFromGraph = JSON.parse((await execFileAsync(zero, ["sync", "--from-graph", "--json", programGraphAuthoringPackage])).stdout);
+const programGraphAuthoringExport = JSON.parse((await execFileAsync(zero, ["export", "--json", programGraphAuthoringPackage])).stdout);
 const programGraphAuthoringProjectionText = await readFile(`${programGraphAuthoringPackage}/src/main.0`, "utf8");
-const programGraphAuthoringVerifyAfter = JSON.parse((await execFileAsync(zero, ["verify-sync", "--json", programGraphAuthoringPackage])).stdout);
+const programGraphAuthoringVerifyAfter = JSON.parse((await execFileAsync(zero, ["verify-projection", "--json", programGraphAuthoringPackage])).stdout);
 const programGraphAuthoringCheckAfter = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphAuthoringPackage])).stdout);
 const programGraphAuthoringEditedText = programGraphAuthoringProjectionText.replace("graph authoring ok", "human edit ok");
 await writeFile(`${programGraphAuthoringPackage}/src/main.0`, programGraphAuthoringEditedText);
 const programGraphAuthoringStatusAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["status", "--json", programGraphAuthoringPackage])).stdout);
-const programGraphAuthoringSyncFromSource = JSON.parse((await execFileAsync(zero, ["sync", "--from-source", "--json", programGraphAuthoringPackage])).stdout);
+const programGraphAuthoringImport = JSON.parse((await execFileAsync(zero, ["import", "--json", programGraphAuthoringPackage])).stdout);
 const programGraphAuthoringCheckAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphAuthoringPackage])).stdout);
 const programGraphAuthoringRunAfterHumanEdit = await execFileAsync(zero, ["run", "--out", programGraphAuthoringRunAfterHumanEditPath, programGraphAuthoringPackage]);
 const programGraphBuilderOpsInit = JSON.parse((await execFileAsync(zero, ["init", "--json", programGraphBuilderOpsPackage])).stdout);
@@ -3904,7 +3904,7 @@ const programGraphBuilderOpsView = (await execFileAsync(zero, ["view", programGr
 const programGraphBuilderOpsCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphBuilderOpsPackage])).stdout);
 const programGraphBuilderOpsTest = JSON.parse((await execFileAsync(zero, ["test", "--json", programGraphBuilderOpsPackage])).stdout);
 const programGraphBuilderOpsRun = await execFileAsync(zero, ["run", "--out", programGraphBuilderOpsRunPath, programGraphBuilderOpsPackage]);
-const programGraphBuilderOpsSync = JSON.parse((await execFileAsync(zero, ["sync", "--from-graph", "--json", programGraphBuilderOpsPackage])).stdout);
+const programGraphBuilderOpsSync = JSON.parse((await execFileAsync(zero, ["export", "--json", programGraphBuilderOpsPackage])).stdout);
 const programGraphBuilderOpsProjectionText = await readFile(`${programGraphBuilderOpsPackage}/src/main.0`, "utf8");
 const programGraphLoopTestInit = JSON.parse((await execFileAsync(zero, ["init", "--json", programGraphLoopTestPackage])).stdout);
 const programGraphLoopTestPatch = JSON.parse((await execFileAsync(zero, [
@@ -4058,15 +4058,15 @@ const programGraphAuthoringCliGraphTest = await execFileAsync(zero, ["test", pro
 const programGraphAuthoringCliRun = await execFileAsync(zero, ["run", "--out", programGraphAuthoringCliRunPath, programGraphAuthoringCliPackage, "--", "40", "2"]);
 const programGraphAuthoringCliGraphRun = await execFileAsync(zero, ["run", programGraphAuthoringCliPackage, "--", "7", "8"]);
 const programGraphAuthoringCliSize = JSON.parse((await execFileAsync(zero, ["size", "--json", programGraphAuthoringCliPackage])).stdout);
-const programGraphAuthoringCliSync = JSON.parse((await execFileAsync(zero, ["sync", "--from-graph", "--json", programGraphAuthoringCliPackage])).stdout);
+const programGraphAuthoringCliSync = JSON.parse((await execFileAsync(zero, ["export", "--json", programGraphAuthoringCliPackage])).stdout);
 const programGraphAuthoringCliProjectionText = await readFile(`${programGraphAuthoringCliPackage}/src/main.0`, "utf8");
 const programGraphAuthoringCliEditedProjectionText = programGraphAuthoringCliProjectionText.replace("usage: zero run . -- <x> <y>\\n", "usage: zero run . -- <left> <right>\\n");
 await writeFile(`${programGraphAuthoringCliPackage}/src/main.0`, programGraphAuthoringCliEditedProjectionText);
 const programGraphAuthoringCliStatusAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["status", "--json", programGraphAuthoringCliPackage])).stdout);
-const programGraphAuthoringCliSyncFromSource = JSON.parse((await execFileAsync(zero, ["sync", "--from-source", "--json", programGraphAuthoringCliPackage])).stdout);
+const programGraphAuthoringCliImport = JSON.parse((await execFileAsync(zero, ["import", "--json", programGraphAuthoringCliPackage])).stdout);
 const programGraphAuthoringCliQueryAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["query", "--json", "--calls", "std", programGraphAuthoringCliPackage])).stdout);
 const programGraphAuthoringCliFindUsageText = (await execFileAsync(zero, ["query", "--find", "usage", programGraphAuthoringCliPackage])).stdout;
-const programGraphAuthoringCliVerifyAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["verify-sync", "--json", programGraphAuthoringCliPackage])).stdout);
+const programGraphAuthoringCliVerifyAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["verify-projection", "--json", programGraphAuthoringCliPackage])).stdout);
 const programGraphAuthoringCliCheckAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphAuthoringCliPackage])).stdout);
 const programGraphAuthoringCliTestAfterHumanEdit = JSON.parse((await execFileAsync(zero, ["test", "--json", programGraphAuthoringCliPackage])).stdout);
 const programGraphAuthoringCliRunAfterHumanEdit = await execFileAsync(zero, ["run", "--out", programGraphAuthoringCliRunAfterHumanEditPath, programGraphAuthoringCliPackage, "--", "5", "6"]);
@@ -4089,7 +4089,7 @@ pub fn main(world: World) -> Void raises {
     check world.out.write("source-free c import ok\\n")
 }
 `);
-const programGraphSourceFreeCImportSync = JSON.parse((await execFileAsync(zero, ["sync", "--from-source", "--json", programGraphSourceFreeCImportPackage])).stdout);
+const programGraphSourceFreeCImportSync = JSON.parse((await execFileAsync(zero, ["import", "--json", programGraphSourceFreeCImportPackage])).stdout);
 await rm(`${programGraphSourceFreeCImportPackage}/src`, { recursive: true, force: true });
 const programGraphSourceFreeCImportCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphSourceFreeCImportPackage])).stdout);
 const programGraphSourceFreeCImportRun = await execFileAsync(zero, ["run", "--out", programGraphSourceFreeCImportRunPath, programGraphSourceFreeCImportPackage]);
@@ -4124,7 +4124,7 @@ const programGraphMissingPackageNameCheck = await execFileAsync(zero, ["check", 
 await mkdir(programGraphBadProjectionPackage, { recursive: true });
 await writeFile(`${programGraphBadProjectionPackage}/zero.toml`, await readFile(`${programGraphSourceFixturePackage}/zero.toml`, "utf8"));
 await writeFile(`${programGraphBadProjectionPackage}/hello.0`, programGraphSourceFixtureText);
-await execFileAsync(zero, ["sync", "--from-source", "--format", "text", programGraphBadProjectionPackage]);
+await execFileAsync(zero, ["import", "--format", "text", programGraphBadProjectionPackage]);
 const programGraphBadProjectionStoreText = await readFile(`${programGraphBadProjectionPackage}/zero.graph`, "utf8");
 await writeFile(`${programGraphBadProjectionPackage}/zero.graph`, programGraphBadProjectionStoreText.replace(
   /^projection path:"hello\.0" text:.*$/m,
@@ -4132,7 +4132,7 @@ await writeFile(`${programGraphBadProjectionPackage}/zero.graph`, programGraphBa
 ));
 const programGraphBadProjectionStatus = JSON.parse((await execFileAsync(zero, ["status", "--json", programGraphBadProjectionPackage])).stdout);
 const programGraphBadProjectionCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphBadProjectionPackage])).stdout);
-const programGraphBadProjectionSync = await execFileAsync(zero, ["sync", "--from-graph", "--json", programGraphBadProjectionPackage]).catch((error) => error);
+const programGraphBadProjectionSync = await execFileAsync(zero, ["export", "--json", programGraphBadProjectionPackage]).catch((error) => error);
 await mkdir(programGraphMissingStorePackage, { recursive: true });
 await writeZeroToml(programGraphMissingStorePackage, {
   package: { name: "program-graph-missing-store", version: "0.1.0" },
@@ -4155,7 +4155,7 @@ await writeFile(`${programGraphSourceFixtureDriftPackage}/zero.toml`, await read
 await writeFile(`${programGraphSourceFixtureDriftPackage}/zero.graph`, programGraphSourceFixtureStoreBytes);
 await writeFile(`${programGraphSourceFixtureDriftPackage}/hello.0`, programGraphSourceFixtureText.replace("hello from zero", "hello from drift"));
 const programGraphSourceFixtureDriftCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphSourceFixtureDriftPackage])).stdout);
-const programGraphSourceFixtureDriftVerify = await execFileAsync(zero, ["verify-sync", "--json", programGraphSourceFixtureDriftPackage]).catch((error) => error);
+const programGraphSourceFixtureDriftVerify = await execFileAsync(zero, ["verify-projection", "--json", programGraphSourceFixtureDriftPackage]).catch((error) => error);
 await mkdir(programGraphTargetWebbitsPackage, { recursive: true });
 await writeFile(`${programGraphTargetWebbitsPackage}/zero.toml`, await readFile("conformance/packages/target-webbits/zero.toml", "utf8"));
 await mkdir(`${programGraphTargetIncompatiblePackage}/src`, { recursive: true });
@@ -4166,7 +4166,7 @@ await writeZeroToml(programGraphTargetIncompatiblePackage, {
   repositoryGraph: { compilerInput: true },
 });
 await writeFile(`${programGraphTargetIncompatiblePackage}/src/main.0`, await readFile("conformance/packages/target-incompatible-app/src/main.0", "utf8"));
-const programGraphTargetIncompatibleSync = JSON.parse((await execFileAsync(zero, ["sync", "--from-source", "--json", programGraphTargetIncompatiblePackage])).stdout);
+const programGraphTargetIncompatibleSync = JSON.parse((await execFileAsync(zero, ["import", "--json", programGraphTargetIncompatiblePackage])).stdout);
 const programGraphTargetIncompatibleCheck = await execFileAsync(zero, ["check", "--json", "--target", "linux-musl-x64", programGraphTargetIncompatiblePackage]).catch((error) => error);
 await mkdir(programGraphTargetCapabilityPackage, { recursive: true });
 await writeZeroToml(programGraphTargetCapabilityPackage, {
@@ -4181,7 +4181,7 @@ await writeFile(`${programGraphTargetCapabilityPackage}/main.0`, `pub fn main(wo
     }
 }
 `);
-const programGraphTargetCapabilitySync = JSON.parse((await execFileAsync(zero, ["sync", "--from-source", "--json", programGraphTargetCapabilityPackage])).stdout);
+const programGraphTargetCapabilitySync = JSON.parse((await execFileAsync(zero, ["import", "--json", programGraphTargetCapabilityPackage])).stdout);
 const programGraphTargetCapabilityCheck = await execFileAsync(zero, ["check", "--json", "--target", "linux-arm64", programGraphTargetCapabilityPackage]).catch((error) => error);
 await execFileAsync(zero, ["dump", "--out", programGraphRichPath, "conformance/native/pass/open-ended-slices.0"]);
 await execFileAsync(zero, ["view", "--out", programGraphRichViewPath, programGraphRichPath]);
@@ -4362,9 +4362,9 @@ assert.notEqual(programGraphSourceFreeVerify.code, 0);
 const programGraphSourceFreeVerifyBody = JSON.parse(programGraphSourceFreeVerify.stdout);
 assert.equal(programGraphSourceFreeVerifyBody.diagnostics[0].code, "RGP006");
 assert.equal(programGraphSourceFreeVerifyBody.diagnostics[0].actual, "missing source projection file");
-assert.match(programGraphSourceFreeVerifyBody.repairCommands.join("\n"), /zero sync --from-graph/);
-assert.equal(programGraphSourceFreeSyncFromGraph.ok, true);
-assert.deepEqual(programGraphSourceFreeSyncFromGraph.changedPaths, [`${programGraphSourceFreePackage}/hello.0`]);
+assert.match(programGraphSourceFreeVerifyBody.repairCommands.join("\n"), /zero export/);
+assert.equal(programGraphSourceFreeExport.ok, true);
+assert.deepEqual(programGraphSourceFreeExport.changedPaths, [`${programGraphSourceFreePackage}/hello.0`]);
 assert.equal(await readFile(`${programGraphSourceFreePackage}/hello.0`, "utf8"), programGraphSourceFixtureText);
 assert.equal(programGraphSourceFreeVerifyAfter.ok, true);
 assert.equal(programGraphSourceFreeVerifyAfter.repositoryGraph.projectionValidity, "clean");
@@ -4402,13 +4402,13 @@ assert.equal(programGraphAuthoringPatch.operationCount, 7);
 assert.equal(programGraphAuthoringPatch.artifact, "./zero.graph");
 assert.equal(programGraphAuthoringPatch.saved.path, "./zero.graph");
 assert.equal(programGraphAuthoringProjectionExistsAfterPatch, false);
-assert.equal(programGraphAuthoringStatusMissing.repositoryGraph.syncState, "source-missing");
+assert.equal(programGraphAuthoringStatusMissing.repositoryGraph.projectionState, "source-missing");
 assert.equal(programGraphAuthoringStatusMissing.repositoryGraph.projectionValidity, "missing");
 assert.notEqual(programGraphAuthoringVerifyMissing.code, 0);
 const programGraphAuthoringVerifyMissingBody = JSON.parse(programGraphAuthoringVerifyMissing.stdout);
 assert.equal(programGraphAuthoringVerifyMissingBody.diagnostics[0].code, "RGP006");
 assert.equal(programGraphAuthoringVerifyMissingBody.diagnostics[0].actual, "missing source projection file");
-assert.match(programGraphAuthoringVerifyMissingBody.repairCommands.join("\n"), /zero sync --from-graph/);
+assert.match(programGraphAuthoringVerifyMissingBody.repairCommands.join("\n"), /zero export/);
 assert.equal(programGraphAuthoringCheck.ok, true);
 assert.equal(programGraphAuthoringCheck.sourceFile, `${programGraphAuthoringPackage}/zero.graph`);
 assert.equal(programGraphAuthoringCheck.graph.sourceProjectionState, "missing");
@@ -4418,20 +4418,20 @@ assert.equal(programGraphAuthoringRun.stdout, "graph authoring ok\n");
 assert.equal(programGraphAuthoringTest.ok, true);
 assert.equal(programGraphAuthoringTest.testDiscovery.mode, "package-graph");
 assert.equal(programGraphAuthoringTest.passedTests, 1);
-assert.equal(programGraphAuthoringSyncFromGraph.ok, true);
-assert.equal(programGraphAuthoringSyncFromGraph.repositoryGraph.syncState, "clean");
-assert.deepEqual(programGraphAuthoringSyncFromGraph.changedPaths, [`${programGraphAuthoringPackage}/src/main.0`]);
+assert.equal(programGraphAuthoringExport.ok, true);
+assert.equal(programGraphAuthoringExport.repositoryGraph.projectionState, "clean");
+assert.deepEqual(programGraphAuthoringExport.changedPaths, [`${programGraphAuthoringPackage}/src/main.0`]);
 assert.match(programGraphAuthoringProjectionText, /pub fn main\(world: World\) -> Void raises \{/);
 assert.match(programGraphAuthoringProjectionText, /fn add\(left: i32, right: i32\) -> i32/);
 assert.match(programGraphAuthoringProjectionText, /test "addition works"/);
 assert.equal(programGraphAuthoringVerifyAfter.ok, true);
-assert.equal(programGraphAuthoringVerifyAfter.repositoryGraph.syncState, "clean");
+assert.equal(programGraphAuthoringVerifyAfter.repositoryGraph.projectionState, "clean");
 assert.equal(programGraphAuthoringCheckAfter.ok, true);
 assert.equal(programGraphAuthoringCheckAfter.graph.sourceProjectionState, "clean");
-assert.equal(programGraphAuthoringStatusAfterHumanEdit.repositoryGraph.syncState, "source-stale");
-assert.equal(programGraphAuthoringSyncFromSource.ok, true);
-assert.equal(programGraphAuthoringSyncFromSource.repositoryGraph.syncState, "clean");
-assert.deepEqual(programGraphAuthoringSyncFromSource.changedPaths, [`${programGraphAuthoringPackage}/zero.graph`]);
+assert.equal(programGraphAuthoringStatusAfterHumanEdit.repositoryGraph.projectionState, "source-stale");
+assert.equal(programGraphAuthoringImport.ok, true);
+assert.equal(programGraphAuthoringImport.repositoryGraph.projectionState, "clean");
+assert.deepEqual(programGraphAuthoringImport.changedPaths, [`${programGraphAuthoringPackage}/zero.graph`]);
 assert.equal(programGraphAuthoringCheckAfterHumanEdit.ok, true);
 assert.equal(programGraphAuthoringCheckAfterHumanEdit.graph.sourceProjectionState, "clean");
 assert.equal(programGraphAuthoringRunAfterHumanEdit.stdout, "human edit ok\n");
@@ -4550,11 +4550,11 @@ assert.deepEqual(programGraphAuthoringCliSync.changedPaths, [`${programGraphAuth
 assert.match(programGraphAuthoringCliProjectionText, /fn add_u32\(x: u32, y: u32\) -> u32/);
 assert.match(programGraphAuthoringCliProjectionText, /test "add_u32 works"/);
 assert.doesNotMatch(programGraphAuthoringCliProjectionText, /fn add\(x: i32, y: i32\) -> i32/);
-assert.equal(programGraphAuthoringCliStatusAfterHumanEdit.repositoryGraph.syncState, "source-stale");
-assert.equal(programGraphAuthoringCliSyncFromSource.ok, true);
-assert.deepEqual(programGraphAuthoringCliSyncFromSource.changedPaths, [`${programGraphAuthoringCliPackage}/zero.graph`]);
-assert.equal(programGraphAuthoringCliSyncFromSource.store.nodes, 96);
-assert.equal(programGraphAuthoringCliSyncFromSource.store.sources, 1);
+assert.equal(programGraphAuthoringCliStatusAfterHumanEdit.repositoryGraph.projectionState, "source-stale");
+assert.equal(programGraphAuthoringCliImport.ok, true);
+assert.deepEqual(programGraphAuthoringCliImport.changedPaths, [`${programGraphAuthoringCliPackage}/zero.graph`]);
+assert.equal(programGraphAuthoringCliImport.store.nodes, 96);
+assert.equal(programGraphAuthoringCliImport.store.sources, 1);
 assert.equal(programGraphAuthoringCliQueryAfterHumanEdit.ok, true);
 assert.equal(programGraphAuthoringCliQueryAfterHumanEdit.counts.nodes, 96);
 assert.deepEqual(programGraphAuthoringCliQueryAfterHumanEdit.modules.map((module) => module.name), ["main"]);
@@ -4563,7 +4563,7 @@ assert(programGraphAuthoringCliQueryAfterHumanEdit.calls.some((call) => call.qua
 assert(!programGraphAuthoringCliQueryAfterHumanEdit.calls.some((call) => call.targetKind === "graphBackedStdlib"));
 assert.match(programGraphAuthoringCliFindUsageText, /value:usage: zero run \. -- <left> <right>\\n path:/);
 assert.equal(programGraphAuthoringCliVerifyAfterHumanEdit.ok, true);
-assert.equal(programGraphAuthoringCliVerifyAfterHumanEdit.repositoryGraph.syncState, "clean");
+assert.equal(programGraphAuthoringCliVerifyAfterHumanEdit.repositoryGraph.projectionState, "clean");
 assert.equal(programGraphAuthoringCliCheckAfterHumanEdit.ok, true);
 assert.equal(programGraphAuthoringCliCheckAfterHumanEdit.sourceFile, `${programGraphAuthoringCliPackage}/zero.graph`);
 assertRepositoryGraphNativeCheck(programGraphAuthoringCliCheckAfterHumanEdit, "clean");
@@ -4591,7 +4591,7 @@ const programGraphMissingPackageNameBody = JSON.parse(programGraphMissingPackage
 assert.equal(programGraphMissingPackageNameBody.diagnostics[0].code, "RGP007");
 assert.equal(programGraphMissingPackageNameBody.diagnostics[0].message, "repository graph compiler input requires package.name");
 assert.match(programGraphMissingPackageNameBody.diagnostics[0].actual, /package:program-graph-fixture@0\.1\.0/);
-assert.equal(programGraphBadProjectionStatus.repositoryGraph.syncState, "conflict");
+assert.equal(programGraphBadProjectionStatus.repositoryGraph.projectionState, "conflict");
 assert.equal(programGraphBadProjectionStatus.repositoryGraph.projectionValidity, "conflict");
 assert.equal(programGraphBadProjectionCheck.ok, true);
 assert.equal(programGraphBadProjectionCheck.graph.sourceProjectionState, "conflict");
@@ -4604,7 +4604,7 @@ assert.equal(programGraphMissingStoreBody.mode, "compiler-input");
 assert.equal(programGraphMissingStoreBody.repositoryGraph.storePresent, false);
 assert.equal(programGraphMissingStoreBody.diagnostics[0].code, "RGP001");
 assert.equal(programGraphMissingStoreBody.diagnostics[0].path, programGraphMissingStorePackage);
-assert.match(programGraphMissingStoreBody.repairCommands.join("\n"), /zero sync --from-source/);
+assert.match(programGraphMissingStoreBody.repairCommands.join("\n"), /zero import/);
 assert.notEqual(programGraphInvalidStoreCheck.code, 0);
 const programGraphInvalidStoreBody = JSON.parse(programGraphInvalidStoreCheck.stdout);
 assert.equal(programGraphInvalidStoreBody.ok, false);
@@ -4613,7 +4613,7 @@ assert.equal(programGraphInvalidStoreBody.repositoryGraph.storePresent, true);
 assert.equal(programGraphInvalidStoreBody.repositoryGraph.storeValid, false);
 assert.equal(programGraphInvalidStoreBody.diagnostics[0].code, "RGP003");
 assert.equal(programGraphInvalidStoreBody.diagnostics[0].path, programGraphInvalidStorePackage);
-assert.match(programGraphInvalidStoreBody.repairCommands.join("\n"), /zero sync --from-source/);
+assert.match(programGraphInvalidStoreBody.repairCommands.join("\n"), /zero import/);
 assert.equal(programGraphSourceFixtureDriftCheck.ok, true);
 assert.equal(programGraphSourceFixtureDriftCheck.graph.lowering, "graph-native-check");
 assert.equal(programGraphSourceFixtureDriftCheck.graph.sourceProjectionState, "stale");
@@ -4621,10 +4621,10 @@ assertRepositoryGraphNativeCheck(programGraphSourceFixtureDriftCheck, "stale");
 assert.notEqual(programGraphSourceFixtureDriftVerify.code, 0);
 const programGraphSourceFixtureDriftBody = JSON.parse(programGraphSourceFixtureDriftVerify.stdout);
 assert.equal(programGraphSourceFixtureDriftBody.ok, false);
-assert.equal(programGraphSourceFixtureDriftBody.mode, "verify-sync");
+assert.equal(programGraphSourceFixtureDriftBody.mode, "verify-projection");
 assert.equal(programGraphSourceFixtureDriftBody.repositoryGraph.compilerInput, "repository-graph");
 assert.equal(programGraphSourceFixtureDriftBody.diagnostics[0].code, "RGP005");
-assert.match(programGraphSourceFixtureDriftBody.repairCommands.join("\n"), /zero sync --from-source/);
+assert.match(programGraphSourceFixtureDriftBody.repairCommands.join("\n"), /zero import/);
 assert.equal(programGraphTargetIncompatibleSync.ok, true);
 assert.notEqual(programGraphTargetIncompatibleCheck.code, 0);
 const programGraphTargetIncompatibleBody = JSON.parse(programGraphTargetIncompatibleCheck.stdout);
@@ -4645,9 +4645,9 @@ assert.equal(programGraphBackendMismatchCheck.targetReadiness.diagnostics[0].bac
 const programGraphRepositoryStatus = JSON.parse((await execFileAsync(zero, ["status", "--json", "--target", "linux-musl-x64", programGraphSourceFixturePackage])).stdout);
 assert.equal(programGraphRepositoryStatus.repositoryGraph.storePresent, true);
 assert.equal(programGraphRepositoryStatus.repositoryGraph.storeValid, true);
-assert.equal(programGraphRepositoryStatus.repositoryGraph.syncState, "clean");
+assert.equal(programGraphRepositoryStatus.repositoryGraph.projectionState, "clean");
 assert.equal(programGraphRepositoryStatus.repositoryGraph.compilerInput, "repository-graph");
-const programGraphRepositoryVerify = JSON.parse((await execFileAsync(zero, ["verify-sync", "--json", "--target", "linux-musl-x64", programGraphSourceFixturePackage])).stdout);
+const programGraphRepositoryVerify = JSON.parse((await execFileAsync(zero, ["verify-projection", "--json", "--target", "linux-musl-x64", programGraphSourceFixturePackage])).stdout);
 assert.equal(programGraphRepositoryVerify.ok, true);
 assert.equal(programGraphRepositoryVerify.writes, false);
 assert.deepEqual(programGraphDumpJson, programGraphBody);

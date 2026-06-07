@@ -38,10 +38,10 @@ writeFileSync(
   `${functions.join("\n")}\npub fn main(world: World) -> Void raises {\n    check world.out.write("repository graph scale ok\\n")\n}\n`,
 );
 
-const sync = elapsed(() => json(["sync", "--from-source", "--format", "text", "--json", source]));
-assert.equal(sync.value.code, 0);
-assert.equal(sync.value.body.repositoryGraph.syncState, "clean");
-assert(sync.ms < maxMs, `repository graph sync took ${sync.ms}ms`);
+const imported = elapsed(() => json(["import", "--format", "text", "--json", source]));
+assert.equal(imported.value.code, 0);
+assert.equal(imported.value.body.repositoryGraph.projectionState, "clean");
+assert(imported.ms < maxMs, `repository graph import took ${imported.ms}ms`);
 
 const status = elapsed(() => json(["status", "--json", source]));
 assert.equal(status.value.body.repositoryGraph.storeValid, true);
@@ -60,10 +60,10 @@ assert(status.value.body.scale.nodes >= 300, `expected a large graph, got ${stat
 assert(status.value.body.scale.edges >= 200, `expected many graph edges, got ${status.value.body.scale.edges}`);
 assert(status.ms < maxMs, `repository graph status took ${status.ms}ms`);
 
-const verify = elapsed(() => json(["verify-sync", "--json", source]));
+const verify = elapsed(() => json(["verify-projection", "--json", source]));
 assert.equal(verify.value.code, 0);
 assert.equal(verify.value.body.ok, true);
-assert(verify.ms < maxMs, `repository graph verify-sync took ${verify.ms}ms`);
+assert(verify.ms < maxMs, `repository graph verify-projection took ${verify.ms}ms`);
 
 const originalStore = readFileSync(store, "utf8");
 assert.match(originalStore, /^compilerStore schemaVersion:1 shape:"compiler-oriented-tables"/m);

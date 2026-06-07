@@ -106,7 +106,7 @@ assert.equal(checkedInBinaryStatus.repositoryGraph.projectionValidity, "clean");
 assert.equal((await zeroRun(["check", checkedInBinaryRoot])).stdout, "ok\n");
 assert.equal((await zeroRun(["test", checkedInBinaryRoot])).stdout, "1 test(s) ok\n");
 assert.equal((await zeroRun(["run", checkedInBinaryRoot])).stdout, "binary graph store example\n");
-assert.equal((await zeroRun(["verify-sync", checkedInBinaryRoot])).stdout, "repository graph verify-sync ok\n");
+assert.equal((await zeroRun(["verify-projection", checkedInBinaryRoot])).stdout, "repository graph verify-projection ok\n");
 
 const checkedInBinaryCrmStore = await readFile(`${checkedInBinaryCrmRoot}/zero.graph`);
 assertBinaryGraphStore(`${checkedInBinaryCrmRoot}/zero.graph`, checkedInBinaryCrmStore);
@@ -114,7 +114,7 @@ const checkedInBinaryCrmStatus = JSON.parse((await zeroRun(["status", "--json", 
 assert.equal(checkedInBinaryCrmStatus.store.encoding, "binary");
 assert.equal(checkedInBinaryCrmStatus.repositoryGraph.projectionValidity, "clean");
 assert.equal((await zeroRun(["check", checkedInBinaryCrmRoot])).stdout, "ok\n");
-assert.equal((await zeroRun(["verify-sync", checkedInBinaryCrmRoot])).stdout, "repository graph verify-sync ok\n");
+assert.equal((await zeroRun(["verify-projection", checkedInBinaryCrmRoot])).stdout, "repository graph verify-projection ok\n");
 
 await rm(binaryRoot, { recursive: true, force: true });
 await mkdir(binaryRoot, { recursive: true });
@@ -134,8 +134,8 @@ assert.equal(binaryStatus.storage.binaryAvailable, true);
 
 assert.equal((await zeroRun(["check", binaryRoot])).stdout, "ok\n");
 assert.equal((await zeroRun(["run", binaryRoot])).stdout, "hello binary\n");
-assert.match((await zeroRun(["sync", "--from-graph", binaryRoot])).stdout, /repository graph sync ok/);
-assert.equal((await zeroRun(["verify-sync", binaryRoot])).stdout, "repository graph verify-sync ok\n");
+assert.match((await zeroRun(["export", binaryRoot])).stdout, /repository graph export ok/);
+assert.equal((await zeroRun(["verify-projection", binaryRoot])).stdout, "repository graph verify-projection ok\n");
 
 const textRoot = `/tmp/zero-program-graph-binary-convert-${process.pid}`;
 await rm(textRoot, { recursive: true, force: true });
@@ -143,29 +143,29 @@ await mkdir(textRoot, { recursive: true });
 await zeroRun(["init", "--format", "text", textRoot]);
 await zeroRun(["patch", textRoot, "--op", "addMain", "--op", 'addCheckWrite fn="main" text="convert me\\n"']);
 assert.match((await readFile(`${textRoot}/zero.graph`, "utf8")).slice(0, 64), /^zero-repository-graph v1/);
-await zeroRun(["sync", "--from-graph", textRoot]);
-await zeroRun(["sync", "--from-source", "--format", "binary", textRoot]);
+await zeroRun(["export", textRoot]);
+await zeroRun(["import", "--format", "binary", textRoot]);
 const convertedStore = await readFile(`${textRoot}/zero.graph`);
 assert.equal(convertedStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
 assert.equal((await zeroRun(["run", textRoot])).stdout, "convert me\n");
-assert.equal((await zeroRun(["verify-sync", textRoot])).stdout, "repository graph verify-sync ok\n");
+assert.equal((await zeroRun(["verify-projection", textRoot])).stdout, "repository graph verify-projection ok\n");
 
-const syncDefaultRoot = `/tmp/zero-program-graph-sync-default-${process.pid}`;
-await rm(syncDefaultRoot, { recursive: true, force: true });
-await mkdir(syncDefaultRoot, { recursive: true });
+const projectionDefaultRoot = `/tmp/zero-program-graph-projection-default-${process.pid}`;
+await rm(projectionDefaultRoot, { recursive: true, force: true });
+await mkdir(projectionDefaultRoot, { recursive: true });
 await writeFile(
-  `${syncDefaultRoot}/main.0`,
-  'pub fn main(world: World) -> Void raises {\n    check world.out.write("sync default\\n")\n}\n',
+  `${projectionDefaultRoot}/main.0`,
+  'pub fn main(world: World) -> Void raises {\n    check world.out.write("projection default\\n")\n}\n',
 );
 await writeFile(
-  `${syncDefaultRoot}/zero.toml`,
-  '[package]\nname = "sync-default"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "main.0"\n\n[repositoryGraph]\ncompilerInput = true\n',
+  `${projectionDefaultRoot}/zero.toml`,
+  '[package]\nname = "projection-default"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "main.0"\n\n[repositoryGraph]\ncompilerInput = true\n',
 );
-await zeroRun(["sync", "--from-source", syncDefaultRoot]);
-const syncDefaultStore = await readFile(`${syncDefaultRoot}/zero.graph`);
-assert.equal(syncDefaultStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
-assert.equal((await zeroRun(["run", syncDefaultRoot])).stdout, "sync default\n");
+await zeroRun(["import", projectionDefaultRoot]);
+const projectionDefaultStore = await readFile(`${projectionDefaultRoot}/zero.graph`);
+assert.equal(projectionDefaultStore.subarray(0, 8).toString("binary"), "ZRGBIN1\0");
+assert.equal((await zeroRun(["run", projectionDefaultRoot])).stdout, "projection default\n");
 
-const invalidFormat = await zeroRun(["sync", "--from-source", "--format", "pickle", textRoot]).catch((error) => error);
+const invalidFormat = await zeroRun(["import", "--format", "pickle", textRoot]).catch((error) => error);
 assert.notEqual(invalidFormat.code ?? invalidFormat.status, 0);
 assert.match(invalidFormat.stderr, /repository graph store format is not supported/);

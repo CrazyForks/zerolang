@@ -151,15 +151,15 @@ operation is missing instead of silently switching to source text.
 6. When human review source is needed, write it explicitly:
 
 ```sh
-zero sync --from-graph <package>
-zero verify-sync <package>
+zero export <package>
+zero verify-projection <package>
 ```
 
-7. If a human edits `.0`, sync the reviewed projection back to the graph store:
+7. If a human edits `.0`, import the reviewed projection back to the graph store:
 
 ```sh
 zero status <package>
-zero sync --from-source <package>
+zero import <package>
 zero check <package>
 ```
 
@@ -167,8 +167,8 @@ zero check <package>
 artifact, validate it, and then apply the accepted change to the package graph
 store or source projection. Do not commit derived `.program-graph` files unless
 the user explicitly asks.
-9. If `zero status <input>` reports repository graph sync as enabled, use
-`zero verify-sync <input>` when graph/source drift must fail the workflow.
+9. If `zero status <input>` reports a repository graph compiler input, use
+`zero verify-projection <input>` when graph/source drift must fail the workflow.
 When `zero.toml` or `zero.json` sets `repositoryGraph.compilerInput` to `true`, normal compiler
 commands validate and compile from `zero.graph`; they report projection state
 but do not rewrite projections. When combining repository graph stores, use
@@ -207,7 +207,7 @@ zero fix --plan --json <file-or-package>
 - Use `Maybe<T>`, explicit `raises` / `raises [...]`, and `check` instead of hidden failure.
 - Prefer package-level graph inspection and graph-store patches for agent
   planning and mechanical edits.
-- Treat `.0` edits as human edits. Agents may sync `.0` from the graph for
+- Treat `.0` edits as human edits. Agents may export `.0` from the graph for
   review, but should not use source text as the implementation path when the
   requested workflow is graph-first.
 - Do not invent syntax. Load `language` when unsure.

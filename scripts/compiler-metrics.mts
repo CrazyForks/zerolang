@@ -1810,7 +1810,8 @@ const programGraph = {
   repositoryCompilerInputSourceFree: /z_repository_graph_verify_compiler_input\s*\(\s*command->input\s*,\s*target\s*,\s*command->json\s*,\s*&store_path\s*\)/.test(directManifestGraphInputBody) &&
     !/load_graph_from_checked_current_source\s*\(/.test(directManifestGraphInputBody) &&
     !/SourceInput\s+source_input/.test(directManifestGraphInputBody),
-  repositoryCompilerInputProjectionStatus: /projectionValidity/.test(programGraphRepositoryInputRaw) &&
+  repositoryCompilerInputProjectionStatus: /projectionState/.test(programGraphRepositoryInputRaw) &&
+    /projectionValidity/.test(programGraphRepositoryInputRaw) &&
     /source-missing/.test(programGraphRepositoryInputRaw) &&
     /z_program_graph_projection_state_label\s*\(/.test(programGraphRepositoryInputSource),
   repositoryGraphSourceLocationsNotSemanticMatch: !/store_source_locations_match_graph\s*\(/.test(programGraphStoreSource) &&

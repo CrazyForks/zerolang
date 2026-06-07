@@ -106,8 +106,8 @@ typedef struct {
   bool trace;
   bool graph_patch_command;
   bool graph_reconcile_command;
-  bool graph_sync_from_graph;
-  bool graph_sync_from_source;
+  bool graph_export_from_graph;
+  bool graph_import_from_source;
   bool repository_graph_input;
   bool graph_patch_check_only;
   EmitKind emit;
@@ -4030,8 +4030,9 @@ static void print_help(void) {
   printf("  zero init [--json] [--manifest toml|json] [--format text|binary] <project-path>\n");
   printf("  zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] <program-graph-or-source>\n");
   printf("  zero view [--json] [--out <file.0>] <program-graph-or-source>\n");
-  printf("  zero status|verify-sync [--json] <project|zero.toml|zero.json|file.0>\n");
-  printf("  zero sync (--from-source|--from-graph) [--json] [--format text|binary] <project|zero.toml|zero.json|file.0>\n");
+  printf("  zero status|verify-projection [--json] <project|zero.toml|zero.json|file.0>\n");
+  printf("  zero import [--json] [--format text|binary] <project|zero.toml|zero.json|file.0>\n");
+  printf("  zero export [--json] <project|zero.toml|zero.json|file.0>\n");
   printf("  zero dump|import|validate|roundtrip [--json] [--format text|binary] [--out <program-graph-artifact>] <input>\n");
   printf("  zero source-map [--json] <program-graph-or-source>\n");
   printf("  zero reconcile [--json] <base-program-graph-or-source> --source <edited-file.0|project|zero.toml|zero.json>\n");
@@ -4151,7 +4152,7 @@ static bool cli_arg_is(const char *arg, const char *expected) {
 }
 
 static bool is_program_graph_root_command(const char *command) {
-  static const char *const commands[] = {"init", "dump", "import", "query", "inspect", "validate", "view", "source-map", "reconcile", "status", "verify-sync", "sync", "merge", "roundtrip"};
+  static const char *const commands[] = {"init", "dump", "import", "export", "query", "inspect", "validate", "view", "source-map", "reconcile", "status", "verify-projection", "merge", "roundtrip"};
   for (size_t i = 0; i < sizeof(commands) / sizeof(commands[0]); i++) {
     if (cli_arg_is(command, commands[i])) return true;
   }
@@ -4284,14 +4285,6 @@ static bool parse_common_option(int argc, char **argv, int *index, Command *comm
     if (*index + 1 >= argc) command->unknown_flag = arg;
     else command->reconcile_source = argv[++(*index)];
     return true;
-  } else if (cli_arg_is(arg, "--from-graph")) {
-    if (!command || !command->kind || !cli_arg_is(command->kind, "sync")) command->unknown_flag = arg;
-    else command->graph_sync_from_graph = true;
-    return true;
-  } else if (cli_arg_is(arg, "--from-source")) {
-    if (!command || !command->kind || !cli_arg_is(command->kind, "sync")) command->unknown_flag = arg;
-    else command->graph_sync_from_source = true;
-    return true;
   } else if (strcmp(arg, "--all") == 0) {
     command->all = true;
     return true;
@@ -4373,6 +4366,8 @@ static bool parse_command(int argc, char **argv, Command *command) {
   }
   if (is_patch_command) command->kind = "patch";
   command->graph_patch_command = is_patch_command;
+  if (is_root_graph_command && command->kind && cli_arg_is(command->kind, "import")) command->graph_import_from_source = true;
+  if (is_root_graph_command && command->kind && cli_arg_is(command->kind, "export")) command->graph_export_from_graph = true;
   command->graph_reconcile_command = (is_graph_command || is_root_graph_command) && command->kind && cli_arg_is(command->kind, "reconcile");
   bool graph_merge_command = (is_graph_command || is_root_graph_command) && command->kind && cli_arg_is(command->kind, "merge");
   if (strcmp(command->command, "run") == 0) {
@@ -7726,15 +7721,15 @@ static int run_graph_init_command(const Command *command, ZDiag *diag) {
       ZBuf json;
       zbuf_init(&json);
       ZBuf patch_command;
-      ZBuf sync_command;
+      ZBuf export_command;
       zbuf_init(&patch_command);
-      zbuf_init(&sync_command);
+      zbuf_init(&export_command);
       zbuf_append(&patch_command, "cd ");
       zbuf_append(&patch_command, command->input);
       zbuf_append(&patch_command, " && zero patch --op 'addMain'");
-      zbuf_append(&sync_command, "cd ");
-      zbuf_append(&sync_command, command->input);
-      zbuf_append(&sync_command, " && zero sync --from-graph .");
+      zbuf_append(&export_command, "cd ");
+      zbuf_append(&export_command, command->input);
+      zbuf_append(&export_command, " && zero export .");
       zbuf_append(&json, "{\n  \"schemaVersion\": 1,\n  \"ok\": true,\n  \"project\": ");
       append_json_string(&json, command->input);
       zbuf_append(&json, ",\n  \"compilerInput\": \"repository-graph\",\n  \"writes\": [");
@@ -7745,12 +7740,12 @@ static int run_graph_init_command(const Command *command, ZDiag *diag) {
       zbuf_append(&json, "],\n  \"sourceProjection\": {\"path\": \"src/main.0\", \"materialized\": false},\n  \"next\": [");
       append_json_string(&json, patch_command.data ? patch_command.data : "");
       zbuf_append(&json, ", ");
-      append_json_string(&json, sync_command.data ? sync_command.data : "");
+      append_json_string(&json, export_command.data ? export_command.data : "");
       zbuf_append(&json, "]\n}\n");
       fputs(json.data, stdout);
       zbuf_free(&json);
       zbuf_free(&patch_command);
-      zbuf_free(&sync_command);
+      zbuf_free(&export_command);
       free(manifest_path);
     } else if (ok) {
       printf("graph project init ok\n");
@@ -11957,9 +11952,9 @@ static bool load_repository_graph_checked_source_graph(void *ctx, ZProgramGraph 
 
 static bool repository_graph_command_loads_checked_source(const Command *command) {
   if (!command || !command->kind) return false;
-  if (command->graph_sync_from_graph) return false;
-  if (strcmp(command->kind, "status") == 0 || strcmp(command->kind, "verify-sync") == 0) return !command->graph_sync_from_source;
-  return strcmp(command->kind, "sync") == 0 && command->graph_sync_from_source;
+  if (command->graph_export_from_graph) return false;
+  if (strcmp(command->kind, "status") == 0 || strcmp(command->kind, "verify-projection") == 0) return !command->graph_import_from_source;
+  return strcmp(command->kind, "import") == 0;
 }
 
 static bool load_graph_input_for_read(const Command *command, const ZTargetInfo *target, SourceInput *input, Program *program, ZProgramGraph *graph, GraphInputKind *kind, ZDiag *diag) {
@@ -13126,7 +13121,6 @@ static bool graph_command_can_use_repository_store(const char *kind) {
          (strcmp(kind, "view") == 0 ||
           strcmp(kind, "query") == 0 ||
           strcmp(kind, "dump") == 0 ||
-          strcmp(kind, "import") == 0 ||
           strcmp(kind, "source-map") == 0 ||
           strcmp(kind, "reconcile") == 0 ||
           strcmp(kind, "check") == 0 ||
@@ -13309,7 +13303,7 @@ static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *ta
   if (graph_check_text_eq(command->kind, "init")) return run_graph_init_command(command, diag);
   bool repo_graph_command = false;
   SourceInput repo_graph_input = {0}; Program repo_graph_program = {0}; ZProgramGraph repo_source_graph = {0};
-  bool repo_wants_source_graph = z_repository_graph_needs_source_graph(command->kind, command->input, target, command->graph_sync_from_graph, command->graph_sync_from_source);
+  bool repo_wants_source_graph = z_repository_graph_needs_source_graph(command->kind, command->input, target, command->graph_export_from_graph, command->graph_import_from_source);
   ZDiag repo_source_graph_diag = {0};
   bool repo_has_source_graph = false;
   if (repo_wants_source_graph) {
@@ -13317,13 +13311,13 @@ static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *ta
       ? load_graph_from_checked_current_source(command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag)
       : load_graph_from_current_source(command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag);
   }
-  if (repo_wants_source_graph && !repo_has_source_graph && !z_repository_graph_source_graph_optional(command->kind, command->graph_sync_from_graph, command->graph_sync_from_source)) {
+  if (repo_wants_source_graph && !repo_has_source_graph && !z_repository_graph_source_graph_optional(command->kind, command->graph_export_from_graph, command->graph_import_from_source)) {
     if (command->json) print_command_diag_json(command, repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag); else print_diag(repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag);
     z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
     return 1;
   }
   RepositoryGraphSourceGraphLoader repo_graph_loader = {.command = command, .target = target};
-  int repo_graph_rc = z_repository_graph_maybe_command(command->kind, command->input, target, command->json, command->graph_sync_from_graph, command->graph_sync_from_source, command->merge_base, command->merge_left, command->merge_right, command->store_format, repo_has_source_graph ? &repo_source_graph : NULL, repo_wants_source_graph && !repo_has_source_graph ? &repo_source_graph_diag : NULL, command->graph_sync_from_graph ? load_repository_graph_checked_source_graph : NULL, &repo_graph_loader, &repo_graph_command);
+  int repo_graph_rc = z_repository_graph_maybe_command(command->kind, command->input, target, command->json, command->graph_export_from_graph, command->graph_import_from_source, command->merge_base, command->merge_left, command->merge_right, command->store_format, command->out, repo_has_source_graph ? &repo_source_graph : NULL, repo_wants_source_graph && !repo_has_source_graph ? &repo_source_graph_diag : NULL, command->graph_export_from_graph ? load_repository_graph_checked_source_graph : NULL, &repo_graph_loader, &repo_graph_command);
   z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
   if (repo_graph_command) return repo_graph_rc;
   if (graph_check_text_eq(command->kind, "validate")) return run_graph_validate_command(command, diag);

@@ -61,8 +61,8 @@ static const ZProgramGraphCommandKind z_graph_command_kinds[] = {
     "reconciliation reports identity decisions on stdout; remove --out"
   ),
   GRAPH_NO_OUT("status", Z_PROGRAM_GRAPH_INPUT_SOURCE, "status does not support --out", "zero status [--json] <project|zero.toml|zero.json|file.0>", "zero status --out", "status is reported on stdout; remove --out"),
-  GRAPH_NO_OUT("verify-sync", Z_PROGRAM_GRAPH_INPUT_SOURCE, "verify-sync does not support --out", "zero verify-sync [--json] <project|zero.toml|zero.json|file.0>", "zero verify-sync --out", "verify-sync is a no-write check; remove --out"),
-  GRAPH_NO_OUT("sync", Z_PROGRAM_GRAPH_INPUT_SOURCE, "sync writes fixed repository paths and does not support --out", "zero sync (--from-source|--from-graph) [--format text|binary] <project|zero.toml|zero.json|file.0>", "zero sync --out", "choose --from-source or --from-graph; sync writes repository graph/source paths when enabled"),
+  GRAPH_NO_OUT("verify-projection", Z_PROGRAM_GRAPH_INPUT_SOURCE, "verify-projection does not support --out", "zero verify-projection [--json] <project|zero.toml|zero.json|file.0>", "zero verify-projection --out", "verify-projection is a no-write check; remove --out"),
+  GRAPH_NO_OUT("export", Z_PROGRAM_GRAPH_INPUT_SOURCE, "export writes fixed source projection paths and does not support --out", "zero export [--json] <project|zero.toml|zero.json|file.0>", "zero export --out", "export writes repository source projections from zero.graph; remove --out"),
   GRAPH_NO_OUT("merge", Z_PROGRAM_GRAPH_INPUT_SOURCE, "merge writes the target zero.graph and does not support --out", "zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--format text|binary] <project|zero.toml|zero.json|file.0>", "zero merge --out", "merge writes the repository graph store selected by the input path; remove --out"),
   GRAPH_OUT("size", Z_PROGRAM_GRAPH_INPUT_ARTIFACT),
   GRAPH_OUT("build", Z_PROGRAM_GRAPH_INPUT_ARTIFACT),
@@ -123,14 +123,14 @@ ZProgramGraphOutputContract z_program_graph_command_output_contract(const char *
 }
 
 void z_program_graph_print_command_help(void) {
-  printf("Usage: zero init|query|view|status|verify-sync|sync|dump|import|inspect|validate|source-map|reconcile|merge|roundtrip [--json] <input>\n\n");
+  printf("Usage: zero init|query|view|status|verify-projection|import|export|dump|inspect|validate|source-map|reconcile|merge|roundtrip [--json] <input>\n\n");
   printf("Graph-first project usage: zero init [--json] <project-path>\n");
   printf("Output usage: zero dump|import|validate|roundtrip [--json] [--format text|binary] --out <program-graph-artifact> <input>\n");
   printf("View output usage: zero view [--json] [--out <file.0>] <program-graph-or-source>\n");
   printf("Source map usage: zero source-map [--json] <program-graph-or-source>\n");
   printf("Query usage: zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] <program-graph-or-source>\n");
   printf("Reconcile usage: zero reconcile [--json] <base-program-graph-or-source> --source <edited-file.0|project|zero.toml|zero.json>\n");
-  printf("Repository sync usage: zero status|verify-sync [--json] <project|zero.toml|zero.json|file.0>; zero sync (--from-source|--from-graph) [--json] <project|zero.toml|zero.json|file.0>; zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] <project|zero.toml|zero.json|file.0>\n");
+  printf("Repository projection usage: zero status|verify-projection [--json] <project|zero.toml|zero.json|file.0>; zero import [--json] [--format text|binary] <project|zero.toml|zero.json|file.0>; zero export [--json] <project|zero.toml|zero.json|file.0>; zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] <project|zero.toml|zero.json|file.0>\n");
   printf("Size usage: zero size [--json] [--target <target>] [--out <artifact>] <program-graph-artifact>\n");
   printf("Patch usage: zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [<input>] (<patch-file>|--op <operation>)\n");
   printf("  In a graph-first package, zero patch --op <operation> defaults to the current directory.\nPatch operation help: zero patch --op help\n\n");
@@ -141,16 +141,16 @@ void z_program_graph_print_command_help(void) {
   printf("Graph commands:\n");
   printf("  init      create a graph-first package with zero.graph as compiler input\n");
   printf("  dump      print or write only the deterministic ProgramGraph\n");
-  printf("  import    convert current Zero source into deterministic ProgramGraph input\n");
+  printf("  import    import source projections into zero.graph, or convert source into a standalone ProgramGraph artifact\n");
+  printf("  export    export zero.graph into human-readable .0 source projections\n");
   printf("  query     report compact module, function, body, and patch facts for agents\n");
   printf("  inspect   report semantic graph and compiler facts\n");
   printf("  validate  read ProgramGraph input and optionally write its normalized artifact form\n");
   printf("  view      render ProgramGraph input as a generated Zero view\n");
   printf("  source-map map graph nodes to source ranges and semantic identity facts\n");
   printf("  reconcile compare a prior graph with edited source and report identity decisions\n");
-  printf("  status    report repository graph sync state without writing files\n");
-  printf("  verify-sync check graph/source projection sync without writing files\n");
-  printf("  sync      synchronize repository graph and source projections when enabled\n");
+  printf("  status    report repository graph projection state without writing files\n");
+  printf("  verify-projection check graph/source projection drift without writing files\n");
   printf("  merge     combine independent repository graph store edits by durable node id\n");
   printf("  roundtrip compare graph semantics after direct ProgramGraph lowering\n");
   printf("\nRepository store encoding:\n");

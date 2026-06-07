@@ -5,8 +5,8 @@ description: Use ProgramGraph commands as the primary agent authoring and inspec
 
 # Zero Graph Authoring
 
-Use this when an agent needs to create, inspect, patch, validate, or sync Zero
-programs through the graph interface. The graph interface is the primary agent authoring surface. `zero.graph` is the repository graph store for opted-in
+Use this when an agent needs to create, inspect, patch, validate, import, or
+export Zero programs through the graph interface. The graph interface is the primary agent authoring surface. `zero.graph` is the repository graph store for opted-in
 packages, `.0` files are the human-readable source projection, and
 `.program-graph` files are derived debug/interchange artifacts.
 
@@ -17,11 +17,11 @@ packages, `.0` files are the human-readable source projection, and
   `zero.graph` after validation. Normal `zero check`, `zero run`, `zero test`,
   `zero build`, `zero size`, `zero ship`, and `zero mem` commands compile from
   `zero.graph` when `repositoryGraph.compilerInput` is true.
-- Use `zero sync --from-graph <package>` to materialize or refresh `.0`
+- Use `zero export <package>` to materialize or refresh `.0`
   projections for human review.
-- Use `zero sync --from-source <package>` after a human edits `.0` so the
+- Use `zero import <package>` after a human edits `.0` so the
   reviewed source projection refreshes `zero.graph`.
-- Use `zero verify-sync <package>` when graph/source drift must fail
+- Use `zero verify-projection <package>` when graph/source drift must fail
   without writing files.
 - Use `.program-graph` artifacts only when another tool needs a standalone
   debug or interchange file.
@@ -36,7 +36,7 @@ inspection:
 ```sh
 zero init app
 zero init --format text app-debug
-zero sync --from-source --format text <package>
+zero import --format text <package>
 zero patch --format text <package> --op 'addMain'
 zero validate --format binary --out /tmp/app.graph <input>
 ```
@@ -77,7 +77,7 @@ zero patch --op 'addMain'
 zero query .
 zero check .
 zero run .
-zero sync --from-graph .
+zero export .
 ```
 
 Build useful program shape through graph operations:
@@ -116,7 +116,7 @@ zero patch \
 
 For CLI behavior and other multi-statement workflows, use row syntax in a graph
 patch file. This keeps the write on `zero.graph`; the `.0` file is only the
-human projection you sync later. Do not add or depend on program-specific patch
+human projection you export later. Do not add or depend on program-specific patch
 operations for toy workflows.
 
 ```text
@@ -311,7 +311,7 @@ If the user requested graph authoring, do not hand-edit `.0` source or create a
 temporary `.0` program as a fallback. Always include `expect graphHash` when you
 are carrying a patch across tool calls.
 
-## Validate And Sync
+## Validate And Export
 
 After a graph-first patch, validate with the normal compiler commands:
 
@@ -320,26 +320,26 @@ zero check <package>
 zero test <package>
 ```
 
-When human-readable source projections are needed, sync explicitly:
+When human-readable source projections are needed, export explicitly:
 
 ```sh
-zero sync --from-graph <package>
-zero verify-sync <package>
+zero export <package>
+zero verify-projection <package>
 ```
 
-When a human edits `.0`, bring the graph store back in sync:
+When a human edits `.0`, import the reviewed projection into the graph store:
 
 ```sh
 zero status <package>
-zero sync --from-source <package>
+zero import <package>
 zero check <package>
 ```
 
-`sync --from-source` updates `zero.graph` from source text, preserves existing
+`import` updates `zero.graph` from source text, preserves existing
 graph node handles where the source edit is unambiguous, and stores exact
 checked-in `.0` projection bytes for tracked local files. Ambiguous identity
-changes fail instead of guessing. `sync --from-graph` updates stale or missing
-checked-in `.0` projections from `zero.graph`, and `verify-sync` checks the
+changes fail instead of guessing. `export` updates stale or missing
+checked-in `.0` projections from `zero.graph`, and `verify-projection` checks the
 store against the current source graph and source projection.
 
 When a package manifest sets `repositoryGraph.compilerInput` to `true`, normal
@@ -347,12 +347,12 @@ compiler commands validate and compile from the graph store, including target
 and package metadata, so source-free graph packages can still be checked, built,
 run, tested, sized, shipped, and inspected. Commands report whether the source
 projection is clean, missing, stale, conflicting, or unavailable, but do not
-rewrite `.0` files. Use `zero verify-sync` when graph/source drift must
+rewrite `.0` files. Use `zero verify-projection` when graph/source drift must
 fail the workflow. Without that marker, normal commands use checked-in `.0`
 source text.
 
 `merge` writes only the target `zero.graph` when independent node-hash edits can
-be combined; it does not rewrite `.0` projections, so run `sync --from-graph`
+be combined; it does not rewrite `.0` projections, so run `export`
 after a successful merge when source projections should be refreshed.
 
 In the Zero repository, `pnpm run repository-graph:check` verifies checked-in

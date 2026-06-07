@@ -44,7 +44,7 @@ zero query --calls std .zero/out/graph-hello
 zero query --refs add .zero/out/graph-hello
 zero query --node '#expr_2cad38f9' .zero/out/graph-hello
 zero run .zero/out/graph-hello
-zero sync --from-graph .zero/out/graph-hello
+zero export .zero/out/graph-hello
 zero inspect examples/systems-package
 zero query examples/hello.0
 zero dump examples/hello.0
@@ -101,8 +101,8 @@ another tool needs stable fields.
 | `zero view --json` | Canonical source text rendered from source or a ProgramGraph artifact with `moduleIdentity`, `graphHash`, and optional output path. |
 | `zero source-map --json` | Graph node IDs mapped to source ranges with node hashes, symbol/type/effect IDs, and file hash facts. |
 | `zero reconcile --json` | Identity decisions when edited source is compared with a prior graph, including ambiguous-match diagnostics and simple graph patch text when available. |
-| `zero status --json` | Repository graph sync facts, the expected `zero.graph` path, no-write status, store validity, and whether graph/source sync is enabled. |
-| `zero verify-sync --json` | A no-write graph/source sync check that compares a valid repository graph store with the current source graph and reports repair commands on drift. |
+| `zero status --json` | Repository graph projection facts, the expected `zero.graph` path, no-write status, store validity, and whether the graph/source projection is current. |
+| `zero verify-projection --json` | A no-write graph/source projection check that compares a valid repository graph store with the current source graph and reports repair commands on drift. |
 | `zero merge --json` | Three-way repository graph store merge with base/left/right stores, durable-node conflict diagnostics, changed-path reporting, storage facts, and scale counts. |
 | `zero size --json` | Size, helper, runtime, profile, safety, and backend facts for a ProgramGraph artifact lowered through typed graph MIR, with graph identity. |
 | `zero build --json` | Build a ProgramGraph artifact through typed graph MIR when supported, including graph identity, selected `emit` kind, target, artifact path and size, safety facts, compiler cache facts, and graph-aware incremental invalidation. |
@@ -170,20 +170,20 @@ that write derived graph artifacts must use a non-source output path, such as
 `.zero/out/app.program-graph`. ProgramGraph artifacts remain optional debug and
 interchange files.
 
-`zero status`, `zero verify-sync`, and `zero sync
---from-source|--from-graph` define the repository graph sync surface.
+`zero status`, `zero verify-projection`, `zero import`, and `zero export` define the
+repository graph projection surface.
 `zero init --manifest toml <project>` creates a graph-first package with
 `repositoryGraph.compilerInput: true`, `zero.toml`, and `zero.graph`. It does
 not materialize `.0` files. Agents can patch the package with
 `zero patch <project> --op ...`; from inside a graph-first package,
 `zero patch --op ...` defaults to the current directory. Then normal
 `zero check`, `zero run`, and `zero test` run against the graph store.
-`zero sync --from-source` writes a deterministic `zero.graph` repository
+`zero import` writes a deterministic `zero.graph` repository
 store from current `.0` source, preserves existing graph node handles where the
 source edit is unambiguous, and stores exact checked-in source projection bytes
 for tracked local files. Ambiguous identity changes fail instead of guessing.
 Binary is the default `zero.graph` encoding. `zero init`, `zero patch`,
-`zero sync --from-source`, and `zero merge` write a binary repository graph
+`zero import`, and `zero merge` write a binary repository graph
 store unless an existing text store is being preserved or `--format text` is
 explicitly requested. Binary stores are decoded as typed graph tables instead
 of parsed as a text wrapper. `zero dump`, `zero import`, `zero validate`,
@@ -194,8 +194,8 @@ existing text or binary store, and `zero status` reports the active store
 format. Stdlib `std/*.graph` stores are binary graph stores used by the
 compiler path; sibling `std/*.0` files are human-readable projections, not the
 stdlib compile source.
-`zero sync --from-graph` rewrites stale `.0` source projections from that
-store, and `zero verify-sync` checks the store against the current source
+`zero export` rewrites stale `.0` source projections from that
+store, and `zero verify-projection` checks the store against the current source
 graph and source projection without writing files. Packages can opt normal
 check, build, run, test, size, ship, and mem commands into the checked-in store
 with `repositoryGraph.compilerInput: true` in `zero.toml`.
@@ -203,14 +203,14 @@ Normal compiler
 commands validate and compile from the graph store, including target and package
 metadata, so source-free graph packages can still be checked, built, run,
 tested, sized, shipped, and inspected. Commands report source projection state
-and do not rewrite `.0` files; run `zero verify-sync` when graph and
+and do not rewrite `.0` files; run `zero verify-projection` when graph and
 source projection drift must fail the workflow. Packages without that marker
 still use checked-in `.0` source text as their compiler input.
 `zero merge --base <base-zero.graph> --left <left-zero.graph> --right
 <right-zero.graph> <input>` combines independent repository graph store edits by
 durable node ID and node hash, writes the target `zero.graph` on success, and
 reports conflicts by graph node, source projection, semantic object, and field.
-It does not rewrite `.0` projections; run `zero sync --from-graph` after a
+It does not rewrite `.0` projections; run `zero export` after a
 successful merge when the checked-in source projection should be refreshed.
 In this repository, `pnpm run repository-graph:check` verifies checked-in
 `zero.graph` stores for CI with the pinned `linux-musl-x64` graph target.
@@ -432,8 +432,9 @@ zero dump|import|validate|roundtrip [--json] [--format text|binary] [--out <prog
 zero view [--json] [--out <file.0>] <program-graph-or-source>
 zero source-map [--json] <program-graph-or-source>
 zero reconcile [--json] <base-program-graph-or-source> --source <edited-file.0|project|zero.toml|zero.json>
-zero status|verify-sync [--json] <project|zero.toml|zero.json|file.0>
-zero sync (--from-source|--from-graph) [--json] <project|zero.toml|zero.json|file.0>
+zero status|verify-projection [--json] <project|zero.toml|zero.json|file.0>
+zero import [--json] [--format text|binary] <project|zero.toml|zero.json|file.0>
+zero export [--json] <project|zero.toml|zero.json|file.0>
 zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] <project|zero.toml|zero.json|file.0>
 zero size [--json] [--target <target>] --out <artifact> <program-graph-or-package>
 zero patch [--json] [--check-only|--dry-run] [--out <program-graph-artifact>] [<program-graph-or-source>] (<patch-file>|--op <operation>)
