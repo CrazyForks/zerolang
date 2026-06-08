@@ -38,6 +38,9 @@ kind = "exe"
 main = "src/main.0"
 ```
 
+The target `main` path names the human-readable projection for source maps,
+export/import, and review. Normal package commands compile from `zero.graph`.
+
 JSON is also accepted for compatibility, but new agent-authored packages should
 use TOML:
 
@@ -84,7 +87,9 @@ zero inspect <package>
 
 ## Dependencies
 
-Current packages support local path dependencies and registry metadata. Local dependencies must point at a directory containing `zero.toml` or compatibility `zero.json`; `zero.toml` takes precedence.
+Current packages support local path dependencies and registry metadata. Local
+dependencies must point at a directory containing `zero.toml` or compatibility
+`zero.json`; `zero.toml` takes precedence.
 
 TOML dependency metadata:
 
@@ -118,7 +123,10 @@ zero doc <package>
 zero dev <package>
 ```
 
-Use `--json` when a tool needs exact graph, doc, or dev fields. Useful `graph` facts include modules, source paths, import edges, public and private symbol counts, function effects, required capabilities, target facts, dependency facts, and package cache key inputs.
+Use `--json` when a tool needs exact graph, doc, or dev fields. Useful `graph`
+facts include modules, source paths, import edges, public and private symbol
+counts, function effects, required capabilities, target facts, dependency
+facts, and package cache key inputs.
 
 ## Graph Authoring
 

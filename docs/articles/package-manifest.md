@@ -26,6 +26,10 @@ path = "../local-tools"
 version = "0.1.0"
 ```
 
+The `main` path names the human-readable projection associated with the target.
+It is still useful for source maps, export/import, and human review, but normal
+package commands compile from the checked-in `zero.graph` store.
+
 The equivalent JSON shape is accepted for compatibility, but new agent-authored
 packages should not start from it:
 

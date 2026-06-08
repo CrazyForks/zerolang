@@ -786,6 +786,10 @@ kind = "exe"
 main = "src/main.0"
 ```
 
+The target `main` path points at the readable projection for source maps and
+human import/export. For package commands, the compiler reads the checked-in
+`zero.graph` store.
+
 Check a package by passing its directory:
 
 ```sh

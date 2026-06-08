@@ -172,12 +172,20 @@ describe("docs registry", () => {
     assert.match(install, /https:\/\/zerolang\.ai\/install\.sh/);
     assert.match(install, /release checksum file/);
     assert.match(install, /targetToolchains/);
+    const languageReference = await readDoc("language-reference");
     const packageManifest = await readDoc("package-manifest");
     for (const packageTerm of ["dependencies", "package.lockfile", "packageCache.cacheKeyInputs", "PKG001", "PKG004", "publicationGate"]) {
       assert.match(packageManifest, new RegExp(packageTerm));
     }
     assert.match(packageManifest, /checked-in\s+`zero\.graph` repository graph store/);
     assert.match(packageManifest, /compatibility manifest format/);
+    assert.match(packageManifest, /The `main` path names the human-readable projection/);
+    assert.match(packageManifest, /normal\s+package commands compile from the checked-in `zero\.graph` store/);
+    const cliReference = await readDoc("cli-reference");
+    assert.match(cliReference, /For new agent-authored packages, prefer `zero init`/);
+    assert.match(cliReference, /Use\s+`zero new` only when you explicitly want a projection-oriented starter template/);
+    assert.match(languageReference, /The target `main` path points at the readable projection/);
+    assert.match(learnZero, /It does not make `src\/main\.0` the normal package compile input/);
     const crossCompilation = await readDoc("cross-compilation");
     for (const runtimeTerm of ["Direct Artifacts", "Sysroots And C Boundaries", "Current Boundary"]) {
       assert.match(crossCompilation, new RegExp(runtimeTerm));
@@ -186,7 +194,6 @@ describe("docs registry", () => {
     for (const label of ["std.crypto", "std.net", "std.http", "effects", "allocation behavior", "target support", "error behavior", "ownership notes", "example"]) {
       assert.match(stdlib, new RegExp(label));
     }
-    const languageReference = await readDoc("language-reference");
     for (const compileTimeTerm of ["compileTime", "target.pointerWidth", "fieldType", "hasEnumCase", "MET001", "integer, `Bool`, and enum static values", "runtime registries", "raw token-string builders"]) {
       assert.match(languageReference, new RegExp(compileTimeTerm));
     }

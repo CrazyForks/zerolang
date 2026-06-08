@@ -290,8 +290,8 @@ when you need explicit `Fs`, `File`, and `owned<File>` resource examples.
 
 ## Organize A Package
 
-A package has a `zero.toml` manifest and source projections under
-`src/`.
+A package has a `zero.toml` manifest, a checked-in `zero.graph` store, and
+source projections under `src/`.
 
 ```toml
 [package]
@@ -302,6 +302,10 @@ version = "0.1.0"
 kind = "exe"
 main = "src/main.0"
 ```
+
+The `main` path names the projection used for source spans and human
+import/export. It does not make `src/main.0` the normal package compile input;
+`zero check examples/systems-package` reads the package graph store.
 
 `examples/systems-package/src/main.0` imports modules and local declarations:
 

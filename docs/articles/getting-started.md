@@ -167,7 +167,8 @@ zero query --find write .
 ```
 
 The manifest records package metadata; the checked-in `zero.graph` beside it is
-the compiler input:
+the compiler input. The target `main` field points at the projection path used
+for source maps and human import/export:
 
 ```toml
 [package]

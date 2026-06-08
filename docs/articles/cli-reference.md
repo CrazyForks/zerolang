@@ -416,6 +416,10 @@ document symbols, and quick-fix code actions surfaced from `zero fix` for
 
 ## Utility Commands
 
+For new agent-authored packages, prefer `zero init`; it creates the manifest and
+`zero.graph` compiler input without materializing a `.0` projection. Use
+`zero new` only when you explicitly want a projection-oriented starter template.
+
 ```sh
 zero --version [--json]
 zero new cli|lib|package <path>
