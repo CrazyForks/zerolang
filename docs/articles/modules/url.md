@@ -33,7 +33,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: `Maybe` helpers return null on malformed input or insufficient storage
 - ownership notes: borrowed slices point into the input; encoded output points into caller storage
-- examples: `conformance/native/pass/std-codec-json-url.0`
+- examples: `conformance/native/pass/std-codec-json-url.graph`
 
 ## Example
 

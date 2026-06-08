@@ -28,7 +28,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: `Maybe` helpers return null on malformed or missing fields
 - ownership notes: returned raw fields borrow from the input span; decoded strings borrow from the caller buffer
-- examples: `conformance/native/pass/std-toml-basic.0`
+- examples: `conformance/native/pass/std-toml-basic.graph`
 
 ## Example
 

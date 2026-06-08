@@ -25,7 +25,7 @@ Metadata labels:
 - target support: hash helpers are target-neutral; secure random requires a rand-capable target
 - error behavior: infallible helpers
 - ownership notes: borrows caller-provided byte spans
-- example: `examples/std-platform.0`
+- example: `examples/std-platform.graph`
 
 ## Example
 

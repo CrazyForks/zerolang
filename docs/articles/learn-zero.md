@@ -234,7 +234,8 @@ Matches must be exhaustive. If a choice has `ok` and `err`, handle both. Put the
 
 ## Import Standard Library Modules
 
-Use `use` to import standard library modules. `examples/codec-varint.0` uses `std.codec`:
+Use `use` to import standard library modules. `examples/codec-varint.graph`
+uses `std.codec`:
 
 ```zero
 use std.codec
@@ -248,7 +249,7 @@ pub fn main(world: World) -> Void raises {
 }
 ```
 
-`examples/parse-cursor.0` uses `std.parse`:
+`examples/parse-cursor.graph` uses `std.parse`:
 
 ```zero
 use std.parse

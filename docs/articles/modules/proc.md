@@ -25,7 +25,7 @@ Metadata labels:
 - target support: host
 - error behavior: `spawn` returns `ProcStatus`; `exitCode` is infallible
 - ownership notes: no ownership transfer in the current status model
-- example: `examples/std-platform.0`
+- example: `examples/std-platform.graph`
 
 ## Example
 

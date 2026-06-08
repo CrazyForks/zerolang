@@ -90,11 +90,11 @@ The graph gives agents explicit handles such as node IDs, graph hashes, resolved
 
 ## Checked Graph Edits
 
-For graph-first packages, graph artifacts, and projections with graph sidecars,
-`zero patch` applies checked edits to the graph and rewrites the target only
-after validation. The command is intended to collapse the normal agent loop of
-edit, validate, export projections when needed, check, and fix into a
-compiler-mediated operation:
+For graph-first packages, direct `.graph` examples, and derived graph
+artifacts, `zero patch` applies checked edits to the graph and rewrites the
+target only after validation. The command is intended to collapse the normal
+agent loop of edit, validate, export projections when needed, check, and fix
+into a compiler-mediated operation:
 
 ```bash
 zero patch examples/hello.graph \

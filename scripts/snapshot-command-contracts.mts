@@ -4460,6 +4460,9 @@ const languageSkill = json(["skills", "get", "language", "--json"]).body;
 assert.equal(languageSkill.success, true);
 assert.match(languageSkill.data[0].content, /# zerolang Language/);
 assert.match(languageSkill.data[0].content, /pub fn main/);
+assert.match(languageSkill.data[0].content, /human-readable projection syntax/);
+assert.match(languageSkill.data[0].content, /not the package compiler input/);
+assert.doesNotMatch(languageSkill.data[0].content, /\.0 source is canonical text/);
 for (const typeName of [
   "Bool",
   "Void",

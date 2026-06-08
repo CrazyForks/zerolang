@@ -31,7 +31,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: infallible
 - ownership notes: no ownership transfer
-- example: `examples/std-testing-log.0`
+- example: `examples/std-testing-log.graph`
 
 ## Example
 

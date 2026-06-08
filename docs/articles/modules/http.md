@@ -108,19 +108,19 @@ Metadata labels:
   transport failures
 - ownership notes: HTTP helpers borrow network capability metadata and write
   only to caller-owned buffers
-- examples: `conformance/native/pass/std-http-metadata-neutral.0`,
-  `conformance/native/pass/std-http-fetch.0`,
-  `conformance/native/pass/std-http-errors.0`,
-  `conformance/native/pass/std-http-response-helpers.0`,
-  `conformance/native/pass/std-http-api-helpers.0`,
-  `conformance/native/pass/std-http-cors-helpers.0`,
-  `conformance/native/pass/std-http-auth-helpers.0`,
-  `conformance/native/pass/std-http-path-segments.0`,
-  `examples/json-api-client.0`,
-  `examples/json-api-router.0`,
-  `examples/std-http-json.0`,
-  `examples/std-http-request.0`,
-  `examples/std-http-headers.0`
+- examples: `conformance/native/pass/std-http-metadata-neutral.graph`,
+  `conformance/native/pass/std-http-fetch.graph`,
+  `conformance/native/pass/std-http-errors.graph`,
+  `conformance/native/pass/std-http-response-helpers.graph`,
+  `conformance/native/pass/std-http-api-helpers.graph`,
+  `conformance/native/pass/std-http-cors-helpers.graph`,
+  `conformance/native/pass/std-http-auth-helpers.graph`,
+  `conformance/native/pass/std-http-path-segments.graph`,
+  `examples/json-api-client.graph`,
+  `examples/json-api-router.graph`,
+  `examples/std-http-json.graph`,
+  `examples/std-http-request.graph`,
+  `examples/std-http-headers.graph`
 
 ## Example
 

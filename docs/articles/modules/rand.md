@@ -26,7 +26,7 @@ Metadata labels:
 - target support: deterministic source is target-neutral; entropy requires a rand-capable target
 - error behavior: infallible helpers
 - ownership notes: `nextU32` and `nextBool` mutate the caller-owned source
-- example: `examples/std-platform.0`
+- example: `examples/std-platform.graph`
 
 ## Example
 

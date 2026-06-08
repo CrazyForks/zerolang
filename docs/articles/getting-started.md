@@ -133,7 +133,7 @@ projection.
 ## Learn The Core Syntax
 
 The examples are still useful for humans learning how Zero projections read.
-Run the graph sidecars, not the `.0` files:
+Run the graph inputs, not the `.0` projection files:
 
 ```sh
 zero check examples/hello.graph

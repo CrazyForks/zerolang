@@ -42,7 +42,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: `Maybe` helpers return null on failure
 - ownership notes: parsed documents are owned by explicit allocator storage in this compiler slice
-- examples: `examples/std-data-formats.0`, `examples/std-json-bytes.0`, `conformance/native/pass/std-codec-json-url.0`
+- examples: `examples/std-data-formats.graph`, `examples/std-json-bytes.graph`, `conformance/native/pass/std-codec-json-url.graph`
 
 ## Example
 

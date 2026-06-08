@@ -5,7 +5,10 @@ description: Compact zerolang syntax and semantics guide for agents.
 
 # zerolang Language
 
-Use this when writing or reviewing `.0` source, especially if the model has no prior zerolang training. `.0` source is canonical text: regular declarations, typed bindings, braces, infix operators, and explicit calls.
+Use this when reading Zero projection syntax, reviewing exported `.0` files, or
+explaining code that humans may edit. For agent-authored changes, use the graph
+workflow and patch `zero.graph`; `.0` is the human-readable projection syntax,
+not the package compiler input.
 
 ## Minimal Program
 
@@ -31,7 +34,9 @@ Top-level declarations include:
 - `pub fn main(world: World) -> Void raises { ... }`
 - `test "name" { expect true }`
 
-Use `.0` for source files.
+Use `.0` for human-readable projection files. For package checks, runs, builds,
+and tests, pass the package, manifest, `.graph` store, or derived graph artifact
+instead of treating `.0` as the normal compiler input.
 
 ## Values, Mutation, And Control Flow
 

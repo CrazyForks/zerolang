@@ -23,7 +23,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: returns `null` when the buffer is too small or a value cannot be JSON-escaped
 - ownership notes: borrows returned bytes from caller-owned storage
-- example: `examples/std-testing-log.0`
+- example: `examples/std-testing-log.graph`
 
 ## Example
 

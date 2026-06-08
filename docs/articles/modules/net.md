@@ -29,7 +29,7 @@ Metadata labels:
 - target support: address helpers are target-neutral; host/connect/listen require a net-capable target
 - error behavior: connection helpers return `Maybe`
 - ownership notes: no stream ownership transfer in the current handle model
-- example: `conformance/native/pass/std-net-http-breadth.0`
+- example: `conformance/native/pass/std-net-http-breadth.graph`
 
 ## Example
 

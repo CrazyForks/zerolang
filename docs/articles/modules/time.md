@@ -47,7 +47,7 @@ Metadata labels:
 - target support: duration math is target-neutral; clock reads require a time-capable target
 - error behavior: infallible helpers
 - ownership notes: no ownership transfer
-- example: `examples/std-platform.0`
+- example: `examples/std-platform.graph`
 
 ## Example
 

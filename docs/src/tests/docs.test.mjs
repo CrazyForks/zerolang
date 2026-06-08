@@ -131,6 +131,7 @@ describe("docs registry", () => {
       assert.match(moduleDoc, /This module is graph-backed/, `${moduleDocInfo.sourcePath} should be graph-first`);
       assert.match(moduleDoc, /human-readable projection/, `${moduleDocInfo.sourcePath} should explain .0 projection snippets`);
       assert.match(moduleDoc, /zero query <graph-input>/, `${moduleDocInfo.sourcePath} should point agents at graph inspection`);
+      assert.doesNotMatch(moduleDoc, /`(?:examples|conformance)\/[^`]+\.0`/, `${moduleDocInfo.sourcePath} should link graph inputs`);
     }
     for (const moduleSlug of ["module-io", "module-rand", "module-proc", "module-crypto", "module-net", "module-http"]) {
       const moduleDoc = await readDoc(moduleSlug);
@@ -244,6 +245,9 @@ describe("docs registry", () => {
     for (const releaseLoopTerm of ["Native Workflow Coverage", "arguments and environment", "filesystem resources", "deterministic exit status", "unhandled error exit path"]) {
       assert.match(examples, new RegExp(releaseLoopTerm));
     }
+    const examplesReadme = await readFile(resolve(docsSiteRoot, "..", "examples/README.md"), "utf8");
+    assert.match(examplesReadme, /commands below use `\.graph` stores/);
+    assert.doesNotMatch(examplesReadme, /\| `[^`]+\.0` \|/);
     const learnZeroCleanup = await readDoc("learn-zero");
     assert.match(learnZeroCleanup, /canonical non-raising `fn drop\(self: mutref<Self>\) -> Void`/);
     assert.doesNotMatch(learnZeroCleanup, /More advanced ownership and `?\.drop\(\)`? behavior is still implementation work/);

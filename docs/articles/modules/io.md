@@ -33,7 +33,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: cursor writes return `Maybe.none` on overflow; copy returns the copied byte count
 - ownership notes: borrows or writes caller-owned storage
-- example: `examples/std-path-io.0`
+- example: `examples/std-path-io.graph`
 
 ## Example
 
