@@ -575,7 +575,8 @@ static void pgt_print_json(const ZProgramGraphTestCommand *command, const Source
   zbuf_append(&buf, run && run->failed == 0 ? "true" : "false");
   zbuf_append(&buf, ",\n  \"sourceFile\": ");
   pgt_append_json_string(&buf, input ? input->source_file : "");
-  pgt_append_graph_json(&buf, command, input, projection_state, graph && graph->canonical_source);
+  bool canonical_source = graph && graph->canonical_source && !(command && command->repository_graph_input);
+  pgt_append_graph_json(&buf, command, input, projection_state, canonical_source);
   zbuf_append(&buf, ",\n  \"target\": ");
   pgt_append_json_string(&buf, target ? target->name : z_host_target());
   zbuf_append(&buf, ",\n  \"testBackend\": \"direct-program-graph\",\n  \"generatedCBytes\": 0,\n  \"cBridgeFallback\": false");

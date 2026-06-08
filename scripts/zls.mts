@@ -477,7 +477,9 @@ async function selfTest() {
   assert(definition({ textDocument: { uri }, position: { line: 0, character: 9 } }).uri === uri);
   assert(references({ textDocument: { uri }, position: { line: 0, character: 9 } }).length >= 1);
   assert(rename({ textDocument: { uri }, position: { line: 0, character: 9 }, newName: "sum" }).changes[uri].length >= 1);
-  const actions = await codeActions({ textDocument: { uri: pathToUri("conformance/native/fail/mem-copy-immutable-dst.0") }, context: { diagnostics: [] } });
+  const mutableFixPath = join(dir, "mutable-fix.0");
+  await writeFile(mutableFixPath, "pub fn main() -> Void {\n    let dst: [2]u8 = [0_u8; 2]\n    let src: [2]u8 = [1_u8; 2]\n    std.mem.copy(dst, src)\n}\n");
+  const actions = await codeActions({ textDocument: { uri: pathToUri(mutableFixPath) }, context: { diagnostics: [] } });
   assert(actions.some((action) => action.data.id === "make-binding-mutable"));
   const targetActions = await codeActions({
     textDocument: { uri },

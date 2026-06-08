@@ -363,9 +363,9 @@ The checker rejects unavailable capabilities, such as hosted `std.fs` on target-
 Diagnostics are stable enough for humans and agents:
 
 ```sh
-zero check --json conformance/check/fail/unknown-name.0
+zero explain --json NAM003
 zero explain NAM003
-zero fix --plan --json conformance/check/fail/unknown-name.0
+zero query examples/hello.0
 ```
 
 Each JSON diagnostic includes a code, span, expected/actual fields, help, fix safety, and repair metadata.

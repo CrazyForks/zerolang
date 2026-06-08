@@ -13,6 +13,7 @@ typedef struct {
   bool allow_internal_symbols;
   SourceInput *source;
   const char *artifact_path;
+  const char *current_module_name;
   const char *current_module_path;
   size_t module_count;
   int synthetic_line;
@@ -118,6 +119,25 @@ static void lower_source_push_module(SourceInput *input, const char *name, const
   input->module_names[input->module_count] = z_strdup(name && name[0] ? name : "main");
   input->module_paths[input->module_count] = z_strdup(path && path[0] ? path : (input->source_file ? input->source_file : ""));
   input->module_count++;
+}
+
+static void lower_source_push_import_edge(SourceInput *input, const char *from, const char *to, const char *resolved_path, const char *source_path, int line, int column, int length) {
+  if (!input) return;
+  input->import_from = z_checked_reallocarray(input->import_from, input->import_edge_count + 1, sizeof(char *));
+  input->import_to = z_checked_reallocarray(input->import_to, input->import_edge_count + 1, sizeof(char *));
+  input->import_paths = z_checked_reallocarray(input->import_paths, input->import_edge_count + 1, sizeof(char *));
+  input->import_source_paths = z_checked_reallocarray(input->import_source_paths, input->import_edge_count + 1, sizeof(char *));
+  input->import_lines = z_checked_reallocarray(input->import_lines, input->import_edge_count + 1, sizeof(int));
+  input->import_columns = z_checked_reallocarray(input->import_columns, input->import_edge_count + 1, sizeof(int));
+  input->import_lengths = z_checked_reallocarray(input->import_lengths, input->import_edge_count + 1, sizeof(int));
+  input->import_from[input->import_edge_count] = z_strdup(from ? from : "");
+  input->import_to[input->import_edge_count] = z_strdup(to ? to : "");
+  input->import_paths[input->import_edge_count] = z_strdup(resolved_path ? resolved_path : "");
+  input->import_source_paths[input->import_edge_count] = z_strdup(source_path ? source_path : "");
+  input->import_lines[input->import_edge_count] = line > 0 ? line : 1;
+  input->import_columns[input->import_edge_count] = column > 0 ? column : 1;
+  input->import_lengths[input->import_edge_count] = length > 0 ? length : 1;
+  input->import_edge_count++;
 }
 
 static void lower_source_push_line(GraphLower *lower, const ZProgramGraphNode *node) {
@@ -892,17 +912,31 @@ static void lower_import(GraphLower *lower, Program *program, const ZProgramGrap
     lower_fail(lower, node, "program graph import alias is not valid Zero identifier syntax", "identifier", alias, "use an identifier alias or clear the alias value");
     return;
   }
-  if (!lower_module_is_stdlib(module) && !lower_find_module_named(lower->graph, module)) {
+  const ZProgramGraphNode *target_module = lower_module_is_stdlib(module) ? NULL : lower_find_module_named(lower->graph, module);
+  if (!lower_module_is_stdlib(module) && !target_module) {
     lower_fail(lower, node, "program graph import target module is missing", "Module node for package-local import or std.* import", module, "add the imported module to the artifact or remove the import");
     return;
   }
+  int original_column = node && node->column > 0 ? node->column : 1;
+  int canonical_length = 4 + (int)strlen(module ? module : "");
+  int original_line = node && node->line > 0 ? node->line : 1;
   lower_push_use(&program->use_imports, (UseImport){
     .module = z_strdup(module),
     .alias = alias ? z_strdup(alias) : NULL,
     .line = lower_line(lower, node),
-    .column = node->column > 0 ? node->column : 1,
-    .end_column = node->column > 0 ? node->column : 1,
+    .column = original_column,
+    .end_column = original_column + canonical_length,
   });
+  if (lower && lower->source) {
+    lower_source_push_import_edge(lower->source,
+                                  lower->current_module_name ? lower->current_module_name : "main",
+                                  module,
+                                  target_module && target_module->path ? target_module->path : "",
+                                  node && node->path ? node->path : lower->current_module_path,
+                                  original_line,
+                                  original_column,
+                                  canonical_length);
+  }
 }
 
 static void lower_c_import(GraphLower *lower, Program *program, const ZProgramGraphNode *node) {
@@ -1046,6 +1080,7 @@ static void lower_top_level_edges(GraphLower *lower, Program *program, const ZPr
 
 static void lower_module(GraphLower *lower, Program *program, const ZProgramGraphNode *module) {
   bool previous_allow_internal_symbols = lower->allow_internal_symbols;
+  const char *previous_module_name = lower->current_module_name;
   const char *previous_module_path = lower->current_module_path;
   ZBuf module_path;
   zbuf_init(&module_path);
@@ -1059,6 +1094,7 @@ static void lower_module(GraphLower *lower, Program *program, const ZProgramGrap
     }
   }
   lower->allow_internal_symbols = previous_allow_internal_symbols || lower_embedded_std_module(module);
+  lower->current_module_name = module && module->name && module->name[0] ? module->name : "main";
   lower->current_module_path = module_path.data;
   lower_top_level_edges(lower, program, module, "cImport");
   lower_top_level_edges(lower, program, module, "import");
@@ -1070,6 +1106,7 @@ static void lower_module(GraphLower *lower, Program *program, const ZProgramGrap
   lower_top_level_edges(lower, program, module, "choice");
   lower_top_level_edges(lower, program, module, "function");
   lower->allow_internal_symbols = previous_allow_internal_symbols;
+  lower->current_module_name = previous_module_name;
   lower->current_module_path = previous_module_path;
   zbuf_free(&module_path);
 }

@@ -58,7 +58,7 @@ Build JSON reports `profileSemantics` and `profileBudget`. Size JSON adds `sizeB
 | `allocator-collections.0` | `NullAlloc`, explicit allocator handles, fixed-buffer allocation, `Vec`, and fixed-storage collections without a global heap | `bin/zero check examples/allocator-collections.0 && bin/zero mem --json examples/allocator-collections.0` |
 | `const-arithmetic.0` | top-level deterministic `const` values and arithmetic | `bin/zero check examples/const-arithmetic.0` |
 | `compile-time-v1.0` | bounded `meta`, target/type reflection facts, Bool and enum static values, and compile-time JSON metadata | `bin/zero check --json examples/compile-time-v1.0` |
-| `generic-pair.0` | multi-parameter generic types and generic function returns | `bin/zero check examples/generic-pair.0` |
+| `generic-pair.0` | multi-parameter generic type storage and field access | `bin/zero run examples/generic-pair.0` |
 | `static-value-params.0` | integer static value parameters and fixed-capacity generic storage | `bin/zero check examples/static-value-params.0` |
 | `fixed-vec.0` | field defaults, constructor-style type methods, receiver calls, `Self`, and static capacity | `bin/zero check examples/fixed-vec.0` |
 | `type-alias.0` | `alias Name ExistingType` as compile-time spelling | `bin/zero check examples/type-alias.0` |

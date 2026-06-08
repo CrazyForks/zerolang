@@ -5,3 +5,6 @@ version = "0.2.0"
 [targets.cli]
 kind = "exe"
 main = "src/main.0"
+
+[repositoryGraph]
+compilerInput = true

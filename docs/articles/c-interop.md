@@ -21,10 +21,11 @@ The ABI dump reports exported C symbols and a small generated header text block.
 For `conformance/native/pass/c-abi-export.0`, `generatedHeader.available` is
 `true` and the header contains the `zero_add` declaration.
 
-Invalid export surfaces fail before C emission:
+Invalid export surfaces fail before C emission; use the diagnostic explanation
+when you need the current repair contract:
 
 ```sh
-bin/zero check --json conformance/native/fail/bad-c-export.0
+bin/zero explain ABI001
 ```
 
 Header imports expose typed metadata and scalar C functions are callable through

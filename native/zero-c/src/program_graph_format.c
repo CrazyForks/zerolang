@@ -876,11 +876,11 @@ bool z_program_graph_load(const char *path, ZProgramGraph *out, ZDiag *diag) {
 bool z_program_graph_save_format(const char *path, const ZProgramGraph *graph, ZProgramGraphStoreFormat format, ZDiag *diag) {
   ZProgramGraphValidation validation = {0};
   if (!z_program_graph_validate(graph, &validation)) return graph_format_storage_validation_fail(path, &validation, diag);
-  if (format == Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY) {
-    return z_program_graph_store_write_generated_path_format(path, graph, Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY, NULL, diag);
-  }
   ZProgramGraph storage = graph ? *graph : (ZProgramGraph){0};
   storage.canonical_source = false;
+  if (format == Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY) {
+    return z_program_graph_store_write_generated_path_format(path, &storage, Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY, NULL, diag);
+  }
   ZBuf dump; zbuf_init(&dump);
   z_program_graph_append_dump(&dump, &storage, &validation);
   ZProgramGraph parsed;

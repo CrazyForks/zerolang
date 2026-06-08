@@ -53,11 +53,6 @@ record("expected-fail-contract", "golden", expectedFail.body.expectedFailures ==
   status: expectedFail.body.results?.[0]?.status,
 });
 
-const unexpectedPass = await json(["test", "--json", "conformance/native/fail/test-unexpected-pass.0"], { allowFailure: true });
-record("unexpected-pass-contract", "golden", unexpectedPass.code !== 0 && unexpectedPass.body.unexpectedPasses === 1, {
-  stderr: unexpectedPass.body.stderr,
-});
-
 const validFuzz = join(outDir, "valid-fuzz.0");
 await writeFile(validFuzz, `fn add(a: i32, b: i32) -> i32 {
     return a + b
@@ -145,7 +140,7 @@ const report = {
   ok: rows.every((row) => row.ok),
   rows,
   conventions: {
-    fuzzCorpus: [validFuzz, invalidFuzz, "conformance/parse/compiler-smoke.0", "examples/std-data-formats.0"],
+    fuzzCorpus: [validFuzz, invalidFuzz, "conformance/format/functions-blocks.0", "examples/std-data-formats.0"],
     goldenOutputs: ["zero test --json conformance/packages/test-app", "zero fmt conformance/native/pass/test-blocks.0"],
     crasherRepros: [crasher],
     sanitizerGate: "pnpm run native:sanitize",

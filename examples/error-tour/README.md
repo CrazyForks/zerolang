@@ -7,7 +7,7 @@ These examples are intentionally copyable diagnostics and repairs for the curren
 Bad:
 
 ```sh
-bin/zero check --json --target linux-musl-x64 conformance/native/fail/std-fs-target-unsupported.0
+bin/zero check --json --target linux-musl-x64 conformance/common/fail/unsupported-target-feature.0
 ```
 
 Good:
@@ -21,7 +21,7 @@ bin/zero build --target linux-musl-x64 examples/memory-package --out .zero/out/m
 Bad:
 
 ```sh
-bin/zero check --json conformance/native/fail/mem-copy-immutable-dst.0
+bin/zero explain TYP009
 ```
 
 Good:
@@ -35,7 +35,7 @@ bin/zero check conformance/native/pass/std-mem-copy-fill.0
 Bad:
 
 ```sh
-bin/zero check --json conformance/native/fail/std-fs-create-error-set-mismatch.0
+bin/zero explain ERR002
 ```
 
 Good:
@@ -49,7 +49,7 @@ bin/zero check conformance/native/pass/std-fs-fallible-resources.0
 Bad:
 
 ```sh
-bin/zero check --json conformance/native/fail/std-fs-unchecked-resource-fallible.0
+bin/zero explain ERR003
 ```
 
 Good:
@@ -62,5 +62,5 @@ bin/zero check conformance/native/pass/std-fs-fallible-resources.0
 
 ```sh
 bin/zero explain TAR002
-bin/zero fix --plan --json --target linux-musl-x64 conformance/native/fail/std-fs-target-unsupported.0
+bin/zero fix --plan --json --target linux-musl-x64 conformance/common/fail/unsupported-target-feature.0
 ```

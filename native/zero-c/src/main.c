@@ -29,6 +29,7 @@
 #include "program_graph_size.h"
 #include "program_graph_source_map.h"
 #include "program_graph_store.h"
+#include "program_graph_store_binary.h"
 #include "program_graph_store_tables.h"
 #include "program_graph_test.h"
 #include "program_graph_view.h"
@@ -1057,6 +1058,21 @@ typedef struct {
 } MemoryScope;
 
 typedef struct {
+  bool present;
+  size_t owner_id;
+  size_t binding_id;
+  size_t byte_len;
+} MemoryIrStorageRef;
+
+typedef struct {
+  const IrFunction *fun;
+  MemoryIrStorageRef *aliases;
+  size_t alias_len;
+  size_t owner_id;
+  const ZTargetInfo *target;
+} MemoryIrScope;
+
+typedef struct {
   size_t stack_estimate_bytes;
   size_t readonly_literal_bytes;
   size_t fixed_allocator_count;
@@ -1335,6 +1351,13 @@ static bool memory_type_is_span_view(const char *type) {
          strncmp(type, "MutSpan<", strlen("MutSpan<")) == 0;
 }
 
+static bool memory_name_has_base(const char *name, const char *base) {
+  if (!name || !base) return false;
+  size_t len = strlen(base);
+  if (strncmp(name, base, len) != 0) return false;
+  return name[len] == '\0' || name[len] == '_';
+}
+
 static void memory_model_collect_expr(const Expr *expr, MemoryScope *scope, MemoryModelSummary *summary);
 
 static void memory_model_note_fixed_collection_storage(MemoryModelSummary *summary, const MemoryScope *scope, const Expr *expr) {
@@ -1477,6 +1500,225 @@ static MemoryModelSummary memory_model_summary_from_program(const Program *progr
   for (size_t i = 0; i < program->functions.len; i++) {
     MemoryScope scope = {.owner_id = i + 1, .target = target};
     memory_model_collect_stmt_vec(&program->functions.items[i].body, &scope, &summary);
+  }
+  return summary;
+}
+
+static size_t memory_ir_type_size(IrTypeKind type, const ZTargetInfo *target) {
+  switch (type) {
+    case IR_TYPE_BOOL:
+    case IR_TYPE_U8: return 1;
+    case IR_TYPE_U16: return 2;
+    case IR_TYPE_I32:
+    case IR_TYPE_U32: return 4;
+    case IR_TYPE_USIZE: return (size_t)abi_pointer_size(target);
+    case IR_TYPE_I64:
+    case IR_TYPE_U64: return 8;
+    default: return 0;
+  }
+}
+
+static bool memory_ir_function_is_stdlib(const IrFunction *fun) {
+  return fun && fun->name && strncmp(fun->name, "__zero_std_", strlen("__zero_std_")) == 0;
+}
+
+static MemoryIrStorageRef memory_ir_empty_storage_ref(void) {
+  return (MemoryIrStorageRef){0};
+}
+
+static MemoryIrStorageRef memory_ir_local_storage_ref(const MemoryIrScope *scope, unsigned local_index, size_t byte_len, size_t binding_extra) {
+  if (!scope || !scope->fun || local_index >= scope->fun->local_len || byte_len == 0) return memory_ir_empty_storage_ref();
+  return (MemoryIrStorageRef){
+    .present = true,
+    .owner_id = scope->owner_id,
+    .binding_id = ((size_t)local_index + 1) * 1315423911u + binding_extra,
+    .byte_len = byte_len
+  };
+}
+
+static const IrFunction *memory_ir_call_callee(const IrProgram *ir, const IrValue *value) {
+  if (!ir || !value || value->kind != IR_VALUE_CALL || value->callee_index >= ir->function_len) return NULL;
+  return &ir->functions[value->callee_index];
+}
+
+static MemoryIrStorageRef memory_ir_storage_ref_for_value(const IrProgram *ir, const MemoryIrScope *scope, const IrValue *value);
+
+static MemoryIrStorageRef memory_ir_storage_ref_for_array_view(const MemoryIrScope *scope, const IrValue *value) {
+  if (!scope || !scope->fun || !value || value->array_index >= scope->fun->local_len) return memory_ir_empty_storage_ref();
+  const IrLocal *local = &scope->fun->locals[value->array_index];
+  if (!local->is_array && !local->is_record) return memory_ir_empty_storage_ref();
+  size_t byte_len = local->byte_size;
+  if (value->data_len > 0) {
+    size_t element_size = memory_ir_type_size(value->element_type, scope->target);
+    if (element_size > 0) byte_len = (size_t)value->data_len * element_size;
+  }
+  return memory_ir_local_storage_ref(scope, value->array_index, byte_len, (size_t)value->field_offset);
+}
+
+static MemoryIrStorageRef memory_ir_storage_ref_for_value(const IrProgram *ir, const MemoryIrScope *scope, const IrValue *value) {
+  if (!value || !scope) return memory_ir_empty_storage_ref();
+  switch (value->kind) {
+    case IR_VALUE_ARRAY_BYTE_VIEW:
+      return memory_ir_storage_ref_for_array_view(scope, value);
+    case IR_VALUE_LOCAL:
+      if (value->local_index < scope->alias_len && scope->aliases[value->local_index].present) return scope->aliases[value->local_index];
+      if (scope->fun && value->local_index < scope->fun->local_len) {
+        const IrLocal *local = &scope->fun->locals[value->local_index];
+        if (local->is_array) return memory_ir_local_storage_ref(scope, value->local_index, local->byte_size, 0);
+      }
+      return memory_ir_empty_storage_ref();
+    case IR_VALUE_BYTE_SLICE:
+    case IR_VALUE_MAYBE_BYTE_VIEW_LITERAL:
+      return memory_ir_storage_ref_for_value(ir, scope, value->left);
+    case IR_VALUE_CALL: {
+      const IrFunction *callee = memory_ir_call_callee(ir, value);
+      if (callee && memory_name_has_base(callee->name, "__zero_std_collections_view") && value->arg_len > 0) {
+        return memory_ir_storage_ref_for_value(ir, scope, value->args[0]);
+      }
+      return memory_ir_empty_storage_ref();
+    }
+    default:
+      return memory_ir_empty_storage_ref();
+  }
+}
+
+static void memory_model_note_ir_storage(MemoryModelSummary *summary, MemoryIrStorageRef ref) {
+  if (!summary) return;
+  if (!ref.present || ref.byte_len == 0) {
+    summary->unknown_capacity_sites++;
+    return;
+  }
+  for (size_t i = 0; i < summary->collection_storage_count; i++) {
+    if (summary->collection_storages[i].owner_id == ref.owner_id &&
+        summary->collection_storages[i].binding_id == ref.binding_id) return;
+  }
+  if (summary->collection_storage_count >= sizeof(summary->collection_storages) / sizeof(summary->collection_storages[0])) {
+    summary->unknown_capacity_sites++;
+    return;
+  }
+  summary->collection_storages[summary->collection_storage_count++] = (MemoryArrayBinding){
+    .byte_len = ref.byte_len,
+    .owner_id = ref.owner_id,
+    .binding_id = ref.binding_id
+  };
+  summary->fixed_collection_capacity_bytes += ref.byte_len;
+}
+
+static void memory_model_note_ir_allocator_storage(MemoryModelSummary *summary, MemoryIrStorageRef ref, bool arena) {
+  if (!summary) return;
+  if (!ref.present || ref.byte_len == 0) {
+    summary->unknown_capacity_sites++;
+    return;
+  }
+  if (arena) summary->arena_capacity_bytes += ref.byte_len;
+  else summary->fixed_allocator_capacity_bytes += ref.byte_len;
+}
+
+static bool memory_ir_collection_op(const char *name, const char **op) {
+  if (op) *op = NULL;
+  if (memory_name_has_base(name, "__zero_std_collections_push")) { if (op) *op = "push"; return true; }
+  if (memory_name_has_base(name, "__zero_std_collections_append")) { if (op) *op = "append"; return true; }
+  if (memory_name_has_base(name, "__zero_std_collections_view")) { if (op) *op = "view"; return true; }
+  if (memory_name_has_base(name, "__zero_std_collections_contains")) { if (op) *op = "query"; return true; }
+  if (memory_name_has_base(name, "__zero_std_collections_count")) { if (op) *op = "query"; return true; }
+  if (memory_name_has_base(name, "__zero_std_collections_remove_swap")) { if (op) *op = "mutation"; return true; }
+  if (memory_name_has_base(name, "__zero_std_collections_move_to_front")) { if (op) *op = "mutation"; return true; }
+  return false;
+}
+
+static void memory_model_collect_ir_value(const IrProgram *ir, MemoryIrScope *scope, const IrValue *value, MemoryModelSummary *summary, bool count_stdlib_calls);
+
+static void memory_model_collect_ir_call(const IrProgram *ir, MemoryIrScope *scope, const IrValue *value, MemoryModelSummary *summary, bool count_stdlib_calls) {
+  if (!ir || !scope || !value || !summary) return;
+  const IrFunction *callee = memory_ir_call_callee(ir, value);
+  const char *op = NULL;
+  if (count_stdlib_calls && callee && memory_ir_collection_op(callee->name, &op)) {
+    if (strcmp(op, "push") == 0) {
+      summary->collection_push_calls++;
+      summary->collection_mutation_calls++;
+    } else if (strcmp(op, "append") == 0) {
+      summary->collection_append_calls++;
+      summary->collection_mutation_calls++;
+    } else if (strcmp(op, "view") == 0) {
+      summary->collection_view_calls++;
+    } else if (strcmp(op, "query") == 0) {
+      summary->collection_query_calls++;
+    } else if (strcmp(op, "mutation") == 0) {
+      summary->collection_mutation_calls++;
+    }
+    memory_model_note_ir_storage(summary, value->arg_len > 0 ? memory_ir_storage_ref_for_value(ir, scope, value->args[0]) : memory_ir_empty_storage_ref());
+  }
+}
+
+static void memory_model_collect_ir_value(const IrProgram *ir, MemoryIrScope *scope, const IrValue *value, MemoryModelSummary *summary, bool count_stdlib_calls) {
+  if (!value || !summary) return;
+  switch (value->kind) {
+    case IR_VALUE_STRING_LITERAL:
+      summary->readonly_literal_bytes += value->data_len + 1;
+      break;
+    case IR_VALUE_VEC_INIT: {
+      summary->vec_count++;
+      MemoryIrStorageRef ref = memory_ir_storage_ref_for_value(ir, scope, value->left);
+      if (ref.present && ref.byte_len > 0) summary->vec_capacity_bytes += ref.byte_len;
+      else summary->unknown_capacity_sites++;
+      break;
+    }
+    case IR_VALUE_VEC_PUSH:
+      summary->vec_push_calls++;
+      break;
+    case IR_VALUE_VEC_LEN:
+      summary->vec_len_calls++;
+      break;
+    case IR_VALUE_VEC_CAPACITY:
+      summary->vec_capacity_calls++;
+      break;
+    case IR_VALUE_FIXED_BUF_ALLOC:
+      summary->fixed_allocator_count++;
+      memory_model_note_ir_allocator_storage(summary, memory_ir_storage_ref_for_value(ir, scope, value->left), false);
+      break;
+    case IR_VALUE_ALLOC_BYTES:
+      summary->alloc_bytes_calls++;
+      if (value->left && value->left->kind == IR_VALUE_INT) summary->allocation_requested_bytes += (size_t)value->left->int_value;
+      break;
+    case IR_VALUE_CALL:
+      memory_model_collect_ir_call(ir, scope, value, summary, count_stdlib_calls);
+      break;
+    default:
+      break;
+  }
+  memory_model_collect_ir_value(ir, scope, value->left, summary, count_stdlib_calls);
+  memory_model_collect_ir_value(ir, scope, value->right, summary, count_stdlib_calls);
+  memory_model_collect_ir_value(ir, scope, value->index, summary, count_stdlib_calls);
+  for (size_t i = 0; i < value->arg_len; i++) memory_model_collect_ir_value(ir, scope, value->args[i], summary, count_stdlib_calls);
+}
+
+static void memory_model_collect_ir_instrs(const IrProgram *ir, MemoryIrScope *scope, const IrInstr *instrs, size_t len, MemoryModelSummary *summary, bool count_stdlib_calls) {
+  for (size_t i = 0; i < len; i++) {
+    const IrInstr *instr = &instrs[i];
+    memory_model_collect_ir_value(ir, scope, instr->value, summary, count_stdlib_calls);
+    memory_model_collect_ir_value(ir, scope, instr->index, summary, count_stdlib_calls);
+    if (instr->kind == IR_INSTR_LOCAL_SET && instr->local_index < scope->alias_len) {
+      scope->aliases[instr->local_index] = memory_ir_storage_ref_for_value(ir, scope, instr->value);
+    }
+    memory_model_collect_ir_instrs(ir, scope, instr->then_instrs, instr->then_len, summary, count_stdlib_calls);
+    memory_model_collect_ir_instrs(ir, scope, instr->else_instrs, instr->else_len, summary, count_stdlib_calls);
+  }
+}
+
+static MemoryModelSummary memory_model_summary_from_ir(const IrProgram *ir, const ZTargetInfo *target) {
+  MemoryModelSummary summary = {0};
+  if (!ir) return summary;
+  for (size_t i = 0; i < ir->function_len; i++) {
+    const IrFunction *fun = &ir->functions[i];
+    MemoryIrScope scope = {
+      .fun = fun,
+      .alias_len = fun->local_len,
+      .owner_id = i + 1,
+      .target = target
+    };
+    if (scope.alias_len > 0) scope.aliases = z_checked_calloc(scope.alias_len, sizeof(MemoryIrStorageRef));
+    memory_model_collect_ir_instrs(ir, &scope, fun->instrs, fun->instr_len, &summary, !memory_ir_function_is_stdlib(fun));
+    free(scope.aliases);
   }
   return summary;
 }
@@ -2672,6 +2914,12 @@ static bool graph_native_compiler_input_ok(const ZProgramGraph *graph, const ZPr
   return validate_package_dependencies_for_target(input, target, diag);
 }
 
+static bool graph_stored_compiler_input_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const SourceInput *input, const ZTargetInfo *target, const char *path, ZDiag *diag) {
+  if (!graph_check_resolution_ok(graph, resolution, path, diag)) return false;
+  if (!graph_check_target_capabilities_ok(graph, resolution, target, diag)) return false;
+  return validate_package_dependencies_for_target(input, target, diag);
+}
+
 static void append_repository_graph_default_readiness_json(ZBuf *buf, const char *projection_state, const ZProgramGraphResolutionFacts *resolution, long long load_ms, long long validate_ms, long long resolve_ms, long long check_ms, long long lower_ms, long long cache_ms, bool validation_in_load, bool target_ready, bool graph_mir_used) {
   bool resolution_ok = resolution && resolution->diagnostic_len == 0;
   bool compiler_input_ready = resolution_ok && graph_mir_used && target_ready;
@@ -2731,7 +2979,7 @@ static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetI
   zbuf_appendf(buf, ",\"references\":%zu,\"diagnostics\":%zu}", resolution ? resolution->reference_len : 0, resolution ? resolution->diagnostic_len : 0);
   zbuf_append(buf, ",\"checking\":{\"state\":\"checked-graph-readiness-facts\",\"ok\":");
   zbuf_append(buf, resolution && resolution->diagnostic_len == 0 ? "true" : "false");
-  zbuf_append(buf, ",\"scope\":\"semantic-resolution-package-target-and-graph-mir-readiness\",\"semanticDiagnosticsEnforced\":true,\"authority\":\"ProgramGraphStore\",\"sourceTextAuthority\":false}");
+  zbuf_append(buf, ",\"scope\":\"resolution-package-target-and-graph-mir-readiness\",\"semanticDiagnosticsEnforced\":false,\"semanticDiagnosticsAuthority\":\"stored-typed-graph-facts\",\"authority\":\"ProgramGraphStore\",\"sourceTextAuthority\":false}");
   zbuf_append(buf, ",\"semanticFacts\":");
   z_program_graph_append_semantics_json(buf, store ? &store->graph : NULL);
   zbuf_append(buf, "}");
@@ -3367,7 +3615,7 @@ static const ExplainInfo explain_infos[] = {
     "The selected target does not provide a capability required by this program.",
     "Zero checks required standard-library capabilities against the target manifest so native, web, and embedded builds do not silently inherit host behavior.",
     "Build for a target that provides the required capability, or move that capability behind a target-specific entry point.",
-    "zero check --target linux-musl-x64 conformance/native/fail/std-fs-target-unsupported.0",
+    "zero check --target linux-musl-x64 conformance/common/fail/unsupported-target-feature.0",
     "zero build --target host examples/memory-package --out .zero/out/memory-package",
   },
   {
@@ -3419,6 +3667,16 @@ static const ExplainInfo explain_infos[] = {
     "Pass the exact expected argument type shown in the diagnostic, such as `MutSpan<u8>` for writable byte APIs.",
     "let bytes: [4]u8 = [0, 0, 0, 0]\nlet _filled: usize = std.mem.fill(bytes, 0_u8)",
     "var bytes: [4]u8 = [0, 0, 0, 0]\nlet _filled: usize = std.mem.fill(bytes, 0_u8)",
+  },
+  {
+    "ABI001",
+    "c-abi",
+    "Unsupported C ABI surface",
+    "An exported C function used a parameter, return type, or effect that the native checker cannot expose safely.",
+    "Zero lowers exported C functions to direct native ABI symbols, so the boundary must use explicit scalar, `ref`, or `mutref` types and must not raise.",
+    "Use explicit scalar, `ref`, or `mutref` types at C ABI boundaries and keep exported C functions non-raising.",
+    "export c fn bad(value: String) -> Void raises {\n    raise Io\n}",
+    "export c fn add(left: i32, right: i32) -> i32 {\n    return left + right\n}",
   },
   {
     "TYP023",
@@ -4459,10 +4717,66 @@ static bool path_has_program_graph_storage_header(const char *path) {
   if (!path || !path[0]) return false;
   FILE *file = fopen(path, "rb");
   if (!file) return false;
-  char bytes[sizeof(header) - 1];
+  unsigned char bytes[16];
   size_t read = fread(bytes, 1, sizeof(bytes), file);
   fclose(file);
-  return read == sizeof(bytes) && memcmp(bytes, header, sizeof(bytes)) == 0;
+  return (read >= sizeof(header) - 1 && memcmp(bytes, header, sizeof(header) - 1) == 0) ||
+         z_program_graph_store_bytes_are_binary(bytes, read);
+}
+
+static bool direct_command_requires_graph_input(const char *command) {
+  return command &&
+         (strcmp(command, "check") == 0 ||
+          strcmp(command, "build") == 0 ||
+          strcmp(command, "run") == 0 ||
+          strcmp(command, "test") == 0 ||
+          strcmp(command, "size") == 0 ||
+          strcmp(command, "ship") == 0 ||
+          strcmp(command, "mem") == 0 ||
+          strcmp(command, "doc") == 0 ||
+          strcmp(command, "dev") == 0 ||
+          strcmp(command, "time") == 0 ||
+          strcmp(command, "abi") == 0);
+}
+
+static char *source_sidecar_graph_path(const char *source_path) {
+  if (!is_zero_source_path(source_path)) return NULL;
+  size_t len = strlen(source_path);
+  if (len < 2) return NULL;
+  char *path = z_checked_malloc(len + 5);
+  memcpy(path, source_path, len - 2);
+  memcpy(path + len - 2, ".graph", 7);
+  return path;
+}
+
+static void set_graph_input_required_diag(const char *input_path, const char *graph_path, ZDiag *diag) {
+  if (!diag) return;
+  diag->code = 2002;
+  diag->path = input_path;
+  diag->line = 1;
+  diag->column = 1;
+  diag->length = 1;
+  snprintf(diag->message, sizeof(diag->message), "compiler command requires graph input");
+  snprintf(diag->expected, sizeof(diag->expected), "repository zero.graph store or .graph sidecar for the .0 projection");
+  snprintf(diag->actual, sizeof(diag->actual), "%s", input_path ? input_path : "");
+  snprintf(diag->help, sizeof(diag->help), "%s", graph_path && graph_path[0] ? "run zero import to refresh the graph store or pass the .graph artifact directly" : "run zero import/export through the graph workflow before compiling");
+}
+
+static bool resolve_direct_source_sidecar_graph_input(Command *command, ZDiag *diag) {
+  if (!command || !direct_command_requires_graph_input(command->command) || !is_zero_source_path(command->input)) return true;
+  char *sidecar = source_sidecar_graph_path(command->input);
+  if (!sidecar) {
+    set_graph_input_required_diag(command->input, NULL, diag);
+    return false;
+  }
+  if (!path_has_program_graph_storage_header(sidecar)) {
+    set_graph_input_required_diag(command->input, sidecar, diag);
+    free(sidecar);
+    return false;
+  }
+  command->repository_graph_source_input = command->input;
+  command->input = sidecar;
+  return true;
 }
 
 static bool path_has_program_graph_patch_header(const char *path) {
@@ -6670,14 +6984,14 @@ static bool memory_summary_uses_collections(const MemoryModelSummary *summary) {
                      summary->byte_buf_calls > 0);
 }
 
-static void append_memory_budgets_json(ZBuf *buf, const SourceInput *input, const MemoryModelSummary *summary, bool linear_memory) {
+static void append_memory_budgets_json(ZBuf *buf, const SourceInput *input, const MemoryModelSummary *summary, bool linear_memory, const char *source) {
   size_t stack_bytes = memory_budget_stack_bytes(input, summary);
   size_t max_frame_bytes = memory_budget_max_frame_bytes(input, summary);
   size_t static_bytes = memory_budget_static_bytes(input, summary);
   size_t fixed_capacity = summary ? summary->fixed_allocator_capacity_bytes : 0;
   size_t arena_capacity = summary ? summary->arena_capacity_bytes : 0;
   size_t collection_capacity = summary ? summary->vec_capacity_bytes + summary->fixed_collection_capacity_bytes : 0;
-  zbuf_appendf(buf, "{\"stackBytes\":%zu,\"maxFrameBytes\":%zu,\"staticBytes\":%zu,\"heapBytes\":0,\"arenaBytes\":%zu,\"fixedBufferBytes\":%zu,\"collectionCapacityBytes\":%zu,\"allocatorCapacityBytes\":%zu,\"allocationRequestedBytes\":%zu,\"globalHeapBytes\":0,\"linearMemoryFloorBytes\":%d,\"hiddenHeapAllocation\":false,\"unknownCapacitySites\":%zu,\"source\":\"direct-mir-and-checked-ast\"}",
+  zbuf_appendf(buf, "{\"stackBytes\":%zu,\"maxFrameBytes\":%zu,\"staticBytes\":%zu,\"heapBytes\":0,\"arenaBytes\":%zu,\"fixedBufferBytes\":%zu,\"collectionCapacityBytes\":%zu,\"allocatorCapacityBytes\":%zu,\"allocationRequestedBytes\":%zu,\"globalHeapBytes\":0,\"linearMemoryFloorBytes\":%d,\"hiddenHeapAllocation\":false,\"unknownCapacitySites\":%zu,\"source\":",
                stack_bytes,
                max_frame_bytes,
                static_bytes,
@@ -6688,6 +7002,8 @@ static void append_memory_budgets_json(ZBuf *buf, const SourceInput *input, cons
                summary ? summary->allocation_requested_bytes : 0,
                linear_memory ? 65536 : 0,
                summary ? summary->unknown_capacity_sites : 0);
+  append_json_string(buf, source ? source : "direct-mir-and-checked-ast");
+  zbuf_append(buf, "}");
 }
 
 static void append_allocator_facts_json(ZBuf *buf, const MemoryModelSummary *summary) {
@@ -6786,10 +7102,10 @@ static void append_memory_capability_facts_json(ZBuf *buf, const CapabilitySumma
 }
 
 static void append_direct_memory_json(ZBuf *buf, const SourceInput *input, const Program *program, const ZTargetInfo *target, const Command *command, const IrProgram *ir) {
-  CapabilitySummary caps = program_capabilities(program);
-  HelperUseSummary used_helpers = program_used_helpers(program);
-  MemoryModelSummary memory_summary = memory_model_summary_from_program(program, target);
   bool graph_input = command && z_program_graph_artifact_source_present(&command->graph_source);
+  CapabilitySummary caps = program_or_ir_capabilities(program, graph_input ? ir : NULL);
+  HelperUseSummary used_helpers = program_used_helpers(program);
+  MemoryModelSummary memory_summary = graph_input ? memory_model_summary_from_ir(ir, target) : memory_model_summary_from_program(program, target);
   bool uses_allocator = (input && input->direct_allocator_helper_count > 0) || memory_summary_uses_allocator(&memory_summary);
   bool uses_buffers = (input && input->direct_buffer_helper_count > 0) || memory_summary_uses_collections(&memory_summary);
   bool linear_memory = input && (input->direct_stack_bytes > 0 ||
@@ -6836,7 +7152,7 @@ static void append_direct_memory_json(ZBuf *buf, const SourceInput *input, const
   zbuf_append(buf, ",\"buffer\":");
   append_json_string(buf, uses_buffers ? "explicit collections" : "none");
   zbuf_append(buf, ",\"hiddenHeapAllocation\":false,\"boundsTraps\":\"pay-as-used\"},\n  \"memoryBudgets\": ");
-  append_memory_budgets_json(buf, input, &memory_summary, linear_memory);
+  append_memory_budgets_json(buf, input, &memory_summary, linear_memory, graph_input ? "typed-graph-and-direct-mir" : "direct-mir-and-checked-ast");
   zbuf_append(buf, ",\n  \"allocatorFacts\": ");
   append_allocator_facts_json(buf, &memory_summary);
   zbuf_append(buf, ",\n  \"allocationInstrumentation\": ");
@@ -11241,13 +11557,17 @@ static void append_graph_readiness_json(ZBuf *buf, SourceInput *input, Program *
 static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, const ZTargetInfo *target, const Command *command) {
   CapabilitySummary caps = program_capabilities(program);
   const char *profile = command && command->profile ? command->profile : "release";
+  bool graph_input = command && z_program_graph_artifact_source_present(&command->graph_source);
   size_t public_count = 0, private_count = 0;
   for (size_t i = 0; i < input->symbol_count; i++) {
     if (input->symbol_public[i]) public_count++;
     else private_count++;
   }
   zbuf_append(buf, "{\n  \"schemaVersion\": 1,\n");
-  zbuf_appendf(buf, "  \"sourceFile\": \"%s\",\n", input->source_file);
+  zbuf_append(buf, "  \"sourceFile\": ");
+  append_json_string(buf, input ? input->source_file : "");
+  if (graph_input) append_program_graph_artifact_source_json(buf, &command->graph_source);
+  zbuf_append(buf, ",\n");
   zbuf_append(buf, "  \"targets\": [{\"name\":\"cli\",\"kind\":\"exe\",\"main\":");
   append_json_string(buf, input->source_file);
   zbuf_append(buf, "}],\n");
@@ -11340,7 +11660,8 @@ static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, c
     zbuf_append(buf, "}");
   }
   zbuf_append(buf, "],\n  \"interfaceFingerprints\": ");
-  append_interface_fingerprints_json(buf, input, target);
+  if (graph_input) append_interface_fingerprints_json_ex(buf, input, target, command->graph_source.graph_hash);
+  else append_interface_fingerprints_json(buf, input, target);
   zbuf_append(buf, ",\n  \"importEdges\": [");
   for (size_t i = 0; i < input->import_edge_count; i++) {
     if (i > 0) zbuf_append(buf, ", ");
@@ -11612,9 +11933,11 @@ static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, c
   zbuf_append(buf, "],\n  \"compilerPhases\": ");
   append_compiler_phases_json(buf, input);
   zbuf_append(buf, ",\n  \"compilerCaches\": ");
-  append_compiler_caches_json(buf, input, target, profile);
+  if (graph_input) append_compiler_caches_json_ex(buf, input, target, profile, "program-graph", command->graph_source.graph_hash);
+  else append_compiler_caches_json(buf, input, target, profile);
   zbuf_append(buf, ",\n  \"incrementalInvalidation\": ");
-  append_incremental_invalidations_json(buf, input, target, profile);
+  if (graph_input) append_incremental_invalidations_json_ex(buf, input, target, profile, command->graph_source.artifact, command->graph_source.graph_hash, command->graph_source.lowering);
+  else append_incremental_invalidations_json(buf, input, target, profile);
   zbuf_append(buf, "\n}\n");
 }
 
@@ -11856,11 +12179,7 @@ static bool graph_input_is_source_path(const Command *command) {
 
 static bool graph_source_or_artifact_command_prefers_package_source(const Command *command) {
   if (!command || !command->kind) return false;
-  return strcmp(command->kind, "dump") == 0 ||
-         strcmp(command->kind, "import") == 0 ||
-         strcmp(command->kind, "query") == 0 ||
-         strcmp(command->kind, "view") == 0 ||
-         strcmp(command->kind, "source-map") == 0 ||
+  return strcmp(command->kind, "import") == 0 ||
          strcmp(command->kind, "reconcile") == 0;
 }
 
@@ -12111,7 +12430,7 @@ static bool validate_repository_graph_patch_output(const Command *command, const
   return ok;
 }
 
-static void append_graph_check_json(ZBuf *buf, const Command *command, const ZTargetInfo *target, const ZProgramGraph *graph, bool ok, const ZDiag *diag, const char *phase, const char *target_readiness_json, long long lower_ms, bool graph_mir_used) {
+static void append_graph_check_json(ZBuf *buf, const Command *command, const ZTargetInfo *target, const SourceInput *input, const ZProgramGraph *graph, bool ok, const ZDiag *diag, const char *phase, const char *target_readiness_json, long long lower_ms, bool graph_mir_used) {
   zbuf_append(buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": ");
   zbuf_append(buf, ok ? "true" : "false");
   zbuf_append(buf, ",\n  \"artifact\": ");
@@ -12133,6 +12452,8 @@ static void append_graph_check_json(ZBuf *buf, const Command *command, const ZTa
   z_program_graph_append_semantics_json(buf, graph); zbuf_append(buf, "}");
   zbuf_append(buf, ",\n  \"safetyFacts\": ");
   append_safety_facts_json(buf, command && command->profile ? command->profile : "release");
+  zbuf_append(buf, ",\n  \"compileTime\": ");
+  append_compile_time_json(buf, NULL, input, target);
   zbuf_append(buf, ",\n  \"diagnostics\": [");
   if (!ok && diag) append_fix_plan_diagnostic(buf, diag->path ? diag->path : graph_check_diagnostic_path(command), diag);
   zbuf_append(buf, "],\n  \"saved\": "); append_graph_saved_json(buf, NULL); zbuf_append(buf, ",\n  \"view\": null\n}\n");
@@ -12609,6 +12930,64 @@ static int run_graph_source_map_command(const Command *command, const ZTargetInf
   return 0;
 }
 
+static int run_graph_inspect_command(const Command *command, const ZTargetInfo *target, ZDiag *diag) {
+  if (command->out) return reject_graph_unsupported_out(command, diag);
+
+  SourceInput input = {0};
+  Program program = {0};
+  ZProgramGraph graph = {0};
+  GraphInputKind input_kind = GRAPH_INPUT_ARTIFACT;
+  if (!load_graph_input_for_read(command, target, &input, &program, &graph, &input_kind, diag)) {
+    print_command_diag(command, diag->path ? diag->path : command->input, diag);
+    return 1;
+  }
+
+  if (input_kind == GRAPH_INPUT_ARTIFACT || input_kind == GRAPH_INPUT_REPOSITORY_STORE) {
+    z_free_program(&program);
+    z_free_source(&input);
+    const char *display_input = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
+    if (!z_program_graph_lower_to_program_with_source(&graph, display_input, &program, &input, diag)) {
+      print_command_diag(command, diag->path ? diag->path : display_input, diag);
+      z_program_graph_free(&graph);
+      return 1;
+    }
+    if (command->repository_graph_source_input && !z_program_graph_manifest_attach_metadata_to_input(&input, command->repository_graph_source_input, diag)) {
+      print_command_diag(command, diag->path ? diag->path : command->repository_graph_source_input, diag);
+      z_free_program(&program);
+      z_free_source(&input);
+      z_program_graph_free(&graph);
+      return 1;
+    }
+  }
+
+  Command inspect_command = *command;
+  if (input_kind == GRAPH_INPUT_ARTIFACT || input_kind == GRAPH_INPUT_REPOSITORY_STORE) {
+    inspect_command.graph_source = (ZProgramGraphArtifactSource){
+      .artifact = command->input ? command->input : "",
+      .graph_hash = graph.graph_hash ? graph.graph_hash : "",
+      .module_identity = graph.module_identity ? graph.module_identity : "",
+      .lowering = "direct-program-graph",
+      .source_projection_state = NULL,
+      .canonical_source = graph.canonical_source,
+    };
+  }
+
+  if (command->json) {
+    ZBuf json;
+    zbuf_init(&json);
+    append_graph_json(&json, &input, &program, target, &inspect_command);
+    fputs(json.data, stdout);
+    zbuf_free(&json);
+  } else {
+    print_graph_inspect_text(&input, &program, target, &inspect_command);
+  }
+
+  z_free_program(&program);
+  z_free_source(&input);
+  z_program_graph_free(&graph);
+  return 0;
+}
+
 static int run_graph_reconcile_command(const Command *command, const ZTargetInfo *target, ZDiag *diag) {
   if (command->out) return reject_graph_unsupported_out(command, diag);
   if (!command->reconcile_source) {
@@ -12956,7 +13335,6 @@ static int run_graph_check_command(const Command *command, const ZTargetInfo *ta
   if (!ok) phase = GRAPH_CHECK_PHASE_LOWER;
   if (ok) ok = z_program_graph_collect_resolution_facts(&graph, &resolution);
   if (ok) ok = graph_check_resolution_ok(&graph, &resolution, command->input, diag);
-  if (ok) ok = z_program_graph_semantic_contracts_ok(&graph, &resolution, command->input, diag);
   if (ok && !graph_check_target_capabilities_ok(&graph, &resolution, target, diag)) {
     phase = GRAPH_CHECK_PHASE_TARGET_READINESS;
     ok = false;
@@ -12975,7 +13353,7 @@ static int run_graph_check_command(const Command *command, const ZTargetInfo *ta
   if (command->json) {
     ZBuf json;
     zbuf_init(&json);
-    append_graph_check_json(&json, command, target, &graph, ok, ok ? NULL : diag, graph_check_phase_name(phase), target_readiness.len > 0 ? target_readiness.data : NULL, lower_ms, graph_mir_used);
+    append_graph_check_json(&json, command, target, &checked_input, &graph, ok, ok ? NULL : diag, graph_check_phase_name(phase), target_readiness.len > 0 ? target_readiness.data : NULL, lower_ms, graph_mir_used);
     fputs(json.data, stdout);
     zbuf_free(&json);
   } else if (ok) {
@@ -13062,6 +13440,7 @@ static bool graph_command_can_use_repository_store(const char *kind) {
   return kind &&
          (strcmp(kind, "view") == 0 ||
           strcmp(kind, "query") == 0 ||
+          strcmp(kind, "inspect") == 0 ||
           strcmp(kind, "dump") == 0 ||
           strcmp(kind, "source-map") == 0 ||
           strcmp(kind, "reconcile") == 0 ||
@@ -13105,7 +13484,19 @@ static bool resolve_graph_command_manifest_input(Command *command, bool *artifac
     set_source_input_diag(command->input, diag);
     return false;
   }
-  if (input_mode == Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT && is_zero_source_path(command->input)) return true;
+  if (input_mode == Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT && is_zero_source_path(command->input)) {
+    if (!graph_source_or_artifact_command_prefers_package_source(command)) {
+      char *sidecar = source_sidecar_graph_path(command->input);
+      if (sidecar && path_has_program_graph_storage_header(sidecar)) {
+        command->repository_graph_source_input = command->input;
+        command->input = sidecar;
+        if (artifact_input) *artifact_input = true;
+        return true;
+      }
+      free(sidecar);
+    }
+    return true;
+  }
   if ((input_mode == Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT || input_mode == Z_PROGRAM_GRAPH_INPUT_ARTIFACT) &&
       path_has_program_graph_storage_header(command->input)) {
     if (artifact_input) *artifact_input = true;
@@ -13218,7 +13609,7 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   long long resolve_ms = now_ms() - resolve_started;
   long long check_started = now_ms();
   bool ok = collected_resolution &&
-            graph_native_compiler_input_ok(&store.graph, &resolution, &input, target, store.path ? store.path : command->input, &diag);
+            graph_stored_compiler_input_ok(&store.graph, &resolution, &input, target, store.path ? store.path : command->input, &diag);
   input.check_ms = now_ms() - check_started;
   long long cache_started = now_ms();
   touch_program_graph_compiler_caches(&input, target, command->profile, store.graph.graph_hash);
@@ -13267,6 +13658,7 @@ static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *ta
   if (graph_check_text_eq(command->kind, "import")) return run_graph_dump_input_command(command, target, diag, true);
   if (graph_check_text_eq(command->kind, "view")) return run_graph_view_command(command, diag);
   if (graph_check_text_eq(command->kind, "query")) return run_graph_query_command(command, target, diag);
+  if (graph_check_text_eq(command->kind, "inspect")) return run_graph_inspect_command(command, target, diag);
   if (graph_check_text_eq(command->kind, "source-map")) return run_graph_source_map_command(command, target, diag);
   if (graph_check_text_eq(command->kind, "reconcile")) return run_graph_reconcile_command(command, target, diag);
   if (graph_check_text_eq(command->kind, "size")) return run_graph_size_command(command, target, diag);
@@ -13387,7 +13779,7 @@ static int run_graph_command(const Command *command, SourceInput *input, Program
       print_command_diag(command, diag->path ? diag->path : command->input, diag);
       return 1;
     }
-    stored.canonical_source = input && input->canonical_text_source;
+    stored.canonical_source = false;
     if (!z_program_graph_merge_embedded_std_graph_modules(&stored, input, diag)) {
       print_command_diag(command, diag->path ? diag->path : command->input, diag);
       z_program_graph_free(&stored);
@@ -13859,6 +14251,11 @@ int main(int argc, char **argv) {
   }
 
   const char *direct_graph_manifest_input = command.input;
+  if (!resolve_direct_source_sidecar_graph_input(&command, &diag)) {
+    if (command.json) print_command_diag_json(&command, diag.path ? diag.path : command.input, &diag);
+    else print_diag(diag.path ? diag.path : command.input, &diag);
+    return 1;
+  }
   bool direct_graph_manifest_command = false;
   int repository_graph_check_rc = run_repository_graph_check_command(&command, target, &direct_graph_manifest_command);
   if (repository_graph_check_rc != 0 || direct_graph_manifest_command) return repository_graph_check_rc;
@@ -13880,7 +14277,21 @@ int main(int argc, char **argv) {
   bool graph_build_command = strcmp(command.command, "build") == 0 && root_graph_artifact_input;
   bool graph_run_artifact_command = strcmp(command.command, "run") == 0 && root_graph_artifact_input;
   bool graph_size_artifact_command = strcmp(command.command, "size") == 0 && root_graph_artifact_input;
-  bool graph_artifact_mir_command = graph_build_command || graph_run_artifact_command || graph_size_artifact_command;
+  bool graph_ship_artifact_command = strcmp(command.command, "ship") == 0 && root_graph_artifact_input;
+  bool graph_mem_artifact_command = strcmp(command.command, "mem") == 0 && root_graph_artifact_input;
+  bool graph_doc_artifact_command = strcmp(command.command, "doc") == 0 && root_graph_artifact_input;
+  bool graph_dev_artifact_command = strcmp(command.command, "dev") == 0 && root_graph_artifact_input;
+  bool graph_time_artifact_command = strcmp(command.command, "time") == 0 && root_graph_artifact_input;
+  bool graph_abi_artifact_command = strcmp(command.command, "abi") == 0 && root_graph_artifact_input;
+  bool graph_artifact_mir_command = graph_build_command ||
+                                    graph_run_artifact_command ||
+                                    graph_size_artifact_command ||
+                                    graph_ship_artifact_command ||
+                                    graph_mem_artifact_command ||
+                                    graph_doc_artifact_command ||
+                                    graph_dev_artifact_command ||
+                                    graph_time_artifact_command ||
+                                    graph_abi_artifact_command;
   if (direct_graph_manifest_command || graph_artifact_mir_command) {
     ZProgramGraphArtifactSource graph_source = {0};
     long long graph_lower_started = now_ms();
@@ -13899,7 +14310,7 @@ int main(int argc, char **argv) {
       }
     }
     bool prepared_graph = command.repository_graph_input
-      ? z_program_graph_prepare_repository_store_mir_input(command.input, target, emit_kind_name(command.emit), command.backend, !(strcmp(command.command, "build") == 0 || strcmp(command.command, "run") == 0 || strcmp(command.command, "size") == 0), &program, &input, &graph_prepared_ir, &graph_source, &diag)
+      ? z_program_graph_prepare_repository_store_mir_input(command.input, target, emit_kind_name(command.emit), command.backend, !(strcmp(command.command, "build") == 0 || strcmp(command.command, "run") == 0 || strcmp(command.command, "size") == 0 || strcmp(command.command, "ship") == 0 || strcmp(command.command, "mem") == 0), &program, &input, &graph_prepared_ir, &graph_source, &diag)
       : z_program_graph_prepare_artifact_mir_input(command.input, target, emit_kind_name(command.emit), command.backend, &program, &input, &graph_prepared_ir, &graph_source, &diag);
     if (prepared_graph) {
       input.lower_ms = now_ms() - graph_lower_started;
@@ -13919,10 +14330,15 @@ int main(int argc, char **argv) {
     }
     touch_program_graph_compiler_caches(&input, target, command.profile, graph_source.graph_hash);
     command.graph_source = graph_source;
-    if (!direct_graph_manifest_command && !graph_size_artifact_command) {
+    if (graph_build_command || graph_run_artifact_command) {
       command.command = graph_run_artifact_command ? "run" : "build";
       command.kind = NULL;
     }
+  } else if (direct_command_requires_graph_input(command.command)) {
+    set_graph_input_required_diag(command.input, NULL, &diag);
+    if (command.json) print_command_diag_json(&command, diag.path ? diag.path : command.input, &diag);
+    else print_diag(diag.path ? diag.path : command.input, &diag);
+    return 1;
   } else if (!compile_input(command.input, target, command.profile, &input, &program, &diag)) {
     if (strcmp(command.command, "fix") == 0) {
       if (command.apply || command.patch) {
@@ -13972,6 +14388,12 @@ int main(int argc, char **argv) {
       !graph_build_command &&
       !graph_run_artifact_command &&
       !graph_size_artifact_command &&
+      !graph_ship_artifact_command &&
+      !graph_mem_artifact_command &&
+      !graph_doc_artifact_command &&
+      !graph_dev_artifact_command &&
+      !graph_time_artifact_command &&
+      !graph_abi_artifact_command &&
       z_program_graph_source_command_uses_graph_mir(command.command)) {
     long long graph_lower_started = now_ms();
     bool graph_prepared = z_program_graph_prepare_source_mir_input(

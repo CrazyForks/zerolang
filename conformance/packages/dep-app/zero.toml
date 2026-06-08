@@ -6,6 +6,9 @@ version = "0.1.0"
 kind = "exe"
 main = "src/main.0"
 
+[repositoryGraph]
+compilerInput = true
+
 [dependencies]
 remote-tools = "1.2.3"
 

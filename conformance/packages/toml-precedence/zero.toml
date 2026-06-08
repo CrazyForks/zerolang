@@ -6,3 +6,6 @@ version = "0.1.0"
 [targets.cli]
 kind = "exe"
 main = "src/toml.0"
+
+[repositoryGraph]
+compilerInput = true

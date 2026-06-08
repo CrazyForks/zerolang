@@ -43,7 +43,7 @@ Explain diagnostics and inspect repair plans without editing files:
 
 ```sh
 bin/zero explain TAR002
-bin/zero fix --plan --json conformance/native/fail/mem-copy-immutable-dst.0
+bin/zero explain --json TYP009
 ```
 
 ## Native Targets

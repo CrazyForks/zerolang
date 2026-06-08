@@ -182,7 +182,7 @@ Standard library modules use the same structured diagnostic contract as compiler
 Hosted filesystem helpers are host-only in the current compiler. This fails clearly on non-host targets:
 
 ```sh
-bin/zero check --json --target linux-musl-x64 conformance/native/fail/std-fs-target-unsupported.0
+bin/zero check --json --target linux-musl-x64 conformance/common/fail/unsupported-target-feature.0
 ```
 
 The diagnostic uses `TAR002`, `fixSafety: "requires-human-review"`, and repair
@@ -403,6 +403,6 @@ Useful examples:
 ```sh
 zero explain TAR002
 zero explain --json TYP009
-zero fix --plan --json conformance/native/fail/mem-copy-immutable-dst.0
-zero fix --plan --json --target linux-musl-x64 conformance/native/fail/std-fs-target-unsupported.0
+zero explain --json TYP009
+zero fix --plan --json --target linux-musl-x64 conformance/common/fail/unsupported-target-feature.0
 ```

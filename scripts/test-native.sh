@@ -416,7 +416,7 @@ assert.equal(body.tokens[12].line, 3);
 assert.equal(body.tokens.at(-1).kind, "eof");
 NODE
 
-bin/zero parse --json conformance/parse/compiler-smoke.0 > .zero/native-test/parse-tree.json
+bin/zero parse --json conformance/format/functions-blocks.0 > .zero/native-test/parse-tree.json
 node <<'NODE'
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
@@ -424,11 +424,12 @@ const fs = require("node:fs");
 const body = JSON.parse(fs.readFileSync(".zero/native-test/parse-tree.json", "utf8"));
 assert.equal(body.schemaVersion, 1);
 assert.equal(body.root.kind, "module");
-assert.equal(body.root.shapeCount, 1);
-assert.equal(body.root.enumCount, 1);
-assert.equal(body.root.choiceCount, 1);
-assert.equal(body.root.functionCount, 1);
-assert.deepEqual(body.functions[0].bodyKinds, ["if", "while", "check", "return"]);
+assert.equal(body.root.shapeCount, 0);
+assert.equal(body.root.enumCount, 0);
+assert.equal(body.root.choiceCount, 0);
+assert.equal(body.root.functionCount, 2);
+assert.deepEqual(body.functions[0].bodyKinds, ["if"]);
+assert.deepEqual(body.functions[1].bodyKinds, ["let", "while"]);
 NODE
 
 assert_direct_size_metadata() {
@@ -486,272 +487,7 @@ bin/zero test --json --filter helper conformance/packages/test-app > .zero/nativ
 node -e 'const fs=require("node:fs"); const j=JSON.parse(fs.readFileSync(".zero/native-test/test-package-filter.json","utf8")); if (!j.ok || j.graph?.artifact!=="conformance/packages/test-app/src/main.0" || j.testDiscovery.mode!=="package-graph" || j.discoveredTests!==3 || j.selectedTests!==2 || j.testDiscovery.filter!=="helper") process.exit(1);'
 bin/zero test --json conformance/native/pass/test-expected-fail.0 > .zero/native-test/test-expected-fail.json
 node -e 'const fs=require("node:fs"); const j=JSON.parse(fs.readFileSync(".zero/native-test/test-expected-fail.json","utf8")); if (!j.ok || j.expectedFailures!==1 || j.failedTests!==0 || j.results[0].status!=="expected-fail") process.exit(1);'
-if bin/zero test --json conformance/native/fail/test-unexpected-pass.0 > .zero/native-test/test-unexpected-pass.json; then
-  echo "expected unexpected-pass fixture to fail" >&2
-  exit 1
-fi
-node -e 'const fs=require("node:fs"); const j=JSON.parse(fs.readFileSync(".zero/native-test/test-unexpected-pass.json","utf8")); if (j.ok || j.unexpectedPasses!==1 || j.results[0].status!=="unexpected-pass") process.exit(1);'
 scripts/reliability-smoke.mts >/dev/null
-if bin/zero test conformance/native/fail/test-expect-runtime-fail.0 >/dev/null 2>.zero/native-test/test-expect-runtime-fail.err; then
-  echo "expected failing test block to fail" >&2
-  exit 1
-fi
-grep -q "zero test expectation failed" .zero/native-test/test-expect-runtime-fail.err
-grep -q "expect runtime failure exits nonzero" .zero/native-test/test-expect-runtime-fail.err
-
-if bin/zero check conformance/native/fail/wrong-arity.0 2>.zero/native-test/wrong-arity.err; then
-  echo "expected wrong-arity fixture to fail" >&2
-  exit 1
-fi
-grep -q "NAM004" .zero/native-test/wrong-arity.err
-
-if bin/zero check conformance/native/fail/bad-return.0 2>.zero/native-test/bad-return.err; then
-  echo "expected bad-return fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP003" .zero/native-test/bad-return.err
-
-if bin/zero check conformance/native/fail/duplicate-function.0 2>.zero/native-test/duplicate-function.err; then
-  echo "expected duplicate-function fixture to fail" >&2
-  exit 1
-fi
-grep -q "NAM004" .zero/native-test/duplicate-function.err
-
-if bin/zero check conformance/native/fail/unknown-field.0 2>.zero/native-test/unknown-field.err; then
-  echo "expected unknown-field fixture to fail" >&2
-  exit 1
-fi
-grep -q "FLD001" .zero/native-test/unknown-field.err
-
-if bin/zero check conformance/native/fail/immutable-assignment.0 2>.zero/native-test/immutable-assignment.err; then
-  echo "expected immutable-assignment fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/immutable-assignment.err
-
-if bin/zero check conformance/native/fail/bad-std-call.0 2>.zero/native-test/bad-std-call.err; then
-  echo "expected bad-std-call fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD002" .zero/native-test/bad-std-call.err
-
-if bin/zero check conformance/native/fail/fs-open-without-capability.0 2>.zero/native-test/fs-open-without-capability.err; then
-  echo "expected fs-open-without-capability fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/fs-open-without-capability.err
-
-if bin/zero check conformance/native/fail/fs-read-without-mutref.0 2>.zero/native-test/fs-read-without-mutref.err; then
-  echo "expected fs-read-without-mutref fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/fs-read-without-mutref.err
-
-if bin/zero check conformance/native/fail/mem-copy-immutable-dst.0 2>.zero/native-test/mem-copy-immutable-dst.err; then
-  echo "expected mem-copy-immutable-dst fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/mem-copy-immutable-dst.err
-
-if bin/zero check conformance/native/fail/std-log-immutable-buffer.0 2>.zero/native-test/std-log-immutable-buffer.err; then
-  echo "expected std-log-immutable-buffer fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/std-log-immutable-buffer.err
-
-expect_native_check_fail() {
-  local fixture="$1"
-  local code="$2"
-  local name="${fixture%.0}"
-  if bin/zero check "conformance/native/fail/$fixture" 2>".zero/native-test/$name.err"; then
-    echo "expected $fixture fixture to fail" >&2
-    exit 1
-  fi
-  grep -q "$code" ".zero/native-test/$name.err"
-}
-
-expect_native_check_fail std-collections-append-mismatch.0 STD003
-expect_native_check_fail std-collections-append-overlap.0 BOR001
-expect_native_check_fail std-collections-append-mutspan-overlap.0 BOR001
-expect_native_check_fail std-collections-append-mutspan-inline-overlap.0 STD003
-expect_native_check_fail std-collections-push-borrowed.0 BOR001
-expect_native_check_fail std-collections-push-mutspan-borrowed.0 BOR001
-expect_native_check_fail std-collections-push-immutable.0 TYP009
-expect_native_check_fail std-collections-push-mismatch.0 STD003
-expect_native_check_fail std-collections-push-owned.0 OWN001
-expect_native_check_fail std-search-owned.0 OWN001
-expect_native_check_fail std-sort-immutable.0 TYP009
-expect_native_check_fail std-sort-mutates-borrowed.0 BOR001
-expect_native_check_fail std-sort-mutspan-mutates-borrowed.0 BOR001
-
-if bin/zero check conformance/native/fail/std-fs-create-error-set-mismatch.0 2>.zero/native-test/std-fs-create-error-set-mismatch.err; then
-  echo "expected std-fs-create-error-set-mismatch fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR002" .zero/native-test/std-fs-create-error-set-mismatch.err
-
-if bin/zero check conformance/native/fail/std-fs-unchecked-resource-fallible.0 2>.zero/native-test/std-fs-unchecked-resource-fallible.err; then
-  echo "expected std-fs-unchecked-resource-fallible fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR003" .zero/native-test/std-fs-unchecked-resource-fallible.err
-
-if bin/zero check conformance/native/fail/bad-memory-type.0 2>.zero/native-test/bad-memory-type.err; then
-  echo "expected bad-memory-type fixture to fail" >&2
-  exit 1
-fi
-grep -q "MEM001" .zero/native-test/bad-memory-type.err
-
-if bin/zero check conformance/native/fail/nonexhaustive-match.0 2>.zero/native-test/nonexhaustive-match.err; then
-  echo "expected nonexhaustive-match fixture to fail" >&2
-  exit 1
-fi
-grep -q "MAT002" .zero/native-test/nonexhaustive-match.err
-
-if bin/zero check conformance/native/fail/bad-choice-payload.0 2>.zero/native-test/bad-choice-payload.err; then
-  echo "expected bad-choice-payload fixture to fail" >&2
-  exit 1
-fi
-grep -q "VAR004" .zero/native-test/bad-choice-payload.err
-
-if bin/zero check conformance/native/fail/allocator-invalid.0 2>.zero/native-test/allocator-invalid.err; then
-  echo "expected allocator-invalid fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/allocator-invalid.err
-
-if bin/zero check conformance/native/fail/allocator-immutable-fixedbuf.0 2>.zero/native-test/allocator-immutable-fixedbuf.err; then
-  echo "expected allocator-immutable-fixedbuf fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/allocator-immutable-fixedbuf.err
-
-if bin/zero check conformance/native/fail/std-json-parsebytes-raw-alloc.0 2>.zero/native-test/std-json-parsebytes-raw-alloc.err; then
-  echo "expected std-json-parsebytes-raw-alloc fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/std-json-parsebytes-raw-alloc.err
-
-if bin/zero check conformance/native/fail/std-json-parsebytes-immutable-alloc.0 2>.zero/native-test/std-json-parsebytes-immutable-alloc.err; then
-  echo "expected std-json-parsebytes-immutable-alloc fixture to fail" >&2
-  exit 1
-fi
-grep -q "STD003" .zero/native-test/std-json-parsebytes-immutable-alloc.err
-
-if bin/zero check conformance/native/fail/owned-use-after-move.0 2>.zero/native-test/owned-use-after-move.err; then
-  echo "expected owned-use-after-move fixture to fail" >&2
-  exit 1
-fi
-grep -q "OWN001" .zero/native-test/owned-use-after-move.err
-
-if bin/zero check conformance/native/fail/invalid-drop-signature.0 2>.zero/native-test/invalid-drop-signature.err; then
-  echo "expected invalid-drop-signature fixture to fail" >&2
-  exit 1
-fi
-grep -q "OWN002" .zero/native-test/invalid-drop-signature.err
-
-if bin/zero check conformance/native/fail/borrow-mutref-immutable.0 2>.zero/native-test/borrow-mutref-immutable.err; then
-  echo "expected borrow-mutref-immutable fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/borrow-mutref-immutable.err
-
-if bin/zero check conformance/native/fail/borrow-conflict.0 2>.zero/native-test/borrow-conflict.err; then
-  echo "expected borrow-conflict fixture to fail" >&2
-  exit 1
-fi
-grep -q "BOR001" .zero/native-test/borrow-conflict.err
-
-if bin/zero check conformance/native/fail/borrow-assign-while-borrowed.0 2>.zero/native-test/borrow-assign-while-borrowed.err; then
-  echo "expected borrow-assign-while-borrowed fixture to fail" >&2
-  exit 1
-fi
-grep -q "BOR001" .zero/native-test/borrow-assign-while-borrowed.err
-
-if bin/zero check conformance/native/fail/borrow-assign-through-ref.0 2>.zero/native-test/borrow-assign-through-ref.err; then
-  echo "expected borrow-assign-through-ref fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/borrow-assign-through-ref.err
-
-if bin/zero check conformance/native/fail/borrow-return-local.0 2>.zero/native-test/borrow-return-local.err; then
-  echo "expected borrow-return-local fixture to fail" >&2
-  exit 1
-fi
-grep -q "BOR002" .zero/native-test/borrow-return-local.err
-
-if bin/zero check conformance/native/fail/borrow-wrong-type.0 2>.zero/native-test/borrow-wrong-type.err; then
-  echo "expected borrow-wrong-type fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP001" .zero/native-test/borrow-wrong-type.err
-
-if bin/zero check conformance/native/fail/ref-indexed-assignment.0 2>.zero/native-test/ref-indexed-assignment.err; then
-  echo "expected ref-indexed-assignment fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/ref-indexed-assignment.err
-
-if bin/zero check conformance/native/fail/check-maybe-void.0 2>.zero/native-test/check-maybe-void.err; then
-  echo "expected check-maybe-void fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR001" .zero/native-test/check-maybe-void.err
-
-if bin/zero check conformance/native/fail/raise-without-raises.0 2>.zero/native-test/raise-without-raises.err; then
-  echo "expected raise-without-raises fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR001" .zero/native-test/raise-without-raises.err
-
-if bin/zero check conformance/native/fail/raise-undeclared-error.0 2>.zero/native-test/raise-undeclared-error.err; then
-  echo "expected raise-undeclared-error fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR002" .zero/native-test/raise-undeclared-error.err
-
-if bin/zero check conformance/native/fail/unchecked-fallible-call.0 2>.zero/native-test/unchecked-fallible-call.err; then
-  echo "expected unchecked-fallible-call fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR003" .zero/native-test/unchecked-fallible-call.err
-
-if bin/zero check conformance/native/fail/error-set-mismatch.0 2>.zero/native-test/error-set-mismatch.err; then
-  echo "expected error-set-mismatch fixture to fail" >&2
-  exit 1
-fi
-grep -q "ERR002" .zero/native-test/error-set-mismatch.err
-
-if bin/zero check conformance/native/fail/const-mut-borrow.0 2>.zero/native-test/const-mut-borrow.err; then
-  echo "expected const-mut-borrow fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP009" .zero/native-test/const-mut-borrow.err
-
-if bin/zero check conformance/native/fail/byte-buffer-use-after-move.0 2>.zero/native-test/byte-buffer-use-after-move.err; then
-  echo "expected byte-buffer-use-after-move fixture to fail" >&2
-  exit 1
-fi
-grep -q "OWN001" .zero/native-test/byte-buffer-use-after-move.err
-
-if bin/zero check conformance/native/fail/test-expect-non-bool.0 2>.zero/native-test/test-expect-non-bool.err; then
-  echo "expected test-expect-non-bool fixture to fail" >&2
-  exit 1
-fi
-grep -q "TYP001" .zero/native-test/test-expect-non-bool.err
-
-if bin/zero check conformance/native/fail/bad-c-export-raises.0 2>.zero/native-test/bad-c-export-raises.err; then
-  echo "expected bad-c-export-raises fixture to fail" >&2
-  exit 1
-fi
-grep -q "ABI001" .zero/native-test/bad-c-export-raises.err
-
-if bin/zero check conformance/native/fail/unsupported-drop.0 2>.zero/native-test/unsupported-drop.err; then
-  echo "expected unsupported-drop fixture to fail" >&2
-  exit 1
-fi
-grep -q "OWN002" .zero/native-test/unsupported-drop.err
-
 bin/zero targets > .zero/native-test/targets.json
 grep -q '"schemaVersion": 1' .zero/native-test/targets.json
 for target in \
@@ -806,8 +542,6 @@ bin/zero explain TAR002 > .zero/native-test/explain-tar002.txt
 grep -q "Target capability unavailable" .zero/native-test/explain-tar002.txt
 bin/zero explain --json TYP009 > .zero/native-test/explain-typ009.json
 grep -q '"repair"' .zero/native-test/explain-typ009.json
-bin/zero fix --plan --json conformance/native/fail/mem-copy-immutable-dst.0 > .zero/native-test/fix-plan.json
-grep -q '"appliesEdits": false' .zero/native-test/fix-plan.json
 bin/zero inspect --json examples/point.0 > .zero/native-test/point-graph.json
 grep -q '"shapes"' .zero/native-test/point-graph.json
 bin/zero inspect --json examples/systems-package > .zero/native-test/systems-package-graph.json

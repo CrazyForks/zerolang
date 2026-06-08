@@ -12,9 +12,9 @@ The compiler separates checking from executable linking. Target-neutral code can
 check for non-host targets, while hosted APIs such as `std.fs` are rejected when
 the selected target or direct backend cannot provide that capability.
 
-```sh
-bin/zero check --json --target linux-musl-x64 conformance/packages/target-incompatible-app
-```
+For dependency target compatibility, use `check --json --target <target>` on the
+graph-first package being reviewed; diagnostics report incompatible dependency
+target constraints when a package cannot be used for the selected target.
 
 For agent planning, `check --json` can also report whether a selected direct
 artifact is expected to build without emitting it:

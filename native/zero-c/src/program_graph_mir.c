@@ -665,13 +665,6 @@ static const char *ir_graph_node_type(const ZProgramGraph *graph, const ZProgram
   return NULL;
 }
 
-static const char *ir_graph_bound_type_text(const IrFunction *fun, const char *type) {
-  for (size_t i = 0; fun && type && i < fun->generic_binding_len; i++) {
-    if (ir_text_eq(type, fun->generic_param_names[i])) return fun->generic_arg_types[i];
-  }
-  return type;
-}
-
 static bool ir_graph_type_ident_char(char c) {
   return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
 }
@@ -809,8 +802,110 @@ static const ZProgramGraphNode *ir_graph_find_shape(const ZProgramGraph *graph, 
   return NULL;
 }
 
-static bool ir_graph_field_storage_info(const ZProgramGraph *graph, const ZProgramGraphNode *field, unsigned *out_byte_size, unsigned *out_align, IrTypeKind *out_type, bool *out_is_array, unsigned *out_array_len, IrTypeKind *out_element_type) {
-  const char *type_text = ir_graph_node_type(graph, field);
+static void ir_graph_type_arg_vec_free(TypeArgVec *args) {
+  if (!args) return;
+  for (size_t i = 0; i < args->len; i++) free(args->items[i].type);
+  free(args->items);
+  *args = (TypeArgVec){0};
+}
+
+static void ir_graph_type_arg_vec_push_owned(TypeArgVec *args, char *type) {
+  args->items = z_checked_reallocarray(args->items, args->len + 1, sizeof(TypeArg));
+  args->items[args->len++] = (TypeArg){.type = type};
+  args->cap = args->len;
+}
+
+static bool ir_graph_split_generic_args(const char *start, const char *end, TypeArgVec *out_args) {
+  const char *arg_start = start;
+  int angle_depth = 0;
+  int array_depth = 0;
+  for (const char *cursor = start; cursor <= end; cursor++) {
+    char ch = cursor < end ? *cursor : ',';
+    if (ch == '<') angle_depth++;
+    else if (ch == '>') angle_depth--;
+    else if (ch == '[') array_depth++;
+    else if (ch == ']') array_depth--;
+    if (ch == ',' && angle_depth == 0 && array_depth == 0) {
+      const char *arg_end = cursor;
+      while (arg_start < arg_end && (*arg_start == ' ' || *arg_start == '\t')) arg_start++;
+      while (arg_end > arg_start && (arg_end[-1] == ' ' || arg_end[-1] == '\t')) arg_end--;
+      if (arg_end == arg_start) return false;
+      ir_graph_type_arg_vec_push_owned(out_args, z_strndup(arg_start, (size_t)(arg_end - arg_start)));
+      arg_start = cursor + 1;
+    }
+  }
+  return angle_depth == 0 && array_depth == 0;
+}
+
+static size_t ir_graph_shape_type_param_count(const ZProgramGraph *graph, const ZProgramGraphNode *shape) {
+  return ir_graph_edge_count(graph, shape ? shape->id : NULL, "typeParam");
+}
+
+static bool ir_graph_shape_instance(const ZProgramGraph *graph, const char *type, const ZProgramGraphNode **out_shape, TypeArgVec *out_args) {
+  const ZProgramGraphNode *exact = ir_graph_find_shape(graph, type);
+  if (exact && ir_graph_shape_type_param_count(graph, exact) == 0) {
+    if (out_shape) *out_shape = exact;
+    return true;
+  }
+  const char *open = type ? strchr(type, '<') : NULL;
+  const char *close = type ? strrchr(type, '>') : NULL;
+  if (!open || !close || close[1] != '\0' || close < open) return false;
+  char *base = z_strndup(type, (size_t)(open - type));
+  const ZProgramGraphNode *shape = ir_graph_find_shape(graph, base);
+  free(base);
+  size_t param_count = ir_graph_shape_type_param_count(graph, shape);
+  if (!shape || param_count == 0) return false;
+  TypeArgVec args = {0};
+  if (!ir_graph_split_generic_args(open + 1, close, &args) || args.len != param_count) {
+    ir_graph_type_arg_vec_free(&args);
+    return false;
+  }
+  if (out_shape) *out_shape = shape;
+  if (out_args) *out_args = args;
+  else ir_graph_type_arg_vec_free(&args);
+  return true;
+}
+
+static const char *ir_graph_shape_arg_for_param(const ZProgramGraph *graph, const ZProgramGraphNode *shape, const TypeArgVec *args, const char *name) {
+  if (!graph || !shape || !args || !name) return NULL;
+  bool have_last = false;
+  size_t last_order = 0;
+  for (;;) {
+    const ZProgramGraphEdge *edge = ir_graph_next_edge_by_order(graph, shape->id, "typeParam", have_last, last_order);
+    if (!edge) break;
+    have_last = true;
+    last_order = edge->order;
+    const ZProgramGraphNode *param = ir_graph_find_node(graph, edge->to);
+    if (param && edge->order < args->len && ir_text_eq(param->name, name)) return args->items[edge->order].type;
+  }
+  return NULL;
+}
+
+static char *ir_graph_shape_substitute_type(const ZProgramGraph *graph, const ZProgramGraphNode *shape, const TypeArgVec *args, const char *type) {
+  if (!type) return z_strdup("Unknown");
+  const char *direct = ir_graph_shape_arg_for_param(graph, shape, args, type);
+  if (direct) return z_strdup(direct);
+  if (type[0] == '[') {
+    const char *close = strchr(type, ']');
+    if (close && close[1]) {
+      char *len_text = z_strndup(type + 1, (size_t)(close - type - 1));
+      const char *len_sub = ir_graph_shape_arg_for_param(graph, shape, args, len_text);
+      char *elem = ir_graph_shape_substitute_type(graph, shape, args, close + 1);
+      ZBuf buf;
+      zbuf_init(&buf);
+      zbuf_append_char(&buf, '[');
+      zbuf_append(&buf, len_sub ? len_sub : len_text);
+      zbuf_append_char(&buf, ']');
+      zbuf_append(&buf, elem);
+      free(len_text);
+      free(elem);
+      return buf.data;
+    }
+  }
+  return ir_graph_bound_type_text_alloc_from_arrays(type, NULL, NULL, 0);
+}
+
+static bool ir_graph_field_storage_info_for_type(const char *type_text, unsigned *out_byte_size, unsigned *out_align, IrTypeKind *out_type, bool *out_is_array, unsigned *out_array_len, IrTypeKind *out_element_type) {
   IrTypeKind type = ir_type_kind(type_text);
   unsigned array_len = 0;
   IrTypeKind element_type = IR_TYPE_UNSUPPORTED;
@@ -830,8 +925,9 @@ static bool ir_graph_field_storage_info(const ZProgramGraph *graph, const ZProgr
 }
 
 static bool ir_graph_shape_layout(const ZProgramGraph *graph, const char *shape_name, unsigned *out_size, unsigned *out_align) {
-  const ZProgramGraphNode *shape = ir_graph_find_shape(graph, shape_name);
-  if (!shape) return false;
+  const ZProgramGraphNode *shape = NULL;
+  TypeArgVec args = {0};
+  if (!ir_graph_shape_instance(graph, shape_name, &shape, &args)) return false;
   size_t offset = 0;
   unsigned max_align = 1;
   bool have_last = false;
@@ -842,24 +938,38 @@ static bool ir_graph_shape_layout(const ZProgramGraph *graph, const char *shape_
     have_last = true;
     last_order = edge->order;
     const ZProgramGraphNode *field = ir_graph_find_node(graph, edge->to);
-    if (!field || field->kind != Z_PROGRAM_GRAPH_NODE_FIELD) return false;
+    if (!field || field->kind != Z_PROGRAM_GRAPH_NODE_FIELD) {
+      ir_graph_type_arg_vec_free(&args);
+      return false;
+    }
     unsigned byte_size = 0;
     unsigned align = 0;
-    if (!ir_graph_field_storage_info(graph, field, &byte_size, &align, NULL, NULL, NULL, NULL)) return false;
+    char *field_type = ir_graph_shape_substitute_type(graph, shape, &args, ir_graph_node_type(graph, field));
+    bool ok = ir_graph_field_storage_info_for_type(field_type, &byte_size, &align, NULL, NULL, NULL, NULL);
+    free(field_type);
+    if (!ok) {
+      ir_graph_type_arg_vec_free(&args);
+      return false;
+    }
     offset = ir_align_to(offset, align);
     offset += byte_size;
     if (align > max_align) max_align = align;
   }
   offset = ir_align_to(offset, max_align);
-  if (offset > UINT_MAX) return false;
+  if (offset > UINT_MAX) {
+    ir_graph_type_arg_vec_free(&args);
+    return false;
+  }
   if (out_size) *out_size = (unsigned)offset;
   if (out_align) *out_align = max_align;
+  ir_graph_type_arg_vec_free(&args);
   return true;
 }
 
 static bool ir_graph_shape_field_info(const ZProgramGraph *graph, const char *shape_name, const char *field_name, unsigned *out_offset, IrTypeKind *out_type, bool *out_is_array, unsigned *out_array_len, IrTypeKind *out_element_type) {
-  const ZProgramGraphNode *shape = ir_graph_find_shape(graph, shape_name);
-  if (!shape || !field_name) return false;
+  const ZProgramGraphNode *shape = NULL;
+  TypeArgVec args = {0};
+  if (!field_name || !ir_graph_shape_instance(graph, shape_name, &shape, &args)) return false;
   size_t offset = 0;
   bool have_last = false;
   size_t last_order = 0;
@@ -869,26 +979,40 @@ static bool ir_graph_shape_field_info(const ZProgramGraph *graph, const char *sh
     have_last = true;
     last_order = edge->order;
     const ZProgramGraphNode *field = ir_graph_find_node(graph, edge->to);
-    if (!field || field->kind != Z_PROGRAM_GRAPH_NODE_FIELD) return false;
+    if (!field || field->kind != Z_PROGRAM_GRAPH_NODE_FIELD) {
+      ir_graph_type_arg_vec_free(&args);
+      return false;
+    }
     unsigned byte_size = 0;
     unsigned align = 0;
     IrTypeKind field_type = IR_TYPE_UNSUPPORTED;
     bool is_array = false;
     unsigned array_len = 0;
     IrTypeKind element_type = IR_TYPE_UNSUPPORTED;
-    if (!ir_graph_field_storage_info(graph, field, &byte_size, &align, &field_type, &is_array, &array_len, &element_type)) return false;
+    char *field_type_text = ir_graph_shape_substitute_type(graph, shape, &args, ir_graph_node_type(graph, field));
+    bool ok = ir_graph_field_storage_info_for_type(field_type_text, &byte_size, &align, &field_type, &is_array, &array_len, &element_type);
+    free(field_type_text);
+    if (!ok) {
+      ir_graph_type_arg_vec_free(&args);
+      return false;
+    }
     offset = ir_align_to(offset, align);
     if (ir_text_eq(field->name, field_name)) {
-      if (offset > UINT_MAX) return false;
+      if (offset > UINT_MAX) {
+        ir_graph_type_arg_vec_free(&args);
+        return false;
+      }
       if (out_offset) *out_offset = (unsigned)offset;
       if (out_type) *out_type = field_type;
       if (out_is_array) *out_is_array = is_array;
       if (out_array_len) *out_array_len = array_len;
       if (out_element_type) *out_element_type = element_type;
+      ir_graph_type_arg_vec_free(&args);
       return true;
     }
     offset += byte_size;
   }
+  ir_graph_type_arg_vec_free(&args);
   return false;
 }
 
@@ -1481,13 +1605,15 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
     ir_mark_unsupported(ir, "typed graph MIR record locals require shape literal initialization", line, column, local ? local->name : "record local");
     return false;
   }
-  if (expr->name && expr->name[0] && !ir_text_eq(expr->name, local->shape_name)) {
-    ir_graph_mark_unsupported(ir, expr, "typed graph MIR record literal type does not match local type", local->shape_name ? local->shape_name : "record local");
+  const ZProgramGraphNode *shape = NULL;
+  TypeArgVec shape_args = {0};
+  if (!ir_graph_shape_instance(graph, local->shape_name, &shape, &shape_args)) {
+    ir_mark_unsupported(ir, "typed graph MIR record shape is unknown", line, column, local->shape_name ? local->shape_name : "record");
     return false;
   }
-  const ZProgramGraphNode *shape = ir_graph_find_shape(graph, local->shape_name);
-  if (!shape) {
-    ir_mark_unsupported(ir, "typed graph MIR record shape is unknown", line, column, local->shape_name ? local->shape_name : "record");
+  if (expr->name && expr->name[0] && shape && shape->name && !ir_text_eq(expr->name, shape->name) && !ir_text_eq(expr->name, local->shape_name)) {
+    ir_graph_type_arg_vec_free(&shape_args);
+    ir_graph_mark_unsupported(ir, expr, "typed graph MIR record literal type does not match local type", local->shape_name ? local->shape_name : "record local");
     return false;
   }
   bool have_last = false;
@@ -1499,12 +1625,14 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
     last_order = edge->order;
     const ZProgramGraphNode *field = ir_graph_find_node(graph, edge->to);
     if (!field || field->kind != Z_PROGRAM_GRAPH_NODE_FIELD) {
+      ir_graph_type_arg_vec_free(&shape_args);
       ir_mark_unsupported(ir, "typed graph MIR record shape field is malformed", line, column, local->shape_name ? local->shape_name : "record");
       return false;
     }
     const ZProgramGraphNode *init = ir_graph_shape_literal_find_field(graph, expr, field->name);
     const ZProgramGraphNode *field_expr = init ? ir_graph_ordered_node(graph, init->id, "value", 0) : ir_graph_ordered_node(graph, field->id, "default", 0);
     if (!field_expr) {
+      ir_graph_type_arg_vec_free(&shape_args);
       ir_graph_mark_unsupported(ir, init ? init : expr, "typed graph MIR record field requires an explicit initializer", field->name ? field->name : "field");
       return false;
     }
@@ -1514,17 +1642,20 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
     unsigned field_array_len = 0;
     IrTypeKind field_element_type = IR_TYPE_UNSUPPORTED;
     if (!ir_graph_shape_field_info(graph, local->shape_name, field->name, &field_offset, &field_type, &field_is_array, &field_array_len, &field_element_type)) {
+      ir_graph_type_arg_vec_free(&shape_args);
       ir_graph_mark_unsupported(ir, field, "typed graph MIR record field type is unsupported", ir_graph_node_type(graph, field));
       return false;
     }
     if (field_is_array) {
       if (field_expr->kind != Z_PROGRAM_GRAPH_NODE_ARRAY_LITERAL) {
+        ir_graph_type_arg_vec_free(&shape_args);
         ir_graph_mark_unsupported(ir, field_expr, "typed graph MIR record array field requires a matching array literal", field->name);
         return false;
       }
       size_t arg_count = ir_graph_edge_count(graph, field_expr->id, "arg");
       bool repeat = ir_text_eq(field_expr->value, "repeat");
       if ((!repeat && arg_count != field_array_len) || (repeat && arg_count != 2)) {
+        ir_graph_type_arg_vec_free(&shape_args);
         ir_graph_mark_unsupported(ir, field_expr, "typed graph MIR record array field literal length must match field type", field->name);
         return false;
       }
@@ -1532,9 +1663,13 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
       for (size_t element_index = 0; element_index < field_array_len; element_index++) {
         const ZProgramGraphNode *element_node = repeat ? repeat_value : ir_graph_ordered_node(graph, field_expr->id, "arg", element_index);
         IrValue *element = NULL;
-        if (!ir_graph_lower_expr_for_type(graph, ir, fun, element_node, field_element_type, IR_TYPE_UNSUPPORTED, false, ir_graph_line(element_node), ir_graph_column(element_node), &element)) return false;
+        if (!ir_graph_lower_expr_for_type(graph, ir, fun, element_node, field_element_type, IR_TYPE_UNSUPPORTED, false, ir_graph_line(element_node), ir_graph_column(element_node), &element)) {
+          ir_graph_type_arg_vec_free(&shape_args);
+          return false;
+        }
         if (element->type != field_element_type) {
           ir_free_value(element);
+          ir_graph_type_arg_vec_free(&shape_args);
           ir_graph_mark_unsupported(ir, element_node, "typed graph MIR record array field initializer type does not match element", field->name);
           return false;
         }
@@ -1544,14 +1679,19 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
       continue;
     }
     IrValue *value = NULL;
-    if (!ir_graph_lower_expr_for_type(graph, ir, fun, field_expr, field_type, IR_TYPE_UNSUPPORTED, false, ir_graph_line(field_expr), ir_graph_column(field_expr), &value)) return false;
+    if (!ir_graph_lower_expr_for_type(graph, ir, fun, field_expr, field_type, IR_TYPE_UNSUPPORTED, false, ir_graph_line(field_expr), ir_graph_column(field_expr), &value)) {
+      ir_graph_type_arg_vec_free(&shape_args);
+      return false;
+    }
     if (value->type != field_type) {
       ir_free_value(value);
+      ir_graph_type_arg_vec_free(&shape_args);
       ir_graph_mark_unsupported(ir, field_expr, "typed graph MIR record field initializer type does not match field", field->name);
       return false;
     }
     ir_instr_vec_push(ir, out_items, out_len, out_cap, (IrInstr){.kind = IR_INSTR_FIELD_STORE, .local_index = local->index, .field_offset = field_offset, .value = value, .line = ir_graph_line(field_expr), .column = ir_graph_column(field_expr)});
   }
+  ir_graph_type_arg_vec_free(&shape_args);
   return true;
 }
 
@@ -3945,6 +4085,39 @@ static bool ir_graph_bind_type_param(char **param_names, char **arg_types, size_
   return true;
 }
 
+static bool ir_graph_bind_type_param_from_pattern(char **param_names, char **arg_types, size_t binding_len, const char *param_pattern, const char *arg_type) {
+  if (!param_pattern || !param_pattern[0]) return true;
+  for (size_t i = 0; i < binding_len; i++) {
+    const char *param = param_names[i];
+    size_t param_len = param ? strlen(param) : 0;
+    if (!param_len) continue;
+    if (ir_text_eq(param_pattern, param)) return ir_graph_bind_type_param(param_names, arg_types, binding_len, param, arg_type);
+    const char *match = param_pattern;
+    while ((match = strstr(match, param)) != NULL) {
+      bool left_boundary = match == param_pattern || !ir_graph_type_ident_char(match[-1]);
+      bool right_boundary = !ir_graph_type_ident_char(match[param_len]);
+      if (left_boundary && right_boundary) break;
+      match += param_len;
+    }
+    if (!match) continue;
+    if (!arg_type || !arg_type[0]) continue;
+    size_t prefix_len = (size_t)(match - param_pattern);
+    const char *suffix = match + param_len;
+    size_t suffix_len = strlen(suffix);
+    size_t arg_len = strlen(arg_type);
+    if (arg_len < prefix_len + suffix_len ||
+        strncmp(arg_type, param_pattern, prefix_len) != 0 ||
+        strcmp(arg_type + arg_len - suffix_len, suffix) != 0) {
+      continue;
+    }
+    char *extracted = z_strndup(arg_type + prefix_len, arg_len - prefix_len - suffix_len);
+    bool ok = ir_graph_bind_type_param(param_names, arg_types, binding_len, param, extracted);
+    free(extracted);
+    if (!ok) return false;
+  }
+  return true;
+}
+
 static char *ir_graph_call_parent_expected_type_dup_depth(const ZProgramGraph *graph, const ZProgramGraphNode *call, IrTypeKind preferred_return_type, unsigned depth);
 static const char *ir_graph_enclosing_param_type(const ZProgramGraph *graph, const ZProgramGraphNode *scope_node, const char *name);
 
@@ -3956,6 +4129,7 @@ static bool ir_graph_specialization_bindings_for_call_depth(const ZProgramGraph 
   char **param_names = z_checked_calloc(type_param_count, sizeof(char *));
   char **arg_types = z_checked_calloc(type_param_count, sizeof(char *));
   char *expected_type_owned = NULL;
+  char *bound_expected_type_owned = NULL;
   for (size_t i = 0; i < type_param_count; i++) {
     const ZProgramGraphNode *param = ir_graph_ordered_node(graph, generic->id, "typeParam", i);
     param_names[i] = z_strdup(param->name);
@@ -3965,35 +4139,40 @@ static bool ir_graph_specialization_bindings_for_call_depth(const ZProgramGraph 
     for (size_t i = 0; i < type_param_count; i++) {
       const ZProgramGraphNode *arg = ir_graph_call_type_arg_node(graph, call, i);
       const char *arg_type = arg && arg->type ? arg->type : NULL;
-      arg_type = ir_graph_bound_type_text(fun, arg_type);
-      if (!arg_type || ir_graph_type_is_function_type_param(graph, generic, arg_type)) goto unresolved;
-      arg_types[i] = z_strdup(arg_type);
+      char *bound_arg_type = ir_graph_bound_type_text_alloc(fun, arg_type);
+      if (!bound_arg_type || ir_graph_type_is_function_type_param(graph, generic, bound_arg_type)) {
+        free(bound_arg_type);
+        goto unresolved;
+      }
+      arg_types[i] = bound_arg_type;
     }
   } else {
     expected_type_owned = ir_graph_call_parent_expected_type_dup_depth(graph, call, preferred_return_type, depth + 1);
-    const char *expected_type = expected_type_owned;
+    bound_expected_type_owned = ir_graph_bound_type_text_alloc(fun, expected_type_owned);
+    const char *expected_type = bound_expected_type_owned ? bound_expected_type_owned : expected_type_owned;
     const char *return_type = ir_graph_node_type(graph, generic);
-    if (ir_graph_type_is_function_type_param(graph, generic, return_type) &&
-        !ir_graph_bind_type_param(param_names, arg_types, type_param_count, return_type, expected_type)) {
+    if (!ir_graph_bind_type_param_from_pattern(param_names, arg_types, type_param_count, return_type, expected_type)) {
       goto unresolved;
     }
     size_t arg_count = ir_graph_edge_count(graph, call ? call->id : NULL, "arg");
     for (size_t i = 0; i < arg_count; i++) {
       const ZProgramGraphNode *param = ir_graph_ordered_node(graph, generic->id, "param", i);
       const char *param_type = ir_graph_node_type(graph, param);
-      if (!ir_graph_type_is_function_type_param(graph, generic, param_type)) continue;
       const ZProgramGraphNode *arg = ir_graph_ordered_node(graph, call->id, "arg", i);
       const char *arg_type = ir_graph_concrete_type_text_for_node(graph, arg);
       if (!arg_type && arg && arg->kind == Z_PROGRAM_GRAPH_NODE_IDENTIFIER) arg_type = ir_graph_enclosing_param_type(graph, call, arg->name);
-      arg_type = ir_graph_bound_type_text(fun, arg_type);
-      if (!arg_type) arg_type = expected_type;
-      if (!ir_graph_bind_type_param(param_names, arg_types, type_param_count, param_type, arg_type)) goto unresolved;
+      char *bound_arg_type = ir_graph_bound_type_text_alloc(fun, arg_type);
+      const char *effective_arg_type = bound_arg_type ? bound_arg_type : expected_type;
+      bool bound = ir_graph_bind_type_param_from_pattern(param_names, arg_types, type_param_count, param_type, effective_arg_type);
+      free(bound_arg_type);
+      if (!bound) goto unresolved;
     }
   }
   for (size_t i = 0; i < type_param_count; i++) {
     if (!param_names[i] || !arg_types[i]) goto unresolved;
     if (ir_graph_type_is_function_type_param(graph, generic, arg_types[i])) goto unresolved;
   }
+  free(bound_expected_type_owned);
   free(expected_type_owned);
   *out_param_names = param_names;
   *out_arg_types = arg_types;
@@ -4001,6 +4180,7 @@ static bool ir_graph_specialization_bindings_for_call_depth(const ZProgramGraph 
   return true;
 
 unresolved:
+  free(bound_expected_type_owned);
   free(expected_type_owned);
   for (size_t i = 0; i < type_param_count; i++) {
     free(param_names[i]);
@@ -4096,18 +4276,30 @@ static const char *ir_graph_enclosing_param_type(const ZProgramGraph *graph, con
 static bool ir_graph_add_nested_generic_specialization_orders(const ZProgramGraph *graph, IrProgram *ir, IrFunctionOrder **order, char ***stable_ids, size_t *len, size_t *cap, const ZProgramGraphNode *generic, char **param_names, char **arg_types, size_t binding_len);
 
 static bool ir_graph_add_generic_specialization_order_context(const ZProgramGraph *graph, IrProgram *ir, IrFunctionOrder **order, char ***stable_ids, size_t *len, size_t *cap, const IrFunction *context_fun, const ZProgramGraphNode *call) {
-  if (!call || call->kind != Z_PROGRAM_GRAPH_NODE_CALL) return true;
+  if (!call || (call->kind != Z_PROGRAM_GRAPH_NODE_CALL && call->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL)) return true;
+  char *qualified = call->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL ? ir_graph_expr_qualified_name(graph, call) : NULL;
   const char *callee_name = call->name;
+  if (qualified && qualified[0]) {
+    const char *target = z_std_source_target_for_public_call(qualified);
+    if (target) callee_name = target;
+  }
   const ZProgramGraphNode *generic = ir_graph_find_function_by_name(graph, callee_name);
-  if (!generic || !ir_graph_function_has_type_params(graph, generic)) return true;
+  if (!generic || !ir_graph_function_has_type_params(graph, generic)) {
+    free(qualified);
+    return true;
+  }
   char **param_names = NULL;
   char **arg_types = NULL;
   size_t binding_len = 0;
-  if (!ir_graph_specialization_bindings_for_call(graph, context_fun, generic, call, IR_TYPE_UNSUPPORTED, &param_names, &arg_types, &binding_len)) return true;
+  if (!ir_graph_specialization_bindings_for_call(graph, context_fun, generic, call, IR_TYPE_UNSUPPORTED, &param_names, &arg_types, &binding_len)) {
+    free(qualified);
+    return true;
+  }
   char *specialized_name = ir_graph_specialized_function_name_for_types(generic, arg_types, binding_len);
   if (ir_graph_has_concrete_function_named(graph, specialized_name)) {
     ir_graph_mark_unsupported(ir, call, "typed graph MIR generic specialization name collides with an existing function", specialized_name);
     free(specialized_name);
+    free(qualified);
     for (size_t i = 0; i < binding_len; i++) { free(param_names[i]); free(arg_types[i]); }
     free(param_names);
     free(arg_types);
@@ -4115,12 +4307,14 @@ static bool ir_graph_add_generic_specialization_order_context(const ZProgramGrap
   }
   if (ir_graph_order_has_name(*order, *len, specialized_name)) {
     free(specialized_name);
+    free(qualified);
     for (size_t i = 0; i < binding_len; i++) { free(param_names[i]); free(arg_types[i]); }
     free(param_names);
     free(arg_types);
     return true;
   }
   ir_graph_order_vec_push(ir, order, stable_ids, len, cap, graph, generic, specialized_name, true, param_names, arg_types, binding_len);
+  free(qualified);
   if (!ir_graph_add_nested_generic_specialization_orders(graph, ir, order, stable_ids, len, cap, generic, param_names, arg_types, binding_len)) return false;
   return true;
 }
@@ -4130,7 +4324,8 @@ static bool ir_graph_add_nested_generic_specialization_orders(const ZProgramGrap
   if (!body) return true;
   IrFunction context_fun = {.generic_param_names = param_names, .generic_arg_types = arg_types, .generic_binding_len = binding_len};
   for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i]; if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL || !ir_graph_node_reaches_ancestor(graph, node->id, body->id, 0)) continue;
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if ((node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) || !ir_graph_node_reaches_ancestor(graph, node->id, body->id, 0)) continue;
     if (!ir_graph_add_generic_specialization_order_context(graph, ir, order, stable_ids, len, cap, &context_fun, node)) return false;
   }
   return true; }
@@ -4328,7 +4523,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
       source->module_identity = input ? input->program_graph_module_identity : "";
       source->lowering = "mapped-final-mir";
       source->source_projection_state = z_program_graph_projection_state_label(&store, target, NULL, NULL, NULL);
-      source->canonical_source = store.graph.canonical_source;
+      source->canonical_source = false;
     }
     free(mir_cache_path);
     z_program_graph_store_free(&store);
@@ -4376,7 +4571,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
     source->module_identity = input ? input->program_graph_module_identity : "";
     source->lowering = mir_cache.hit ? "mapped-final-mir" : "typed-program-graph-mir";
     source->source_projection_state = z_program_graph_projection_state_label(&store, target, NULL, NULL, NULL);
-    source->canonical_source = store.graph.canonical_source;
+    source->canonical_source = false;
   }
   free(mir_cache_path);
   z_program_graph_store_free(&store);

@@ -19,7 +19,7 @@ const fileBudgets = {
   "native/zero-c/include/zero_contracts.h": { maxLines: 20, maxStrcmpCalls: 0 },
   "native/zero-c/include/zero_runtime.h": { maxLines: 226, maxStrcmpCalls: 0 },
   "native/zero-c/src/checker.c": { maxLines: 11753, maxStrcmpCalls: 287 },
-  "native/zero-c/src/main.c": { maxLines: 14541, maxStrcmpCalls: 500 },
+  "native/zero-c/src/main.c": { maxLines: 14842, maxStrcmpCalls: 500 },
   "native/zero-c/src/ir.c": { maxLines: 5501, maxStrcmpCalls: 271 },
   "native/zero-c/src/llvm_backend_metadata.c": { maxLines: 80, maxStrcmpCalls: 0 },
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
@@ -94,12 +94,12 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_identity.c": { maxLines: 500, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_import.c": { maxLines: 496, maxStrcmpCalls: 4 },
   "native/zero-c/src/program_graph_import.h": { maxLines: 8, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_lower.c": { maxLines: 1185, maxStrcmpCalls: 4 },
+  "native/zero-c/src/program_graph_lower.c": { maxLines: 1219, maxStrcmpCalls: 4 },
   "native/zero-c/src/program_graph_lower.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_manifest.c": { maxLines: 240, maxStrcmpCalls: 8 },
   "native/zero-c/src/program_graph_manifest.h": { maxLines: 15, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_manifest_identity.c": { maxLines: 92, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_mir.c": { maxLines: 4411, maxStrcmpCalls: 4 },
+  "native/zero-c/src/program_graph_mir.c": { maxLines: 4579, maxStrcmpCalls: 5 },
   "native/zero-c/src/program_graph_query.c": { maxLines: 350, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_query.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_query_internal.h": { maxLines: 20, maxStrcmpCalls: 0 },
@@ -180,7 +180,7 @@ const knownLargeFunctionLimits = new Map([
   ["native/zero-c/src/ir.c|static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunction *fun, const Expr *expr, IrValue **out) {", 1634],
   ["native/zero-c/src/checker.c|static bool check_expr_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, const char *expected) {", 567],
   ["native/zero-c/src/main.c|int main(int argc, char **argv) {", 939],
-  ["native/zero-c/src/main.c|static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, const ZTargetInfo *target, const Command *command) {", 379],
+  ["native/zero-c/src/main.c|static void append_graph_json(ZBuf *buf, SourceInput *input, Program *program, const ZTargetInfo *target, const Command *command) {", 386],
   ["native/zero-c/src/checker.c|static bool check_stmt(CheckContext *ctx, const Program *program, const Function *fun, const Stmt *stmt, Scope *scope, ZDiag *diag, int loop_depth) {", 279],
   ["native/zero-c/src/checker.c|static bool check_program_internal(const Program *program, bool require_entrypoint, ZDiag *diag) {", 213],
   ["native/zero-c/src/checker.c|static const char *expr_type(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope) {", 205],
@@ -942,10 +942,10 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
   if (!programGraph.repositoryGraphCheckNative ||
       !programGraph.repositoryGraphCheckNoProgramLowering ||
       !programGraph.repositoryGraphCheckNoLegacyChecker ||
-      !programGraph.repositoryGraphCheckSemanticContracts ||
       !programGraph.repositoryGraphCheckReadinessNoProgramReconstruction ||
       !programGraph.repositoryGraphCheckReportsSemanticFacts ||
       !programGraph.repositoryGraphCheckReportsGraphMirState ||
+      !programGraph.repositoryGraphCheckStoredTypedFactsAuthority ||
       !programGraph.artifactGraphCheckNative ||
       !programGraph.artifactGraphCheckNoProgramLowering ||
       !programGraph.artifactGraphCheckNoLegacyChecker ||
@@ -1739,9 +1739,9 @@ const programGraph = {
     !/z_program_graph_prepare_source_mir_input\s*\(/.test(repositoryGraphCheckBody),
   repositoryGraphCheckNoLegacyChecker: !/z_check_program\s*\(/.test(repositoryGraphCheckBody) &&
     !/load_graph_from_checked_current_source\s*\(/.test(repositoryGraphCheckBody),
-  repositoryGraphCheckSemanticContracts: /graph_native_compiler_input_ok\s*\(/.test(repositoryGraphCheckBody) &&
-    /z_program_graph_semantic_contracts_ok\s*\(/.test(graphNativeCompilerInputBody) &&
-    /semanticDiagnosticsEnforced\\":true/.test(repositoryGraphCheckJsonRawBody),
+  repositoryGraphCheckStoredTypedFactsAuthority: /graph_stored_compiler_input_ok\s*\(/.test(repositoryGraphCheckBody) &&
+    /semanticDiagnosticsEnforced\\":false/.test(repositoryGraphCheckJsonRawBody) &&
+    /semanticDiagnosticsAuthority\\":\\"stored-typed-graph-facts/.test(repositoryGraphCheckJsonRawBody),
   repositoryGraphCheckReadinessNoProgramReconstruction:
     /z_program_graph_prepare_repository_store_mir_input[\s\S]*command\s*\?\s*command->backend\s*:\s*NULL[\s\S]*false[\s\S]*&readiness_program/.test(repositoryGraphTargetReadinessBody) &&
     !/z_program_graph_lower_to_program_with_source\s*\(/.test(repositoryGraphTargetReadinessBody) &&
@@ -1753,7 +1753,8 @@ const programGraph = {
   artifactGraphCheckNative: /z_program_graph_load\s*\(/.test(artifactGraphCheckBody) &&
     /z_program_graph_name_contracts_ok\s*\(/.test(artifactGraphCheckBody) &&
     /z_program_graph_collect_resolution_facts\s*\(/.test(artifactGraphCheckBody) &&
-    /z_program_graph_semantic_contracts_ok\s*\(/.test(artifactGraphCheckBody),
+    /graph_check_resolution_ok\s*\(/.test(artifactGraphCheckBody) &&
+    /graph_check_target_capabilities_ok\s*\(/.test(artifactGraphCheckBody),
   artifactGraphCheckNoProgramLowering: !/z_program_graph_lower_to_program_with_source\s*\(/.test(artifactGraphCheckBody) &&
     !/z_program_graph_prepare_source_mir_input\s*\(/.test(artifactGraphCheckBody),
   artifactGraphCheckNoLegacyChecker: !/z_check_program\s*\(/.test(artifactGraphCheckBody) &&

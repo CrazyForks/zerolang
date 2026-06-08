@@ -17,7 +17,7 @@ bool z_program_graph_manifest_compiler_input_enabled(const char *input_path, boo
   ZManifest parsed_manifest = {0};
   bool ok = z_parse_manifest_json(manifest, &parsed_manifest, diag);
   if (!ok && diag && !diag->path) diag->path = z_strdup(manifest_path);
-  else if (enabled) *enabled = parsed_manifest.repository_graph_compiler_input_present && parsed_manifest.repository_graph_compiler_input;
+  else if (enabled) *enabled = true;
   z_free_manifest(&parsed_manifest);
   free(manifest);
   free(manifest_path);
@@ -32,7 +32,11 @@ bool z_program_graph_manifest_command_can_use_compiler_input(const char *command
           strcmp(command, "test") == 0 ||
           strcmp(command, "size") == 0 ||
           strcmp(command, "ship") == 0 ||
-          strcmp(command, "mem") == 0);
+          strcmp(command, "mem") == 0 ||
+          strcmp(command, "doc") == 0 ||
+          strcmp(command, "dev") == 0 ||
+          strcmp(command, "time") == 0 ||
+          strcmp(command, "abi") == 0);
 }
 
 static void pgm_clear_source_package_metadata(SourceInput *input) {

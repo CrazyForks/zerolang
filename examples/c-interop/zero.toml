@@ -6,6 +6,9 @@ version = "0.1.0"
 kind = "exe"
 main = "src/main.0"
 
+[repositoryGraph]
+compilerInput = true
+
 [c.libs.math]
 headers = ["vendor/include/mathshim.h"]
 include = ["vendor/include"]

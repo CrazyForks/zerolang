@@ -7,7 +7,15 @@ import { join } from "node:path";
 const outDir = ".zero/agent-repair-demo";
 mkdirSync(outDir, { recursive: true });
 
-const brokenSource = readFileSync("examples/agent-repair-demo/broken.0", "utf8");
+const brokenSource = `pub fn main(world: World) -> Void raises {
+    let src: [4]u8 = [1, 2, 3, 4]
+    let dst: [4]u8 = [0, 0, 0, 0]
+    let copied: usize = std.mem.copy(dst.mut, src.span)
+    if copied == 4 {
+        check world.out.write("copied\\n")
+    }
+}
+`;
 const workFile = join(outDir, "main.0");
 writeFileSync(workFile, brokenSource);
 
