@@ -4663,6 +4663,27 @@ const depBuildBody = JSON.parse(depBuild.stdout);
 assert.equal(depBuildBody.package.dependencies.length, 2);
 assert.equal(depBuildBody.packageCache.invalidationReasons.includes("dependency graph changed"), true);
 assert.match(depBuildBody.compilerCaches[0].dependencyGraphHash, /^[0-9a-f]{16}$/);
+
+const malformedTomlArrayRoot = `${outDir}/malformed-toml-array`;
+await rm(malformedTomlArrayRoot, { recursive: true, force: true });
+await mkdir(malformedTomlArrayRoot, { recursive: true });
+await writeFile(`${malformedTomlArrayRoot}/zero.toml`, `[package]
+name = "malformed-toml-array"
+version = "0.1.0"
+
+[targets.cli]
+kind = "exe"
+main = "src/main.0"
+
+[c.libs.demo]
+headers = ["unterminated]
+`);
+const malformedTomlArrayStatus = await execFileAsync(zero, ["status", "--json", malformedTomlArrayRoot]);
+const malformedTomlArrayBody = JSON.parse(malformedTomlArrayStatus.stdout);
+assert.equal(malformedTomlArrayBody.ok, true);
+assert.equal(malformedTomlArrayBody.repositoryGraph.storePresent, false);
+assert.deepEqual(malformedTomlArrayBody.diagnostics, []);
+
 const zeroTestRun = await execFileAsync(zero, ["test", "conformance/native/pass/test-blocks.0"]);
 assert.equal(zeroTestRun.stdout, "1 test(s) ok\n");
 

@@ -25,7 +25,7 @@ const fileBudgets = {
   "native/zero-c/src/ir.c": { maxLines: 5501, maxStrcmpCalls: 271 },
   "native/zero-c/src/llvm_backend_metadata.c": { maxLines: 80, maxStrcmpCalls: 0 },
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
-  "native/zero-c/src/manifest_toml.c": { maxLines: 367, maxStrcmpCalls: 19 },
+  "native/zero-c/src/manifest_toml.c": { maxLines: 430, maxStrcmpCalls: 4 },
   "native/zero-c/src/manifest_toml.h": { maxLines: 8, maxStrcmpCalls: 0 },
   "native/zero-c/src/mir_binary.c": { maxLines: 1282, maxStrcmpCalls: 1 },
   "native/zero-c/src/mir_binary.h": { maxLines: 37, maxStrcmpCalls: 0 },
@@ -1080,6 +1080,17 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
       abiReport: backendFormats.abiReport,
     });
   }
+  if (!backendFormats.manifestToml.fieldBindingTable ||
+      !backendFormats.manifestToml.sharedFieldAssignment ||
+      !backendFormats.manifestToml.sharedParsedLineCleanup ||
+      !backendFormats.manifestToml.sharedDiagnostics ||
+      !backendFormats.manifestToml.arrayParserChecksSkippedString ||
+      backendFormats.manifestToml.rawFieldDispatchStringChecks > 0) {
+    violations.push({
+      kind: "manifest-toml-field-dispatch",
+      manifestToml: backendFormats.manifestToml,
+    });
+  }
   if (!backendFormats.elf.sharedWriter ||
       !backendFormats.elf.x86ObjectUsesSharedWriter ||
       !backendFormats.elf.x86ExecutableUsesSharedWriter ||
@@ -1260,6 +1271,9 @@ const directExeBackendBody = cCodeText(cBlock(targetBackendRaw, "ZDirectBackend 
 const abiReportRaw = texts.get("native/zero-c/src/abi_report.c") ?? "";
 const abiReportSource = cCodeText(abiReportRaw);
 const abiReportText = cTextWithoutComments(abiReportRaw);
+const manifestTomlRaw = texts.get("native/zero-c/src/manifest_toml.c") ?? "";
+const manifestTomlSource = cCodeText(manifestTomlRaw);
+const manifestTomlText = cTextWithoutComments(manifestTomlRaw);
 
 const stdHelpers = parseStdHelpers(stdSig);
 const checkerReturnTypeInfo = parseCheckerReturnTypes(checker);
@@ -1451,6 +1465,17 @@ const backendFormats = {
     rawPrimitiveStringChecks: countMatches(
       abiReportText,
       /strcmp\s*\(\s*(?:type|zero_type)\s*,\s*"(?:Void|Bool|char|u8|i8|u16|i16|u32|i32|u64|i64|usize|isize|f32|f64)"\s*\)/g,
+    ),
+  },
+  manifestToml: {
+    fieldBindingTable: /\bTomlManifestFieldBinding\b/.test(manifestTomlSource),
+    sharedFieldAssignment: /\btoml_assign_bound_field\s*\(/.test(manifestTomlSource),
+    sharedParsedLineCleanup: /\btoml_parsed_line_free\s*\(/.test(manifestTomlSource),
+    sharedDiagnostics: /\btoml_set_diag\s*\(/.test(manifestTomlSource),
+    arrayParserChecksSkippedString: /\bconst\s+char\s+\*after_item\s*=\s*toml_skip_string\s*\(\s*cursor\s*\)\s*;\s*if\s*\(\s*!after_item\s*\)\s*break\s*;\s*cursor\s*=\s*toml_skip_ws\s*\(\s*after_item\s*\)/s.test(manifestTomlSource),
+    rawFieldDispatchStringChecks: countMatches(
+      manifestTomlText,
+      /strcmp\s*\([^,]+,\s*"(?:package\.name|package\.version|targets\.cli\.(?:main|graph|kind)|path|version|targets|target|headers|include|lib|link|mode|pkg_config|pkgConfig)"\s*\)/g,
     ),
   },
   directTarget: {
