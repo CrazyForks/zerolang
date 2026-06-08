@@ -20,5 +20,7 @@ typedef struct {
 } CapabilitySummary;
 
 void z_capability_summary_merge(CapabilitySummary *caps, const CapabilitySummary *other);
+void z_capability_summary_set(CapabilitySummary *caps, const char *capability);
+void z_capability_summary_collect_std_name(const char *name, CapabilitySummary *caps);
 CapabilitySummary z_ir_program_capabilities(const IrProgram *ir);
 #endif

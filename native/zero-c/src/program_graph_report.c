@@ -7,59 +7,6 @@
 
 #include <string.h>
 
-static void graph_report_capability_set(CapabilitySummary *caps, const char *capability) {
-  if (!caps || !capability) return;
-  if (strcmp(capability, "args") == 0) caps->args = true;
-  else if (strcmp(capability, "env") == 0) caps->env = true;
-  else if (strcmp(capability, "fs") == 0) caps->fs = true;
-  else if (strcmp(capability, "memory") == 0) caps->memory = true;
-  else if (strcmp(capability, "alloc") == 0) {
-    caps->alloc = true;
-    caps->memory = true;
-  } else if (strcmp(capability, "path") == 0) caps->path = true;
-  else if (strcmp(capability, "codec") == 0) caps->codec = true;
-  else if (strcmp(capability, "parse") == 0) caps->parse = true;
-  else if (strcmp(capability, "time") == 0) caps->time = true;
-  else if (strcmp(capability, "rand") == 0) caps->rand = true;
-  else if (strcmp(capability, "net") == 0) caps->net = true;
-  else if (strcmp(capability, "proc") == 0) caps->proc = true;
-  else if (strcmp(capability, "web") == 0) caps->web = true;
-  else if (strcmp(capability, "world") == 0) caps->world = true;
-}
-
-static void graph_report_collect_capabilities_from_std_name(const char *name, CapabilitySummary *caps) {
-  if (!name || !caps) return;
-  const ZStdHelperInfo *helper = z_std_helper_find(name);
-  if (helper) {
-    graph_report_capability_set(caps, helper->capability);
-    return;
-  }
-  if (strncmp(name, "std.args.", strlen("std.args.")) == 0) caps->args = true;
-  else if (strncmp(name, "std.env.", strlen("std.env.")) == 0) caps->env = true;
-  else if (strncmp(name, "std.fs.", strlen("std.fs.")) == 0) caps->fs = true;
-  else if (strncmp(name, "std.path.", strlen("std.path.")) == 0) caps->path = true;
-  else if (strncmp(name, "std.codec.", strlen("std.codec.")) == 0) caps->codec = true;
-  else if (strncmp(name, "std.parse.", strlen("std.parse.")) == 0) caps->parse = true;
-  else if (strncmp(name, "std.json.", strlen("std.json.")) == 0) caps->parse = true;
-  else if (strncmp(name, "std.time.", strlen("std.time.")) == 0) caps->time = true;
-  else if (strncmp(name, "std.rand.", strlen("std.rand.")) == 0) caps->rand = true;
-  else if (strncmp(name, "std.proc.", strlen("std.proc.")) == 0) caps->proc = true;
-  else if (strncmp(name, "std.crypto.secureRandom", strlen("std.crypto.secureRandom")) == 0) caps->rand = true;
-  else if (strncmp(name, "std.crypto.", strlen("std.crypto.")) == 0) caps->codec = true;
-  else if (strncmp(name, "std.net.", strlen("std.net.")) == 0) caps->net = true;
-  else if (strncmp(name, "std.http.", strlen("std.http.")) == 0) caps->net = true;
-  else if (strncmp(name, "std.mem.", strlen("std.mem.")) == 0) {
-    caps->memory = true;
-    if (strcmp(name, "std.mem.nullAlloc") == 0 ||
-        strcmp(name, "std.mem.fixedBufAlloc") == 0 ||
-        strcmp(name, "std.mem.arena") == 0 ||
-        strcmp(name, "std.mem.allocBytes") == 0 ||
-        strcmp(name, "std.mem.byteBuf") == 0 ||
-        strcmp(name, "std.mem.reset") == 0 ||
-        strcmp(name, "std.mem.capacity") == 0) caps->alloc = true;
-  }
-}
-
 static bool graph_report_is_call_ref(const ZProgramGraphResolutionReference *ref) {
   return ref && strcmp(ref->kind ? ref->kind : "", "call") == 0;
 }
@@ -88,7 +35,7 @@ CapabilitySummary z_program_graph_report_capabilities(const ZProgramGraph *graph
   caps.world = graph_caps.world;
 
   for (size_t i = 0; i < resolution.reference_len; i++) {
-    if (graph_report_is_call_ref(&resolution.references[i])) graph_report_collect_capabilities_from_std_name(resolution.references[i].qualified_name, &caps);
+    if (graph_report_is_call_ref(&resolution.references[i])) z_capability_summary_collect_std_name(resolution.references[i].qualified_name, &caps);
   }
   z_program_graph_resolution_facts_free(&resolution);
   return caps;

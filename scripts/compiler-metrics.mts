@@ -21,7 +21,7 @@ const fileBudgets = {
   "native/zero-c/src/abi_report.c": { maxLines: 321, maxStrcmpCalls: 29 },
   "native/zero-c/src/abi_report.h": { maxLines: 18, maxStrcmpCalls: 0 },
   "native/zero-c/src/checker.c": { maxLines: 11753, maxStrcmpCalls: 287 },
-  "native/zero-c/src/main.c": { maxLines: 14842, maxStrcmpCalls: 500 },
+  "native/zero-c/src/main.c": { maxLines: 14600, maxStrcmpCalls: 440 },
   "native/zero-c/src/ir.c": { maxLines: 5501, maxStrcmpCalls: 271 },
   "native/zero-c/src/llvm_backend_metadata.c": { maxLines: 80, maxStrcmpCalls: 0 },
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
@@ -41,8 +41,9 @@ const fileBudgets = {
   "native/zero-c/src/c_import.h": { maxLines: 40, maxStrcmpCalls: 0 },
   "native/zero-c/src/call_resolve.c": { maxLines: 200, maxStrcmpCalls: 2 },
   "native/zero-c/src/call_resolve.h": { maxLines: 100, maxStrcmpCalls: 0 },
+  "native/zero-c/src/capability_names.c": { maxLines: 150, maxStrcmpCalls: 1 },
   "native/zero-c/src/capability_summary.c": { maxLines: 190, maxStrcmpCalls: 0 },
-  "native/zero-c/src/capability_summary.h": { maxLines: 25, maxStrcmpCalls: 0 },
+  "native/zero-c/src/capability_summary.h": { maxLines: 26, maxStrcmpCalls: 0 },
   "native/zero-c/src/canonical_text.c": { maxLines: 1508, maxStrcmpCalls: 0 },
   "native/zero-c/src/canonical_text_format.c": { maxLines: 354, maxStrcmpCalls: 0 },
   "native/zero-c/src/canonical_text_program.c": { maxLines: 1493, maxStrcmpCalls: 0 },
@@ -115,7 +116,7 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_order.c": { maxLines: 80, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_order.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_node_id.c": { maxLines: 350, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_report.c": { maxLines: 130, maxStrcmpCalls: 25 },
+  "native/zero-c/src/program_graph_report.c": { maxLines: 80, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_report.h": { maxLines: 20, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_validate.c": { maxLines: 537, maxStrcmpCalls: 5 },
   "native/zero-c/src/program_graph_patch_builders.c": { maxLines: 375, maxStrcmpCalls: 1 },
@@ -672,6 +673,22 @@ function mainUsesSharedStdlibFallibility(text) {
     !/\bOrRaise\b/.test(block);
 }
 
+function usesSharedStdlibCapabilityLookup(mainText, graphReportText, capabilityNamesText, capabilitySummaryHeaderText) {
+  const mainCode = cTextWithoutComments(mainText);
+  const graphReportCode = cTextWithoutComments(graphReportText);
+  const capabilityNamesCode = cTextWithoutComments(capabilityNamesText);
+  const capabilitySummaryHeaderCode = cTextWithoutComments(capabilitySummaryHeaderText);
+  return /\bz_capability_summary_collect_std_name\s*\(/.test(mainCode) &&
+    /\bz_capability_summary_set\s*\(/.test(mainCode) &&
+    /\bz_capability_summary_collect_std_name\s*\(/.test(graphReportCode) &&
+    /\bz_capability_summary_collect_std_name\s*\(/.test(capabilitySummaryHeaderCode) &&
+    /\bz_capability_summary_set\s*\(/.test(capabilitySummaryHeaderCode) &&
+    /\bz_std_helper_find\s*\(/.test(capabilityNamesCode) &&
+    !/\bstatic\s+void\s+collect_capabilities_from_std_name\s*\(/.test(mainCode) &&
+    !/\bstatic\s+void\s+graph_report_collect_capabilities_from_std_name\s*\(/.test(graphReportCode) &&
+    !/\bstatic\s+void\s+graph_report_capability_set\s*\(/.test(graphReportCode);
+}
+
 function helperReturnTypeMismatches(helpers, checkerReturnTypes) {
   return helpers
     .filter((helper) => checkerReturnTypes.has(helper.name) && checkerReturnTypes.get(helper.name) !== helper.returnType)
@@ -908,6 +925,12 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
     violations.push({
       kind: "stdlib-shared-fallibility-lookup",
       sharedFallibilityLookup: stdlib.sharedFallibilityLookup,
+    });
+  }
+  if (!stdlib.sharedCapabilityLookup) {
+    violations.push({
+      kind: "stdlib-shared-capability-lookup",
+      sharedCapabilityLookup: stdlib.sharedCapabilityLookup,
     });
   }
   if (!stdlib.sharedHelperClassification.checker) {
@@ -1206,6 +1229,9 @@ const checker = texts.get("native/zero-c/src/checker.c") ?? "";
 const main = texts.get("native/zero-c/src/main.c") ?? "";
 const ir = texts.get("native/zero-c/src/ir.c") ?? "";
 const stdSig = texts.get("native/zero-c/src/std_sig.c") ?? "";
+const capabilityNames = texts.get("native/zero-c/src/capability_names.c") ?? "";
+const capabilitySummaryHeader = texts.get("native/zero-c/src/capability_summary.h") ?? "";
+const programGraphReport = texts.get("native/zero-c/src/program_graph_report.c") ?? "";
 const targetBackendRaw = texts.get("native/zero-c/src/target_backend.c") ?? "";
 const targetBackendSource = cCodeText(targetBackendRaw);
 const directExeBackendBody = cCodeText(cBlock(targetBackendRaw, "ZDirectBackend z_direct_exe_backend"));
@@ -1283,6 +1309,7 @@ const stdlib = {
     checker: checkerUsesSharedStdlibFallibility(checker),
     graph: mainUsesSharedStdlibFallibility(main),
   },
+  sharedCapabilityLookup: usesSharedStdlibCapabilityLookup(main, programGraphReport, capabilityNames, capabilitySummaryHeader),
   sharedHelperClassification: {
     checker: checkerUsesSharedStdlibHelperClassification(checker),
   },

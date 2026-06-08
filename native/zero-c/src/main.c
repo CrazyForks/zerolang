@@ -1174,26 +1174,6 @@ static bool helper_summary_used(const HelperUseSummary *helpers, size_t index) {
   return helpers && helpers->used && index < helpers->len && helpers->used[index];
 }
 
-static void capability_summary_set(CapabilitySummary *caps, const char *capability) {
-  if (!caps || !capability) return;
-  if (strcmp(capability, "args") == 0) caps->args = true;
-  else if (strcmp(capability, "env") == 0) caps->env = true;
-  else if (strcmp(capability, "fs") == 0) caps->fs = true;
-  else if (strcmp(capability, "memory") == 0) caps->memory = true;
-  else if (strcmp(capability, "alloc") == 0) {
-    caps->alloc = true;
-    caps->memory = true;
-  } else if (strcmp(capability, "path") == 0) caps->path = true;
-  else if (strcmp(capability, "codec") == 0) caps->codec = true;
-  else if (strcmp(capability, "parse") == 0) caps->parse = true;
-  else if (strcmp(capability, "time") == 0) caps->time = true;
-  else if (strcmp(capability, "rand") == 0) caps->rand = true;
-  else if (strcmp(capability, "net") == 0) caps->net = true;
-  else if (strcmp(capability, "proc") == 0) caps->proc = true;
-  else if (strcmp(capability, "web") == 0) caps->web = true;
-  else if (strcmp(capability, "world") == 0) caps->world = true;
-}
-
 static void append_capability_json_array(ZBuf *buf, const CapabilitySummary *caps) {
   bool wrote = false;
   zbuf_append(buf, "[");
@@ -1724,44 +1704,11 @@ static MemoryModelSummary memory_model_summary_from_ir(const IrProgram *ir, cons
   return summary;
 }
 
-static void collect_capabilities_from_std_name(const char *name, CapabilitySummary *caps) {
-  if (!name || !caps) return;
-  const ZStdHelperInfo *helper = z_std_helper_find(name);
-  if (helper) {
-    capability_summary_set(caps, helper->capability);
-    return;
-  }
-  if (strncmp(name, "std.args.", strlen("std.args.")) == 0) caps->args = true;
-  else if (strncmp(name, "std.env.", strlen("std.env.")) == 0) caps->env = true;
-  else if (strncmp(name, "std.fs.", strlen("std.fs.")) == 0) caps->fs = true;
-  else if (strncmp(name, "std.path.", strlen("std.path.")) == 0) caps->path = true;
-  else if (strncmp(name, "std.codec.", strlen("std.codec.")) == 0) caps->codec = true;
-  else if (strncmp(name, "std.parse.", strlen("std.parse.")) == 0) caps->parse = true;
-  else if (strncmp(name, "std.json.", strlen("std.json.")) == 0) caps->parse = true;
-  else if (strncmp(name, "std.time.", strlen("std.time.")) == 0) caps->time = true;
-  else if (strncmp(name, "std.rand.", strlen("std.rand.")) == 0) caps->rand = true;
-  else if (strncmp(name, "std.proc.", strlen("std.proc.")) == 0) caps->proc = true;
-  else if (strncmp(name, "std.crypto.secureRandom", strlen("std.crypto.secureRandom")) == 0) caps->rand = true;
-  else if (strncmp(name, "std.crypto.", strlen("std.crypto.")) == 0) caps->codec = true;
-  else if (strncmp(name, "std.net.", strlen("std.net.")) == 0) caps->net = true;
-  else if (strncmp(name, "std.http.", strlen("std.http.")) == 0) caps->net = true;
-  else if (strncmp(name, "std.mem.", strlen("std.mem.")) == 0) {
-    caps->memory = true;
-    if (strcmp(name, "std.mem.nullAlloc") == 0 ||
-        strcmp(name, "std.mem.fixedBufAlloc") == 0 ||
-        strcmp(name, "std.mem.arena") == 0 ||
-        strcmp(name, "std.mem.allocBytes") == 0 ||
-        strcmp(name, "std.mem.byteBuf") == 0 ||
-        strcmp(name, "std.mem.reset") == 0 ||
-        strcmp(name, "std.mem.capacity") == 0) caps->alloc = true;
-  }
-}
-
 static void collect_capabilities_from_expr(const Expr *expr, CapabilitySummary *caps) {
   if (!expr || !caps) return;
   if (expr->kind == EXPR_CALL) {
     char *callee = expr_callee_name(expr->left);
-    collect_capabilities_from_std_name(callee, caps);
+    z_capability_summary_collect_std_name(callee, caps);
     free(callee);
   }
   collect_capabilities_from_expr(expr->left, caps);
@@ -1823,7 +1770,7 @@ static CapabilitySummary function_capabilities(const Function *fun) {
     else if (strcmp(type, "Proc") == 0) caps.proc = true;
     else if (strcmp(type, "Clock") == 0) caps.time = true;
     else if (strcmp(type, "Rand") == 0) caps.rand = true;
-    else if (strcmp(type, "Alloc") == 0 || strcmp(type, "FixedBufAlloc") == 0 || strcmp(type, "NullAlloc") == 0) capability_summary_set(&caps, "alloc");
+    else if (strcmp(type, "Alloc") == 0 || strcmp(type, "FixedBufAlloc") == 0 || strcmp(type, "NullAlloc") == 0) z_capability_summary_set(&caps, "alloc");
     if (strstr(type, "Span<") || strstr(type, "MutSpan<") || strstr(type, "ByteBuf")) caps.memory = true;
   }
   if (fun) collect_capabilities_from_stmt_vec(&fun->body, &caps);
@@ -1834,20 +1781,7 @@ static CapabilitySummary program_capabilities(const Program *program) {
   CapabilitySummary caps = {0};
   for (size_t i = 0; program && i < program->functions.len; i++) {
     CapabilitySummary fun_caps = function_capabilities(&program->functions.items[i]);
-    caps.args = caps.args || fun_caps.args;
-    caps.env = caps.env || fun_caps.env;
-    caps.fs = caps.fs || fun_caps.fs;
-    caps.memory = caps.memory || fun_caps.memory;
-    caps.alloc = caps.alloc || fun_caps.alloc;
-    caps.path = caps.path || fun_caps.path;
-    caps.codec = caps.codec || fun_caps.codec;
-    caps.parse = caps.parse || fun_caps.parse;
-    caps.time = caps.time || fun_caps.time;
-    caps.rand = caps.rand || fun_caps.rand;
-    caps.net = caps.net || fun_caps.net;
-    caps.proc = caps.proc || fun_caps.proc;
-    caps.web = caps.web || fun_caps.web;
-    caps.world = caps.world || fun_caps.world;
+    z_capability_summary_merge(&caps, &fun_caps);
   }
   for (size_t i = 0; program && i < program->shapes.len; i++) {
     for (size_t field_index = 0; field_index < program->shapes.items[i].fields.len; field_index++) {
@@ -1855,20 +1789,7 @@ static CapabilitySummary program_capabilities(const Program *program) {
     }
     for (size_t method_index = 0; method_index < program->shapes.items[i].methods.len; method_index++) {
       CapabilitySummary fun_caps = function_capabilities(&program->shapes.items[i].methods.items[method_index]);
-      caps.args = caps.args || fun_caps.args;
-      caps.env = caps.env || fun_caps.env;
-      caps.fs = caps.fs || fun_caps.fs;
-      caps.memory = caps.memory || fun_caps.memory;
-      caps.alloc = caps.alloc || fun_caps.alloc;
-      caps.path = caps.path || fun_caps.path;
-      caps.codec = caps.codec || fun_caps.codec;
-      caps.parse = caps.parse || fun_caps.parse;
-      caps.time = caps.time || fun_caps.time;
-      caps.rand = caps.rand || fun_caps.rand;
-      caps.net = caps.net || fun_caps.net;
-      caps.proc = caps.proc || fun_caps.proc;
-      caps.web = caps.web || fun_caps.web;
-      caps.world = caps.world || fun_caps.world;
+      z_capability_summary_merge(&caps, &fun_caps);
     }
   }
   return caps;
