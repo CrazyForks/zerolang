@@ -853,3 +853,120 @@ fn __zero_std_http_request_path_segment(request: Span<u8>, index: usize) -> Mayb
     }
     return __zero_std_http_path_segment(path.value, index)
 }
+
+fn __zero_std_http_request_is_head(request: Span<u8>, path: Span<u8>) -> Bool {
+    return __zero_std_http_request_matches(request, "HEAD", path)
+}
+
+fn __zero_std_http_request_is_options(request: Span<u8>, path: Span<u8>) -> Bool {
+    return __zero_std_http_request_matches(request, "OPTIONS", path)
+}
+
+fn __zero_std_http_write_cors_preflight(buffer: MutSpan<u8>, allow_origin: Span<u8>, allow_methods: Span<u8>, allow_headers: Span<u8>) -> Maybe<Span<u8>> {
+    var offset: usize = 0
+    let status: Maybe<usize> = __zero_std_http_write(buffer, offset, "HTTP/1.1 204 No Content\n")
+    if !status.has {
+        return null
+    }
+    offset = status.value
+    let origin_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "access-control-allow-origin: ")
+    if !origin_label.has {
+        return null
+    }
+    offset = origin_label.value
+    let origin_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_origin)
+    if !origin_value.has {
+        return null
+    }
+    offset = origin_value.value
+    let origin_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !origin_line.has {
+        return null
+    }
+    offset = origin_line.value
+    let methods_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "access-control-allow-methods: ")
+    if !methods_label.has {
+        return null
+    }
+    offset = methods_label.value
+    let methods_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_methods)
+    if !methods_value.has {
+        return null
+    }
+    offset = methods_value.value
+    let methods_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !methods_line.has {
+        return null
+    }
+    offset = methods_line.value
+    let headers_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "access-control-allow-headers: ")
+    if !headers_label.has {
+        return null
+    }
+    offset = headers_label.value
+    let headers_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_headers)
+    if !headers_value.has {
+        return null
+    }
+    offset = headers_value.value
+    let headers_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !headers_line.has {
+        return null
+    }
+    offset = headers_line.value
+    let length: Maybe<usize> = __zero_std_http_write_content_length(buffer, offset, 0_usize)
+    if !length.has {
+        return null
+    }
+    offset = length.value
+    let blank: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !blank.has {
+        return null
+    }
+    return buffer[..blank.value]
+}
+
+fn __zero_std_http_write_cors_json_response(buffer: MutSpan<u8>, status_line: Span<u8>, body: Span<u8>, allow_origin: Span<u8>) -> Maybe<Span<u8>> {
+    var offset: usize = 0
+    let prefix: Maybe<usize> = __zero_std_http_write(buffer, offset, "HTTP/1.1 ")
+    if !prefix.has {
+        return null
+    }
+    offset = prefix.value
+    let status: Maybe<usize> = __zero_std_http_write(buffer, offset, status_line)
+    if !status.has {
+        return null
+    }
+    offset = status.value
+    let content_type: Maybe<usize> = __zero_std_http_write(buffer, offset, "\ncontent-type: application/json\naccess-control-allow-origin: ")
+    if !content_type.has {
+        return null
+    }
+    offset = content_type.value
+    let origin_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_origin)
+    if !origin_value.has {
+        return null
+    }
+    offset = origin_value.value
+    let origin_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !origin_line.has {
+        return null
+    }
+    offset = origin_line.value
+    let body_len: usize = std.mem.len(body)
+    let length: Maybe<usize> = __zero_std_http_write_content_length(buffer, offset, body_len)
+    if !length.has {
+        return null
+    }
+    offset = length.value
+    let blank: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !blank.has {
+        return null
+    }
+    offset = blank.value
+    let wrote_body: Maybe<usize> = __zero_std_http_write(buffer, offset, body)
+    if !wrote_body.has {
+        return null
+    }
+    return buffer[..wrote_body.value]
+}

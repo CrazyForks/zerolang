@@ -422,6 +422,8 @@ writeRequest(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8
 writeJsonRequest(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeJsonResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeCorsPreflight(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeCorsJsonResponse(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
 writeJsonOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonCreated(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonBadRequest(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
@@ -451,6 +453,8 @@ requestJsonBodyWithin(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
 requestMatches(arg0: Span<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Bool
 requestMethodIs(arg0: Span<u8>, arg1: Span<u8>) -> Bool
 requestIsGet(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsHead(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsOptions(arg0: Span<u8>, arg1: Span<u8>) -> Bool
 requestIsPost(arg0: Span<u8>, arg1: Span<u8>) -> Bool
 requestIsPut(arg0: Span<u8>, arg1: Span<u8>) -> Bool
 requestIsPatch(arg0: Span<u8>, arg1: Span<u8>) -> Bool
@@ -829,7 +833,8 @@ pub fn main() -> Void {
 ```
 
 For API-style handlers, parse the request envelope with route helpers such as
-`std.http.requestIsGet`, `std.http.requestIsPost`,
+`std.http.requestIsGet`, `std.http.requestIsHead`,
+`std.http.requestIsOptions`, `std.http.requestIsPost`,
 `std.http.requestPathStartsWith`, `std.http.requestPathTailAfter`,
 `std.http.pathSegmentCount`, `std.http.pathSegment`,
 `std.http.requestPathSegmentCount`, `std.http.requestPathSegment`,
@@ -844,8 +849,12 @@ Prefer the status-specific JSON writers for common responses:
 `std.http.writeJsonMethodNotAllowed`, `std.http.writeJsonConflict`,
 `std.http.writeJsonUnprocessable`, `std.http.writeJsonTooManyRequests`, and
 `std.http.writeJsonInternalServerError`. Use `std.http.writeNoContent` for
-204 responses and `std.http.responseBodyBytes` to read the body from a response
-envelope produced locally by `writeResponse` or a JSON writer.
+204 responses, `std.http.writeCorsPreflight` for `OPTIONS` preflight responses,
+and `std.http.writeCorsJsonResponse` when a JSON response also needs
+`access-control-allow-origin`. `writeCorsJsonResponse` takes a status-line
+fragment such as `"200 OK"` or `"422 Unprocessable Entity"`. Use
+`std.http.responseBodyBytes` to read the body from a response envelope produced
+locally by `writeResponse` or a JSON writer.
 
 ```zero
 pub fn main() -> Void {
@@ -856,6 +865,20 @@ pub fn main() -> Void {
     let resource: Maybe<Span<u8>> = std.http.requestPathSegment(request, 0)
     if std.http.requestIsPost(request, "/users") && resource.has && std.mem.eql(resource.value, "users") && tenant.has && body.has {
         let response: Maybe<Span<u8>> = std.http.writeJsonCreated(response_buf, "{\"created\":true}")
+        expect response.has
+    }
+}
+```
+
+For browser-facing APIs, handle preflight and CORS in the response writer
+instead of hand-assembling headers:
+
+```zero
+pub fn main() -> Void {
+    let request: Span<u8> = "OPTIONS /users\naccess-control-request-method: POST\n\n"
+    var response_buf: [256]u8 = [0_u8; 256]
+    if std.http.requestIsOptions(request, "/users") {
+        let response: Maybe<Span<u8>> = std.http.writeCorsPreflight(response_buf, "*", "GET, POST, OPTIONS", "content-type, authorization")
         expect response.has
     }
 }

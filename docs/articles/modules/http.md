@@ -41,6 +41,8 @@ Runnable today:
 | `std.http.writeJsonRequest(buffer, startLine, body)` | `Maybe<Span<u8>>` | Writes a JSON request envelope with `content-type` and `content-length`. |
 | `std.http.writeResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes an HTTP/1.1 response envelope into caller storage. |
 | `std.http.writeJsonResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a JSON HTTP/1.1 response envelope into caller storage. |
+| `std.http.writeCorsPreflight(buffer, allowOrigin, allowMethods, allowHeaders)` | `Maybe<Span<u8>>` | Writes a 204 CORS preflight response with caller-provided allow headers. |
+| `std.http.writeCorsJsonResponse(buffer, statusLine, body, allowOrigin)` | `Maybe<Span<u8>>` | Writes a JSON response with `access-control-allow-origin`; `statusLine` is a fragment such as `"200 OK"`. |
 | `std.http.writeJsonOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 JSON response envelope into caller storage. |
 | `std.http.writeJsonCreated(buffer, body)` | `Maybe<Span<u8>>` | Writes a 201 JSON response envelope into caller storage. |
 | `std.http.writeJsonBadRequest(buffer, body)` | `Maybe<Span<u8>>` | Writes a 400 JSON response envelope into caller storage. |
@@ -70,6 +72,8 @@ Runnable today:
 | `std.http.requestMatches(request, method, path)` | `Bool` | True when a request envelope has the exact method and normalized path. |
 | `std.http.requestMethodIs(request, method)` | `Bool` | True when a request envelope has the exact method. |
 | `std.http.requestIsGet(request, path)` | `Bool` | True when a request envelope is `GET` for the normalized path. |
+| `std.http.requestIsHead(request, path)` | `Bool` | True when a request envelope is `HEAD` for the normalized path. |
+| `std.http.requestIsOptions(request, path)` | `Bool` | True when a request envelope is `OPTIONS` for the normalized path. |
 | `std.http.requestIsPost(request, path)` | `Bool` | True when a request envelope is `POST` for the normalized path. |
 | `std.http.requestIsPut(request, path)` | `Bool` | True when a request envelope is `PUT` for the normalized path. |
 | `std.http.requestIsPatch(request, path)` | `Bool` | True when a request envelope is `PATCH` for the normalized path. |
@@ -98,6 +102,7 @@ Metadata labels:
   `conformance/native/pass/std-http-errors.0`,
   `conformance/native/pass/std-http-response-helpers.0`,
   `conformance/native/pass/std-http-api-helpers.0`,
+  `conformance/native/pass/std-http-cors-helpers.0`,
   `conformance/native/pass/std-http-path-segments.0`,
   `examples/json-api-client.0`,
   `examples/json-api-router.0`,
@@ -178,6 +183,26 @@ pub fn main(world: World) -> Void raises {
     let failed: Maybe<Span<u8>> = std.http.writeJsonBadRequest(response, "{\"error\":\"bad_request\"}")
     if failed.has {
         check world.err.write("http route failed\n")
+    }
+}
+```
+
+CORS preflight and JSON response:
+
+```zero
+pub fn main(world: World) -> Void raises {
+    let request: Span<u8> = std.mem.span("OPTIONS /users\naccess-control-request-method: POST\n\n")
+    var response: [256]u8 = [0_u8; 256]
+    if std.http.requestIsOptions(request, "/users") {
+        let written: Maybe<Span<u8>> = std.http.writeCorsPreflight(response, "*", "GET, POST, OPTIONS", "content-type, authorization")
+        if written.has {
+            check world.out.write("http cors preflight ok\n")
+            return
+        }
+    }
+    let failed: Maybe<Span<u8>> = std.http.writeCorsJsonResponse(response, "400 Bad Request", "{\"error\":\"bad_request\"}", "*")
+    if failed.has {
+        check world.err.write("http cors failed\n")
     }
 }
 ```

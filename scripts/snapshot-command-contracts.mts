@@ -899,6 +899,16 @@ function assertReleaseTargetContract(report, expected) {
   assert(contract.capabilityFacts.some((capability) => capability.name === "memory" && capability.available === true));
 }
 
+function directExeEmitterForTarget(target: string) {
+  if (target.startsWith("linux") && target.includes("arm64")) return "zero-elf-aarch64-exe";
+  if (target.startsWith("linux")) return "zero-elf64-exe";
+  if (target === "darwin-x64") return "zero-macho-x64-exe";
+  if (target.startsWith("darwin")) return "zero-macho64-exe";
+  if (target === "win32-arm64.exe") return "zero-coff-aarch64-exe";
+  if (target.startsWith("win32")) return "zero-coff-x64-exe";
+  return "direct";
+}
+
 const generatedCBytesBeforeReadOnlyCommands = json(["size", "--json", "examples/memory-package"]).body.generatedCBytes;
 
 assert.equal(zero(["--version"]).stdout, "zero 0.2.1\n");
@@ -4491,7 +4501,7 @@ assert.match(stdlibSkill.data[0].content, /std\.str/);
 assert.match(stdlibSkill.data[0].content, /non-overlapping reverse/);
 assert.match(stdlibSkill.data[0].content, /## Function Signatures/);
 const stdSigText = readFileSync("native/zero-c/src/std_sig.c", "utf8");
-const stdHelperNames = [...stdSigText.matchAll(/^\s*\{"(std\.[^"]+)",/gm)].map((match) => match[1]);
+const stdHelperNames = [...stdSigText.matchAll(/\{"(std\.[^"]+)",/g)].map((match) => match[1]);
 const stdlibCatalog = stdlibSkill.data[0].content.split("## Function Signatures")[1].split("## Maybe Pattern")[0];
 assert.equal((stdlibCatalog.match(/^[A-Za-z_][A-Za-z0-9_]*\(.*\) -> /gm) ?? []).length, stdHelperNames.length);
 for (const helperName of stdHelperNames) {
@@ -6192,7 +6202,7 @@ assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].code, "BLD004");
 assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].expected, "typed program graph MIR subset");
 assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].actual, "owned<Tracked>");
 assert.doesNotMatch(llvmNativeLoweringBlockedBuild.body.diagnostics[0].message, /direct backend/);
-assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].backendBlocker.backend, "zero-macho64-exe");
+assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].backendBlocker.backend, directExeEmitterForTarget(version.host));
 assert.equal(llvmNativeLoweringBlockedBuild.body.diagnostics[0].backendBlocker.stage, "lower");
 const llvmFailingToolPath = join(outDir, "failing-clang");
 writeFileSync(llvmFailingToolPath, "#!/bin/sh\nexit 1\n");
@@ -6274,7 +6284,7 @@ assert.notEqual(llvmIrLoweringBlockedBuild.code, 0);
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].code, "BLD004");
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].expected, "typed program graph MIR subset");
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].actual, "owned<Tracked>");
-assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.backend, "zero-macho64-exe");
+assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.backend, directExeEmitterForTarget(version.host));
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.stage, "lower");
 assert.equal(llvmIrLoweringBlockedBuild.body.diagnostics[0].backendBlocker.unsupportedFeature, "owned<Tracked>");
 const directLlvmIrReadiness = json(["check", "--json", "--emit", "llvm-ir", "--backend", "direct", "examples/add.0"]).body;
@@ -6670,7 +6680,7 @@ assert(!codecReadOnlyGraph.sourceFiles.some((path) => path.endsWith("std/ascii.0
 assert(codecReadOnlyGraph.requiresCapabilities.includes("parse"));
 const codecReadOnlySize = json(["size", "--json", codecReadOnlySource]).body;
 assert.equal(codecReadOnlySize.sizeBreakdown.summary.functionCount, 2);
-assert.equal(codecReadOnlySize.sizeBreakdown.summary.stdlibHelperCount, 5);
+assert.equal(codecReadOnlySize.sizeBreakdown.summary.stdlibHelperCount, 6);
 assert(codecReadOnlySize.topLargestEmittedHelpers.some((helper) => helper.name === "std.codec.readU16Le"));
 assert(!codecReadOnlySize.retentionReasons.some((item) => item.name === "__zero_std_codec_hex_decode"));
 assert(codecReadOnlySize.retentionReasons.some((item) => item.name === "std.ascii.hexValue"));

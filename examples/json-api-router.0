@@ -1,4 +1,7 @@
 fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
+    if std.http.requestIsOptions(request, "/users") {
+        return std.http.writeCorsPreflight(response, "*", "GET, POST, OPTIONS", "content-type, authorization")
+    }
     if std.http.requestIsGet(request, "/health") {
         return std.http.writeJsonOk(response, "{\"ok\":true}")
     }
