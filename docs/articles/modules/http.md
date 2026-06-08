@@ -56,6 +56,10 @@ Runnable today:
 | `std.http.requestMethodName(request)` | `Maybe<Span<u8>>` | Borrows the method token from a request envelope. |
 | `std.http.requestTarget(request)` | `Maybe<Span<u8>>` | Borrows the raw target from a request envelope. |
 | `std.http.requestPath(request)` | `Maybe<Span<u8>>` | Borrows the path from an absolute or origin-form request target. |
+| `std.http.pathSegmentCount(path)` | `usize` | Counts non-empty path segments in a path span. |
+| `std.http.pathSegment(path, index)` | `Maybe<Span<u8>>` | Borrows a zero-based non-empty path segment from a path span. |
+| `std.http.requestPathSegmentCount(request)` | `usize` | Counts non-empty path segments from a request envelope path. |
+| `std.http.requestPathSegment(request, index)` | `Maybe<Span<u8>>` | Borrows a zero-based non-empty request path segment. |
 | `std.http.requestQuery(request)` | `Maybe<Span<u8>>` | Borrows the query string from a request target. |
 | `std.http.requestQueryValue(request, name)` | `Maybe<Span<u8>>` | Borrows a query value by name from a request envelope. |
 | `std.http.requestHeader(request, name)` | `Maybe<Span<u8>>` | Borrows a case-insensitive request header value. |
@@ -94,6 +98,7 @@ Metadata labels:
   `conformance/native/pass/std-http-errors.0`,
   `conformance/native/pass/std-http-response-helpers.0`,
   `conformance/native/pass/std-http-api-helpers.0`,
+  `conformance/native/pass/std-http-path-segments.0`,
   `examples/json-api-client.0`,
   `examples/json-api-router.0`,
   `examples/std-http-json.0`,
@@ -162,7 +167,8 @@ pub fn main(world: World) -> Void raises {
     var response: [256]u8 = [0_u8; 256]
     let body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(request, 64)
     let tenant: Maybe<Span<u8>> = std.http.requestQueryValue(request, "tenant")
-    if std.http.requestIsPost(request, "/users") && tenant.has && body.has {
+    let resource: Maybe<Span<u8>> = std.http.requestPathSegment(request, 0)
+    if std.http.requestIsPost(request, "/users") && resource.has && std.mem.eql(resource.value, "users") && tenant.has && body.has {
         let written: Maybe<Span<u8>> = std.http.writeJsonCreated(response, "{\"created\":true}")
         if written.has {
             check world.out.write("http route ok\n")

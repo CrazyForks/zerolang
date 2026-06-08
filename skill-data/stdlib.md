@@ -437,6 +437,10 @@ writeNoContent(arg0: MutSpan<u8>) -> Maybe<Span<u8>>
 requestMethodName(arg0: Span<u8>) -> Maybe<Span<u8>>
 requestTarget(arg0: Span<u8>) -> Maybe<Span<u8>>
 requestPath(arg0: Span<u8>) -> Maybe<Span<u8>>
+pathSegmentCount(arg0: Span<u8>) -> usize
+pathSegment(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
+requestPathSegmentCount(arg0: Span<u8>) -> usize
+requestPathSegment(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
 requestQuery(arg0: Span<u8>) -> Maybe<Span<u8>>
 requestQueryValue(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 requestHeader(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
@@ -827,8 +831,12 @@ pub fn main() -> Void {
 For API-style handlers, parse the request envelope with route helpers such as
 `std.http.requestIsGet`, `std.http.requestIsPost`,
 `std.http.requestPathStartsWith`, `std.http.requestPathTailAfter`,
+`std.http.pathSegmentCount`, `std.http.pathSegment`,
+`std.http.requestPathSegmentCount`, `std.http.requestPathSegment`,
 `std.http.requestQueryValue`, `std.http.requestHeader`,
 `std.http.requestHasJsonContentType`, and `std.http.requestJsonBodyWithin`.
+Use path segment helpers for resource routes such as `/users/7`; they borrow
+zero-based, non-empty segments and ignore leading, trailing, or repeated `/`.
 Prefer the status-specific JSON writers for common responses:
 `std.http.writeJsonOk`, `std.http.writeJsonCreated`,
 `std.http.writeJsonBadRequest`, `std.http.writeJsonUnauthorized`,
@@ -845,7 +853,8 @@ pub fn main() -> Void {
     var response_buf: [192]u8 = [0_u8; 192]
     let body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(request, 64)
     let tenant: Maybe<Span<u8>> = std.http.requestQueryValue(request, "tenant")
-    if std.http.requestIsPost(request, "/users") && tenant.has && body.has {
+    let resource: Maybe<Span<u8>> = std.http.requestPathSegment(request, 0)
+    if std.http.requestIsPost(request, "/users") && resource.has && std.mem.eql(resource.value, "users") && tenant.has && body.has {
         let response: Maybe<Span<u8>> = std.http.writeJsonCreated(response_buf, "{\"created\":true}")
         expect response.has
     }

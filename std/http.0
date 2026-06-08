@@ -798,3 +798,58 @@ fn __zero_std_http_write_json_internal_server_error(buffer: MutSpan<u8>, body: S
 fn __zero_std_http_write_no_content(buffer: MutSpan<u8>) -> Maybe<Span<u8>> {
     return std.http.writeResponse(buffer, 204_u16, "")
 }
+
+fn __zero_std_http_path_segment_count(path: Span<u8>) -> usize {
+    var count: usize = 0
+    var index: usize = 0
+    while index < std.mem.len(path) {
+        while index < std.mem.len(path) && path[index] == 47_u8 {
+            index = index + 1
+        }
+        if index < std.mem.len(path) {
+            count = count + 1
+            while index < std.mem.len(path) && path[index] != 47_u8 {
+                index = index + 1
+            }
+        }
+    }
+    return count
+}
+
+fn __zero_std_http_path_segment(path: Span<u8>, index: usize) -> Maybe<Span<u8>> {
+    var current: usize = 0
+    var start: usize = 0
+    while start < std.mem.len(path) {
+        while start < std.mem.len(path) && path[start] == 47_u8 {
+            start = start + 1
+        }
+        if start < std.mem.len(path) {
+            var end: usize = start
+            while end < std.mem.len(path) && path[end] != 47_u8 {
+                end = end + 1
+            }
+            if current == index {
+                return path[start..end]
+            }
+            current = current + 1
+            start = end
+        }
+    }
+    return null
+}
+
+fn __zero_std_http_request_path_segment_count(request: Span<u8>) -> usize {
+    let path: Maybe<Span<u8>> = std.http.requestPath(request)
+    if !path.has {
+        return 0
+    }
+    return __zero_std_http_path_segment_count(path.value)
+}
+
+fn __zero_std_http_request_path_segment(request: Span<u8>, index: usize) -> Maybe<Span<u8>> {
+    let path: Maybe<Span<u8>> = std.http.requestPath(request)
+    if !path.has {
+        return null
+    }
+    return __zero_std_http_path_segment(path.value, index)
+}

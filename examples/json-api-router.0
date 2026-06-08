@@ -2,7 +2,10 @@ fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
     if std.http.requestIsGet(request, "/health") {
         return std.http.writeJsonOk(response, "{\"ok\":true}")
     }
-    if std.http.requestIsDelete(request, "/users/7") {
+    let segment_count: usize = std.http.requestPathSegmentCount(request)
+    let first: Maybe<Span<u8>> = std.http.requestPathSegment(request, 0)
+    let second: Maybe<Span<u8>> = std.http.requestPathSegment(request, 1)
+    if std.http.requestMethodIs(request, "DELETE") && segment_count == 2 && first.has && second.has && std.mem.eql(first.value, "users") {
         return std.http.writeResponse(response, 204_u16, "")
     }
     if std.http.requestIsPost(request, "/users") {
@@ -17,7 +20,7 @@ fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
         }
         return std.http.writeJsonBadRequest(response, "{\"error\":\"invalid\"}")
     }
-    if std.http.requestPathStartsWith(request, "/users/") {
+    if segment_count == 2 && first.has && second.has && std.mem.eql(first.value, "users") {
         return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\",\"resource\":\"user\"}")
     }
     return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\"}")
