@@ -4,6 +4,10 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+#include "zero_contracts.h"
+
+#define ZERO_VERSION "0.2.1"
+
 typedef struct ZTargetInfo ZTargetInfo;
 typedef struct ZProgramGraph ZProgramGraph;
 
@@ -391,10 +395,31 @@ typedef enum {
   IR_VALUE_ARRAY_BYTE_VIEW,
   IR_VALUE_BYTE_SLICE,
   IR_VALUE_BYTE_VIEW_LEN,
+  IR_VALUE_BYTE_VIEW_REMAINING,
   IR_VALUE_BYTE_VIEW_INDEX_LOAD,
   IR_VALUE_BYTE_VIEW_EQ,
+  IR_VALUE_STR_CONTAINS,
+  IR_VALUE_STR_RUNTIME,
+  IR_VALUE_ASCII_RUNTIME,
+  IR_VALUE_TEXT_RUNTIME,
+  IR_VALUE_PARSE_RUNTIME,
+  IR_VALUE_TIME_RUNTIME,
+  IR_VALUE_MATH_RUNTIME,
+  IR_VALUE_SEARCH_RUNTIME,
+  IR_VALUE_SORT_RUNTIME,
+  IR_VALUE_PARSE_I32,
+  IR_VALUE_PARSE_U32,
+  IR_VALUE_ARGS_PARSE_U32,
+  IR_VALUE_FMT_BOOL,
+  IR_VALUE_FMT_HEX_U32,
+  IR_VALUE_FMT_I32,
+  IR_VALUE_FMT_U32,
+  IR_VALUE_FMT_USIZE,
   IR_VALUE_BYTE_COPY,
   IR_VALUE_BYTE_FILL,
+  IR_VALUE_ITEM_COPY,
+  IR_VALUE_ITEM_FILL,
+  IR_VALUE_ITEM_CONTAINS,
   IR_VALUE_CRC32_BYTES,
   IR_VALUE_FIXED_BUF_ALLOC,
   IR_VALUE_VEC_INIT,
@@ -408,6 +433,13 @@ typedef enum {
   IR_VALUE_MAYBE_SCALAR_LITERAL,
   IR_VALUE_ARGS_LEN,
   IR_VALUE_ARGS_GET,
+  IR_VALUE_ARGS_EQ,
+  IR_VALUE_ARGS_GET_OR,
+  IR_VALUE_ARGS_FIND,
+  IR_VALUE_ARGS_CONTAINS,
+  IR_VALUE_ARGS_VALUE_AFTER,
+  IR_VALUE_ARGS_VALUE_AFTER_OR,
+  IR_VALUE_ARGS_VALUE_AFTER_PARSE_U32,
   IR_VALUE_ENV_GET,
   IR_VALUE_TIME_WALL_SECONDS,
   IR_VALUE_TIME_MONOTONIC,
@@ -450,10 +482,151 @@ typedef enum {
   IR_VALUE_HTTP_HEADER_FOUND,
   IR_VALUE_HTTP_HEADER_OFFSET,
   IR_VALUE_HTTP_HEADER_LEN,
+  IR_VALUE_HTTP_WRITE_JSON_RESPONSE,
+  IR_VALUE_HTTP_REQUEST_METHOD_NAME,
+  IR_VALUE_HTTP_REQUEST_PATH,
+  IR_VALUE_HTTP_STATUS_CLASS,
   IR_VALUE_FIELD_LOAD,
   IR_VALUE_CHECK,
   IR_VALUE_RESCUE
 } IrValueKind;
+
+typedef enum {
+  IR_STR_OP_REVERSE,
+  IR_STR_OP_COPY,
+  IR_STR_OP_CONCAT,
+  IR_STR_OP_REPEAT,
+  IR_STR_OP_TO_LOWER_ASCII,
+  IR_STR_OP_TO_UPPER_ASCII,
+  IR_STR_OP_TRIM_ASCII,
+  IR_STR_OP_TRIM_START_ASCII,
+  IR_STR_OP_TRIM_END_ASCII,
+  IR_STR_OP_COUNT_BYTE,
+  IR_STR_OP_STARTS_WITH,
+  IR_STR_OP_ENDS_WITH,
+  IR_STR_OP_CONTAINS,
+  IR_STR_OP_COUNT,
+  IR_STR_OP_INDEX_OF,
+  IR_STR_OP_LAST_INDEX_OF,
+  IR_STR_OP_EQL_IGNORE_ASCII_CASE,
+  IR_STR_OP_WORD_COUNT_ASCII,
+  IR_STR_OP_PATH_BASENAME,
+  IR_STR_OP_PATH_DIRNAME,
+  IR_STR_OP_PATH_EXTENSION,
+  IR_STR_OP_PARSE_TOKEN_ASCII
+} IrStrOp;
+
+typedef enum {
+  IR_ASCII_OP_IS_DIGIT,
+  IR_ASCII_OP_IS_LOWER,
+  IR_ASCII_OP_IS_UPPER,
+  IR_ASCII_OP_IS_ALPHA,
+  IR_ASCII_OP_IS_ALNUM,
+  IR_ASCII_OP_IS_WHITESPACE,
+  IR_ASCII_OP_IS_HEX_DIGIT,
+  IR_ASCII_OP_TO_LOWER,
+  IR_ASCII_OP_TO_UPPER,
+  IR_ASCII_OP_DIGIT_VALUE,
+  IR_ASCII_OP_HEX_VALUE
+} IrAsciiOp;
+
+typedef enum {
+  IR_TEXT_OP_IS_ASCII,
+  IR_TEXT_OP_UTF8_VALID,
+  IR_TEXT_OP_UTF8_LEN
+} IrTextOp;
+
+typedef enum {
+  IR_PARSE_OP_IS_ASCII_DIGIT,
+  IR_PARSE_OP_IS_ASCII_ALPHA,
+  IR_PARSE_OP_IS_IDENTIFIER_START,
+  IR_PARSE_OP_IS_WHITESPACE,
+  IR_PARSE_OP_SCAN_DIGITS,
+  IR_PARSE_OP_SCAN_IDENTIFIER,
+  IR_PARSE_OP_SCAN_UNTIL_BYTE,
+  IR_PARSE_OP_SCAN_WHITESPACE,
+  IR_PARSE_OP_PARSE_BOOL,
+  IR_PARSE_OP_PARSE_U8,
+  IR_PARSE_OP_PARSE_U16,
+  IR_PARSE_OP_PARSE_USIZE
+} IrParseOp;
+
+typedef enum {
+  IR_TIME_OP_AS_US_FLOOR,
+  IR_TIME_OP_AS_MS_FLOOR,
+  IR_TIME_OP_AS_SECONDS_FLOOR,
+  IR_TIME_OP_MIN,
+  IR_TIME_OP_MAX,
+  IR_TIME_OP_CLAMP
+} IrTimeOp;
+
+typedef enum {
+  IR_MATH_OP_MIN_I32,
+  IR_MATH_OP_MAX_I32,
+  IR_MATH_OP_CLAMP_I32,
+  IR_MATH_OP_MIN_I64,
+  IR_MATH_OP_MAX_I64,
+  IR_MATH_OP_CLAMP_I64,
+  IR_MATH_OP_MIN_U32,
+  IR_MATH_OP_MAX_U32,
+  IR_MATH_OP_CLAMP_U32,
+  IR_MATH_OP_MIN_U64,
+  IR_MATH_OP_MAX_U64,
+  IR_MATH_OP_CLAMP_U64,
+  IR_MATH_OP_MIN_USIZE,
+  IR_MATH_OP_MAX_USIZE,
+  IR_MATH_OP_CLAMP_USIZE,
+  IR_MATH_OP_ABS_I32,
+  IR_MATH_OP_ABS_I64,
+  IR_MATH_OP_CHECKED_ADD_U32,
+  IR_MATH_OP_CHECKED_SUB_U32,
+  IR_MATH_OP_CHECKED_MUL_U32,
+  IR_MATH_OP_SATURATING_ADD_U32,
+  IR_MATH_OP_SATURATING_SUB_U32,
+  IR_MATH_OP_SATURATING_MUL_U32,
+  IR_MATH_OP_CHECKED_ADD_I32,
+  IR_MATH_OP_CHECKED_SUB_I32,
+  IR_MATH_OP_CHECKED_MUL_I32,
+  IR_MATH_OP_SATURATING_ADD_I32,
+  IR_MATH_OP_SATURATING_SUB_I32,
+  IR_MATH_OP_SATURATING_MUL_I32,
+  IR_MATH_OP_GCD_U32,
+  IR_MATH_OP_LCM_U32,
+  IR_MATH_OP_CHECKED_LCM_U32,
+  IR_MATH_OP_POW_U32,
+  IR_MATH_OP_CHECKED_POW_U32,
+  IR_MATH_OP_MOD_POW_U32,
+  IR_MATH_OP_IS_PRIME_U32,
+  IR_MATH_OP_SQRT_FLOOR_U32,
+  IR_MATH_OP_FACTORIAL_U32,
+  IR_MATH_OP_BINOMIAL_U32,
+  IR_MATH_OP_DIVISOR_COUNT_U32,
+  IR_MATH_OP_PROPER_DIVISOR_SUM_U32,
+  IR_MATH_OP_CHECKED_ADD_USIZE,
+  IR_MATH_OP_CHECKED_SUB_USIZE,
+  IR_MATH_OP_CHECKED_MUL_USIZE,
+  IR_MATH_OP_SATURATING_ADD_USIZE,
+  IR_MATH_OP_SATURATING_SUB_USIZE,
+  IR_MATH_OP_SATURATING_MUL_USIZE
+} IrMathOp;
+
+typedef enum {
+  IR_SEARCH_OP_LOWER_BOUND_I32,
+  IR_SEARCH_OP_BINARY_I32,
+  IR_SEARCH_OP_LOWER_BOUND_U32,
+  IR_SEARCH_OP_BINARY_U32,
+  IR_SEARCH_OP_LOWER_BOUND_USIZE,
+  IR_SEARCH_OP_BINARY_USIZE
+} IrSearchOp;
+
+typedef enum {
+  IR_SORT_OP_INSERTION_I32,
+  IR_SORT_OP_IS_SORTED_I32,
+  IR_SORT_OP_INSERTION_U32,
+  IR_SORT_OP_IS_SORTED_U32,
+  IR_SORT_OP_INSERTION_USIZE,
+  IR_SORT_OP_IS_SORTED_USIZE
+} IrSortOp;
 
 typedef enum {
   IR_BIN_ADD,
@@ -562,6 +735,9 @@ typedef struct {
   char *name;
   char *stable_id;
   char *world_param_name;
+  char **generic_param_names;
+  char **generic_arg_types;
+  size_t generic_binding_len;
   IrTypeKind return_type;
   IrTypeKind value_return_type;
   IrTypeKind return_element_type;
@@ -608,6 +784,12 @@ typedef struct {
   char mir_message[256];
   char mir_help[256];
   char *mir_path;
+  char *package_root;
+  const unsigned char *mir_binary_storage;
+  size_t mir_binary_storage_len;
+  bool mir_binary_storage_mapped;
+  bool mir_binary_storage_borrowed;
+  int mir_binary_storage_fd;
   ZBackendBlocker backend_blocker;
   int mir_line;
   int mir_column;
@@ -690,6 +872,11 @@ typedef struct {
   long long object_ms;
   long long link_ms;
   size_t lowered_ir_bytes;
+  char *mapped_mir_cache_path;
+  size_t mapped_mir_cache_bytes;
+  bool mapped_mir_cache_hit, mapped_mir_cache_written;
+  bool mapped_mir_memory_mapped, mapped_mir_borrowed_storage;
+  bool mapped_mir_codegen_immediate, mapped_mir_program_reconstructed;
   size_t direct_function_count;
   size_t direct_export_count;
   size_t direct_stack_bytes;
@@ -736,6 +923,8 @@ typedef struct {
   char *main_path;
   char *graph_path;
   char *kind;
+  bool repository_graph_compiler_input_present;
+  bool repository_graph_compiler_input;
   ZManifestDependency *dependencies;
   ZManifestCLib *c_libs;
   size_t dependency_count;
@@ -849,133 +1038,134 @@ typedef struct {
   size_t entries;
 } ZMetaCacheStats;
 
-void zbuf_init(ZBuf *buf);
-void zbuf_append(ZBuf *buf, const char *text);
-void zbuf_append_char(ZBuf *buf, char ch);
-void zbuf_appendf(ZBuf *buf, const char *fmt, ...);
-void zbuf_free(ZBuf *buf);
+void zbuf_init(Z_OUT ZBuf *buf);
+void zbuf_append(Z_INOUT ZBuf *buf, Z_IN const char *text);
+void zbuf_append_char(Z_INOUT ZBuf *buf, char ch);
+void zbuf_appendf(Z_INOUT ZBuf *buf, Z_IN const char *fmt, ...);
+void zbuf_free(Z_INOUT ZBuf *buf);
 
-void *z_checked_malloc(size_t size);
-void *z_checked_calloc(size_t count, size_t item_size);
-void *z_checked_reallocarray(void *ptr, size_t count, size_t item_size);
+Z_RET_OWNED void *z_checked_malloc(size_t size);
+Z_RET_OWNED void *z_checked_calloc(size_t count, size_t item_size);
+Z_RET_OWNED void *z_checked_reallocarray(Z_SINK Z_OPTIONAL void *ptr, size_t count, size_t item_size);
 size_t z_grow_capacity(size_t current, size_t required, size_t initial);
-char *z_strdup(const char *text);
-char *z_strndup(const char *text, size_t len);
-char *z_read_file(const char *path, ZDiag *diag);
-bool z_write_file(const char *path, const char *text, ZDiag *diag);
-bool z_write_binary_file(const char *path, const unsigned char *data, size_t len, ZDiag *diag);
-bool z_map_source_diag(const SourceInput *input, ZDiag *diag);
-void z_free_source(SourceInput *input);
-bool z_parse_manifest_json(const char *manifest, ZManifest *out, ZDiag *diag);
-bool z_resolve_package_metadata(const char *manifest_path, const char *manifest, const ZManifest *parsed_manifest, SourceInput *out, ZDiag *diag);
-char *z_manifest_path_for_input(const char *input_path);
-bool z_resolve_manifest_graph_artifact_path(const char *input_path, char **out_artifact_path, bool *handled, bool require_graph, ZDiag *diag);
-void z_free_manifest(ZManifest *manifest);
-char *z_default_out_path(const char *source_file);
-ZToolchainPlan z_plan_toolchain(const char *cc, const char *profile, const ZTargetInfo *target);
-ZToolchainPlan z_direct_backend_toolchain_plan(ZDirectBackend backend, const ZTargetInfo *target);
-bool z_direct_backend_toolchain_plan_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, ZToolchainPlan *out);
-size_t z_direct_target_stack_bytes(const ZTargetInfo *target, const IrProgram *program);
-size_t z_direct_target_max_frame_bytes(const ZTargetInfo *target, const IrProgram *program);
-bool z_toolchain_compile_c_object(const ZToolchainPlan *plan, const char *profile, const ZTargetInfo *target, const char *c_file, const char *object_file, const char *include_dir, const char *extra_c_flags);
-bool z_toolchain_link_objects(const ZToolchainPlan *plan, const ZTargetInfo *target, const char *const *object_files, size_t object_count, const char *exe_file, const char *pre_link_flags, const char *post_object_flags);
-bool z_run_cc(const char *c_file, const char *exe_file, const char *cc, const char *profile, const ZTargetInfo *target);
+Z_RET_OWNED char *z_strdup(Z_IN const char *text);
+Z_RET_OWNED char *z_strndup(Z_IN const char *text, size_t len);
+Z_RET_OWNED Z_RET_OPTIONAL char *z_read_file(Z_IN const char *path, Z_OUT ZDiag *diag);
+bool z_write_file(Z_IN const char *path, Z_IN const char *text, Z_OUT ZDiag *diag);
+bool z_write_binary_file(Z_IN const char *path, Z_IN const unsigned char *data, size_t len, Z_OUT ZDiag *diag);
+bool z_map_source_diag(Z_IN const SourceInput *input, Z_INOUT ZDiag *diag);
+void z_free_source(Z_INOUT SourceInput *input);
+bool z_parse_manifest_json(Z_IN const char *manifest, Z_OUT ZManifest *out, Z_OUT ZDiag *diag);
+bool z_resolve_package_metadata(Z_IN const char *manifest_path, Z_IN const char *manifest, Z_IN const ZManifest *parsed_manifest, Z_OUT SourceInput *out, Z_OUT ZDiag *diag);
+Z_RET_OWNED Z_RET_OPTIONAL char *z_manifest_path_for_input(Z_IN const char *input_path);
+Z_RET_OWNED Z_RET_OPTIONAL char *z_manifest_path_for_root(Z_IN const char *root);
+bool z_resolve_manifest_graph_artifact_path(Z_IN const char *input_path, Z_OUT char **out_artifact_path, Z_OUT bool *handled, bool require_graph, Z_OUT ZDiag *diag);
+void z_free_manifest(Z_INOUT ZManifest *manifest);
+Z_RET_OWNED char *z_default_out_path(Z_IN const char *source_file);
+ZToolchainPlan z_plan_toolchain(Z_IN const char *cc, Z_IN const char *profile, Z_IN const ZTargetInfo *target);
+ZToolchainPlan z_direct_backend_toolchain_plan(ZDirectBackend backend, Z_IN const ZTargetInfo *target);
+bool z_direct_backend_toolchain_plan_for_emit_kind(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend, Z_OUT ZToolchainPlan *out);
+size_t z_direct_target_stack_bytes(Z_IN const ZTargetInfo *target, Z_IN const IrProgram *program);
+size_t z_direct_target_max_frame_bytes(Z_IN const ZTargetInfo *target, Z_IN const IrProgram *program);
+bool z_toolchain_compile_c_object(Z_IN const ZToolchainPlan *plan, Z_IN const char *profile, Z_IN const ZTargetInfo *target, Z_IN const char *c_file, Z_IN const char *object_file, Z_IN const char *include_dir, Z_IN const char *extra_c_flags);
+bool z_toolchain_link_objects(Z_IN const ZToolchainPlan *plan, Z_IN const ZTargetInfo *target, Z_IN const char *const *object_files, size_t object_count, Z_IN const char *exe_file, Z_IN const char *pre_link_flags, Z_IN const char *post_object_flags);
+bool z_run_cc(Z_IN const char *c_file, Z_IN const char *exe_file, Z_IN const char *cc, Z_IN const char *profile, Z_IN const ZTargetInfo *target);
 
-void z_free_program(Program *program);
+void z_free_program(Z_INOUT Program *program);
 
-bool z_check_program(const Program *program, ZDiag *diag);
-bool z_check_program_library(const Program *program, ZDiag *diag);
-void z_append_call_resolution_facts_json(ZBuf *buf, const SourceInput *input, const Program *program);
-void z_set_check_target(const ZTargetInfo *target);
+bool z_check_program(Z_IN const Program *program, Z_OUT ZDiag *diag);
+bool z_check_program_library(Z_IN const Program *program, Z_OUT ZDiag *diag);
+void z_append_call_resolution_facts_json(Z_INOUT ZBuf *buf, Z_IN const SourceInput *input, Z_IN const Program *program);
+void z_set_check_target(Z_OPTIONAL Z_IN const ZTargetInfo *target);
 ZMetaCacheStats z_meta_cache_stats(void);
-void z_backend_blocker_set(ZBackendBlocker *blocker, const char *target, const char *object_format, const char *backend, const char *stage, const char *unsupported_feature);
-void z_diag_set_backend_blocker(ZDiag *diag, const ZBackendBlocker *blocker);
-IrProgram z_lower_program(const Program *program);
-IrProgram z_lower_program_with_source(const Program *program, const SourceInput *input, const ZTargetInfo *target);
-IrProgram z_lower_program_graph_with_source(const ZProgramGraph *graph, const SourceInput *input, const ZTargetInfo *target);
-void z_free_ir_program(IrProgram *program);
-bool z_emit_elf64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_elf64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_elf_aarch64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_elf_aarch64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-size_t z_elf_aarch64_stack_bytes_from_ir(const IrProgram *program);
-size_t z_elf_aarch64_max_frame_bytes_from_ir(const IrProgram *program);
-size_t z_macho64_stack_bytes_from_ir(const IrProgram *program);
-size_t z_macho64_max_frame_bytes_from_ir(const IrProgram *program);
-bool z_emit_macho64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_macho64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_macho_x64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_macho_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_coff_x64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_coff_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_coff_aarch64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_coff_aarch64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_direct_object_from_ir(ZDirectBackend backend, const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_direct_executable_from_ir(ZDirectBackend backend, const IrProgram *program, ZBuf *out, ZDiag *diag);
-bool z_emit_llvm_ir_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag);
+void z_backend_blocker_set(Z_OUT ZBackendBlocker *blocker, Z_IN const char *target, Z_IN const char *object_format, Z_IN const char *backend, Z_IN const char *stage, Z_IN const char *unsupported_feature);
+void z_diag_set_backend_blocker(Z_INOUT ZDiag *diag, Z_IN const ZBackendBlocker *blocker);
+IrProgram z_lower_program(Z_IN const Program *program);
+IrProgram z_lower_program_with_source(Z_IN const Program *program, Z_IN const SourceInput *input, Z_IN const ZTargetInfo *target);
+IrProgram z_lower_program_graph_with_source(Z_IN const ZProgramGraph *graph, Z_IN const SourceInput *input, Z_IN const ZTargetInfo *target);
+void z_free_ir_program(Z_INOUT IrProgram *program);
+bool z_emit_elf64_object_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_elf64_exe_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_elf_aarch64_object_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_elf_aarch64_exe_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+size_t z_elf_aarch64_stack_bytes_from_ir(Z_IN const IrProgram *program);
+size_t z_elf_aarch64_max_frame_bytes_from_ir(Z_IN const IrProgram *program);
+size_t z_macho64_stack_bytes_from_ir(Z_IN const IrProgram *program);
+size_t z_macho64_max_frame_bytes_from_ir(Z_IN const IrProgram *program);
+bool z_emit_macho64_object_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_macho64_exe_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_macho_x64_object_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_macho_x64_exe_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_coff_x64_object_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_coff_x64_exe_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_coff_aarch64_object_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_coff_aarch64_exe_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_direct_object_from_ir(ZDirectBackend backend, Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_direct_executable_from_ir(ZDirectBackend backend, Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
+bool z_emit_llvm_ir_from_ir(Z_IN const IrProgram *program, Z_INOUT ZBuf *out, Z_OUT ZDiag *diag);
 
-const char *z_host_target(void);
+Z_RET_BORROWED const char *z_host_target(void);
 size_t z_target_count(void);
-const ZTargetInfo *z_target_at(size_t index);
-const ZTargetInfo *z_find_target(const char *target);
-bool z_is_known_target(const char *target);
-bool z_target_is_host(const ZTargetInfo *target);
-bool z_target_has_capability(const ZTargetInfo *target, const char *capability);
-const char *z_target_libc_mode(const ZTargetInfo *target);
-const char *z_target_sysroot_env_name(const ZTargetInfo *target);
-bool z_target_requires_sysroot(const ZTargetInfo *target);
-ZDirectBackend z_direct_object_backend(const ZTargetInfo *target);
-ZDirectBackend z_direct_exe_backend(const ZTargetInfo *target);
-const char *z_direct_backend_object_emitter(ZDirectBackend backend);
-const char *z_direct_backend_exe_emitter(ZDirectBackend backend);
-ZDirectBackend z_direct_backend_from_emitter(const char *emitter);
-const char *z_direct_backend_linker_flavor(ZDirectBackend backend);
-const char *z_direct_backend_artifact_path(ZDirectBackend backend, bool executable);
-const char *z_direct_backend_runtime_object_cache_key(ZDirectBackend backend);
+Z_RET_BORROWED Z_RET_OPTIONAL const ZTargetInfo *z_target_at(size_t index);
+Z_RET_BORROWED Z_RET_OPTIONAL const ZTargetInfo *z_find_target(Z_IN const char *target);
+bool z_is_known_target(Z_IN const char *target);
+bool z_target_is_host(Z_IN const ZTargetInfo *target);
+bool z_target_has_capability(Z_IN const ZTargetInfo *target, Z_IN const char *capability);
+Z_RET_BORROWED const char *z_target_libc_mode(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_target_sysroot_env_name(Z_IN const ZTargetInfo *target);
+bool z_target_requires_sysroot(Z_IN const ZTargetInfo *target);
+ZDirectBackend z_direct_object_backend(Z_IN const ZTargetInfo *target);
+ZDirectBackend z_direct_exe_backend(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_direct_backend_object_emitter(ZDirectBackend backend);
+Z_RET_BORROWED const char *z_direct_backend_exe_emitter(ZDirectBackend backend);
+ZDirectBackend z_direct_backend_from_emitter(Z_IN const char *emitter);
+Z_RET_BORROWED const char *z_direct_backend_linker_flavor(ZDirectBackend backend);
+Z_RET_BORROWED const char *z_direct_backend_artifact_path(ZDirectBackend backend, bool executable);
+Z_RET_BORROWED const char *z_direct_backend_runtime_object_cache_key(ZDirectBackend backend);
 size_t z_direct_backend_symbol_overhead(ZDirectBackend backend, bool has_readonly_data);
 bool z_direct_backend_supports_runtime_object(ZDirectBackend backend);
-const char *z_direct_runtime_link_blocker(const ZTargetInfo *target, bool needs_http_runtime);
-bool z_direct_backend_emitter_is_executable(const char *emitter);
-bool z_direct_backend_is_request_name(const char *requested_backend);
-bool z_direct_requested_backend_matches(const char *requested_backend, ZDirectBackend backend);
-ZBackendFamily z_backend_family_from_request(const char *requested_backend, const char *emit_kind);
-const char *z_backend_family_name(ZBackendFamily family);
-bool z_backend_request_is_known(const char *requested_backend, const char *emit_kind);
-bool z_backend_request_is_llvm(const char *requested_backend, const char *emit_kind);
-const char *z_backend_direct_request_name(const char *requested_backend);
-const char *z_backend_request_expected(void);
-void z_backend_init_unknown_diag(ZDiag *diag, const char *requested_backend, const char *path);
-void z_backend_init_llvm_unavailable_diag(ZDiag *diag, const ZTargetInfo *target, const char *emit_kind, const char *path);
-const char *z_llvm_target_triple(const ZTargetInfo *target);
-const char *z_llvm_optimization_level(const char *profile);
-ZLlvmToolchainPlan z_llvm_toolchain_plan(const ZTargetInfo *target);
-ZToolchainPlan z_llvm_c_toolchain_plan(const ZTargetInfo *target);
-bool z_llvm_native_executable_ready(const ZTargetInfo *target, const char *path, ZDiag *diag);
-bool z_llvm_link_executable(const char *llvm_file, const char *runtime_object_file, const char *exe_file, const ZToolchainPlan *plan, const ZTargetInfo *target, const char *profile, bool links_zero_runtime, ZDiag *diag);
-const char *z_llvm_backend_lifecycle_json_text(void);
-void z_append_llvm_backend_lifecycle_json(ZBuf *buf);
-void z_append_llvm_backend_lifecycle_field_json(ZBuf *buf);
-void z_append_doctor_llvm_toolchain_json(ZBuf *buf, const ZTargetInfo *host_target, const ZLlvmToolchainPlan *plan);
-void z_append_llvm_toolchain_plan_json(ZBuf *buf, const ZTargetInfo *target);
-void z_append_llvm_target_backend_json(ZBuf *buf, const ZTargetInfo *target);
-void z_append_llvm_ir_backend_json(ZBuf *buf, const SourceInput *input, const ZTargetInfo *target, const char *emit_kind);
-void z_append_llvm_native_backend_json(ZBuf *buf, const SourceInput *input, const ZTargetInfo *target, const char *emit_kind);
-const char *z_direct_backend_status(const ZTargetInfo *target);
-const char *z_direct_object_emitter(const ZTargetInfo *target);
-const char *z_direct_exe_emitter(const ZTargetInfo *target);
-const char *z_direct_backend_reason(const ZTargetInfo *target);
-ZDirectBackend z_direct_backend_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend);
-const char *z_direct_backend_emitter_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend);
-const char *z_direct_backend_name_for_emit_kind(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend);
-ZDirectReleaseTargetFacts z_direct_release_target_facts(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, const ZToolchainPlan *fallback_plan, bool linked_executable);
-ZDirectObjectBackendFacts z_direct_object_backend_facts(const ZTargetInfo *target, const char *emit_kind, const char *requested_backend, bool has_runtime_imports);
-ZDirectObjectTargetFacts z_direct_object_target_facts(const ZTargetInfo *target);
-ZDirectRuntimeObjectFacts z_direct_runtime_object_facts(const ZTargetInfo *target, bool needs_http_runtime);
-ZDirectExecutableTargetFacts z_direct_executable_target_facts(const ZTargetInfo *target, const char *requested_backend);
-const char *z_direct_backend_expected(const ZTargetInfo *target);
-const char *z_direct_backend_help(const ZTargetInfo *target);
-void z_append_http_runtime_json(ZBuf *buf, const ZTargetInfo *target);
-void z_append_targets_json(ZBuf *buf);
-void z_append_target_names_json(ZBuf *buf);
+Z_RET_BORROWED Z_RET_OPTIONAL const char *z_direct_runtime_link_blocker(Z_IN const ZTargetInfo *target, bool needs_http_runtime);
+bool z_direct_backend_emitter_is_executable(Z_IN const char *emitter);
+bool z_direct_backend_is_request_name(Z_IN const char *requested_backend);
+bool z_direct_requested_backend_matches(Z_IN const char *requested_backend, ZDirectBackend backend);
+ZBackendFamily z_backend_family_from_request(Z_IN const char *requested_backend, Z_IN const char *emit_kind);
+Z_RET_BORROWED const char *z_backend_family_name(ZBackendFamily family);
+bool z_backend_request_is_known(Z_IN const char *requested_backend, Z_IN const char *emit_kind);
+bool z_backend_request_is_llvm(Z_IN const char *requested_backend, Z_IN const char *emit_kind);
+Z_RET_BORROWED Z_RET_OPTIONAL const char *z_backend_direct_request_name(Z_IN const char *requested_backend);
+Z_RET_BORROWED const char *z_backend_request_expected(void);
+void z_backend_init_unknown_diag(Z_OUT ZDiag *diag, Z_IN const char *requested_backend, Z_IN const char *path);
+void z_backend_init_llvm_unavailable_diag(Z_OUT ZDiag *diag, Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *path);
+Z_RET_BORROWED const char *z_llvm_target_triple(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_llvm_optimization_level(Z_IN const char *profile);
+ZLlvmToolchainPlan z_llvm_toolchain_plan(Z_IN const ZTargetInfo *target);
+ZToolchainPlan z_llvm_c_toolchain_plan(Z_IN const ZTargetInfo *target);
+bool z_llvm_native_executable_ready(Z_IN const ZTargetInfo *target, Z_IN const char *path, Z_OUT ZDiag *diag);
+bool z_llvm_link_executable(Z_IN const char *llvm_file, Z_IN const char *runtime_object_file, Z_IN const char *exe_file, Z_IN const ZToolchainPlan *plan, Z_IN const ZTargetInfo *target, Z_IN const char *profile, bool links_zero_runtime, Z_OUT ZDiag *diag);
+Z_RET_BORROWED const char *z_llvm_backend_lifecycle_json_text(void);
+void z_append_llvm_backend_lifecycle_json(Z_INOUT ZBuf *buf);
+void z_append_llvm_backend_lifecycle_field_json(Z_INOUT ZBuf *buf);
+void z_append_doctor_llvm_toolchain_json(Z_INOUT ZBuf *buf, Z_IN const ZTargetInfo *host_target, Z_IN const ZLlvmToolchainPlan *plan);
+void z_append_llvm_toolchain_plan_json(Z_INOUT ZBuf *buf, Z_IN const ZTargetInfo *target);
+void z_append_llvm_target_backend_json(Z_INOUT ZBuf *buf, Z_IN const ZTargetInfo *target);
+void z_append_llvm_ir_backend_json(Z_INOUT ZBuf *buf, Z_IN const SourceInput *input, Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind);
+void z_append_llvm_native_backend_json(Z_INOUT ZBuf *buf, Z_IN const SourceInput *input, Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind);
+Z_RET_BORROWED const char *z_direct_backend_status(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_direct_object_emitter(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_direct_exe_emitter(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_direct_backend_reason(Z_IN const ZTargetInfo *target);
+ZDirectBackend z_direct_backend_for_emit_kind(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend);
+Z_RET_BORROWED const char *z_direct_backend_emitter_for_emit_kind(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend);
+Z_RET_BORROWED const char *z_direct_backend_name_for_emit_kind(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend);
+ZDirectReleaseTargetFacts z_direct_release_target_facts(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend, Z_IN const ZToolchainPlan *fallback_plan, bool linked_executable);
+ZDirectObjectBackendFacts z_direct_object_backend_facts(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend, bool has_runtime_imports);
+ZDirectObjectTargetFacts z_direct_object_target_facts(Z_IN const ZTargetInfo *target);
+ZDirectRuntimeObjectFacts z_direct_runtime_object_facts(Z_IN const ZTargetInfo *target, bool needs_http_runtime);
+ZDirectExecutableTargetFacts z_direct_executable_target_facts(Z_IN const ZTargetInfo *target, Z_IN const char *requested_backend);
+Z_RET_BORROWED const char *z_direct_backend_expected(Z_IN const ZTargetInfo *target);
+Z_RET_BORROWED const char *z_direct_backend_help(Z_IN const ZTargetInfo *target);
+void z_append_http_runtime_json(Z_INOUT ZBuf *buf, Z_IN const ZTargetInfo *target);
+void z_append_targets_json(Z_INOUT ZBuf *buf);
+void z_append_target_names_json(Z_INOUT ZBuf *buf);
 
 #endif

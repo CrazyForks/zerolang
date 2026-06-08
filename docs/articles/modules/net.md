@@ -1,4 +1,14 @@
-## Status
+## When To Use std.net
+
+In Zerolang, use `std.net` for network capability metadata, local address construction,
+timeouts, and bootstrap client/listener handles.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -20,7 +30,7 @@ Metadata labels:
 - target support: address helpers are target-neutral; host/connect/listen require a net-capable target
 - error behavior: connection helpers return `Maybe`
 - ownership notes: no stream ownership transfer in the current handle model
-- example: `conformance/native/pass/std-net-http-breadth.0`
+- example: `conformance/native/pass/std-net-http-breadth.graph`
 
 ## Example
 

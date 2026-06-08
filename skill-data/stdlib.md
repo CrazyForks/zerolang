@@ -7,6 +7,13 @@ description: Use Zero standard library modules and target-gated capabilities.
 
 Use this when an agent needs common library calls, memory helpers, hosted I/O, or target-capability guidance.
 
+Stdlib modules are graph-backed. The checked-in `std/*.graph` files are binary
+graph stores used by the compiler path; sibling `std/*.0` files are
+human-readable projections for review and repair. Do not treat the projections
+as the stdlib compile source, and do not browse or edit them as the first step
+when an agent needs a helper. Load this skill, inspect the target package graph
+with `zero query` or `zero inspect`, then patch the user's graph-backed program.
+
 ## Import
 
 ```zero
@@ -34,6 +41,7 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.rand`: explicit deterministic random sources, random bits, and target entropy helpers.
 - `std.crypto`: small hash and byte-oriented crypto helpers.
 - `std.json`: explicit-buffer JSON validation, structured status codes, shallow field lookup, typed scalar decode, parsing, and string/object writing helpers.
+- `std.toml`: no-allocation TOML validation, shallow/dotted field lookup, and typed scalar decode helpers.
 - `std.url`: target-neutral URL splitting, percent/query encoding and decoding, query lookup, and query append helpers.
 - `std.str`: byte-span string helpers, including non-overlapping reverse, prefix/suffix, substring, trim, and word counts.
 - `std.io`: buffered reader/writer surfaces, cursor writes, line scanning, and byte copy over caller-owned storage.
@@ -51,7 +59,7 @@ These modules depend on host or runtime capabilities:
 - `std.env`: process environment
 - `std.fs`: hosted filesystem and explicit `Fs` or `owned<File>` handles
 - `std.net`: bootstrap network handles
-- `std.http`: HTTP request/response helpers
+- `std.http`: HTTP request/response helpers and loopback listeners
 - `std.proc`: process execution helpers
 - `World.out` and `World.err`: program output capabilities
 
@@ -59,8 +67,8 @@ Non-host targets may reject these APIs with target diagnostics. Inspect target f
 
 ```sh
 zero targets
-zero check --target linux-musl-x64 <input>
-zero graph --target linux-musl-x64 <input>
+zero check --target linux-musl-x64 [graph-input]
+zero inspect --target linux-musl-x64 [graph-input]
 ```
 
 Add `--json` only when a tool needs exact target facts or diagnostics.
@@ -225,6 +233,568 @@ pub fn main(world: World) -> Void raises {
 }
 ```
 
+## Function Signatures
+
+This catalog is generated from the compiler's standard-library signature table. Use these names exactly; helpers with `T` are generic over the concrete span or item type inferred from the call.
+
+### std.args
+
+```text
+len() -> usize
+get(arg0: usize) -> Maybe<String>
+has(arg0: usize) -> Bool
+getOr(arg0: usize, arg1: String) -> String
+find(arg0: String) -> Maybe<usize>
+valueAfter(arg0: String) -> Maybe<String>
+parseU32(arg0: usize) -> Maybe<u32>
+```
+
+### std.ascii
+
+```text
+digitValue(arg0: u8) -> Maybe<u8>
+hexValue(arg0: u8) -> Maybe<u8>
+isAlnum(arg0: u8) -> Bool
+isAlpha(arg0: u8) -> Bool
+isDigit(arg0: u8) -> Bool
+isHexDigit(arg0: u8) -> Bool
+isLower(arg0: u8) -> Bool
+isUpper(arg0: u8) -> Bool
+isWhitespace(arg0: u8) -> Bool
+toLower(arg0: u8) -> u8
+toUpper(arg0: u8) -> u8
+```
+
+### std.cli
+
+```text
+argEquals(arg0: usize, arg1: String) -> Bool
+hasFlag(arg0: String) -> Bool
+optionValue(arg0: String) -> Maybe<String>
+optionValueOr(arg0: String, arg1: String) -> String
+optionU32(arg0: String) -> Maybe<u32>
+successExitCode() -> i32
+usageExitCode() -> i32
+```
+
+### std.codec
+
+```text
+crc32(arg0: String) -> u32
+crc32Bytes(arg0: Span<u8>) -> u32
+encodedVarintLen(arg0: u32) -> usize
+hexDecodedLen(arg0: Span<u8>) -> Maybe<usize>
+hexDecode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+base64DecodedLen(arg0: Span<u8>) -> Maybe<usize>
+base64Decode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+readU8(arg0: String) -> u8
+readU16(arg0: String) -> u16
+readU32(arg0: String) -> u32
+writeU16(arg0: u32) -> u32
+writeU32(arg0: u32) -> u32
+readU16Le(arg0: Span<u8>) -> Maybe<u16>
+readU16Be(arg0: Span<u8>) -> Maybe<u16>
+readU32Le(arg0: Span<u8>) -> Maybe<u32>
+readU32Be(arg0: Span<u8>) -> Maybe<u32>
+writeU16Le(arg0: MutSpan<u8>, arg1: u16) -> Maybe<Span<u8>>
+writeU16Be(arg0: MutSpan<u8>, arg1: u16) -> Maybe<Span<u8>>
+writeU32Le(arg0: MutSpan<u8>, arg1: u32) -> Maybe<Span<u8>>
+writeU32Be(arg0: MutSpan<u8>, arg1: u32) -> Maybe<Span<u8>>
+varintEncode(arg0: MutSpan<u8>, arg1: u32) -> Maybe<Span<u8>>
+varintDecode(arg0: Span<u8>) -> Maybe<u32>
+base64EncodedLen(arg0: usize) -> usize
+base64Encode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<String>
+hexEncode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<String>
+utf8Valid(arg0: Span<u8>) -> Bool
+urlEncode(arg0: MutSpan<u8>, arg1: String) -> Maybe<String>
+```
+
+### std.collections
+
+```text
+append(storage: MutSpan<T>, len: usize, values: Span<T>) -> usize
+contains(storage: Span<T>, len: usize, value: T) -> Bool
+count(storage: Span<T>, len: usize, value: T) -> usize
+moveToFront(storage: MutSpan<T>, len: usize, index: usize) -> usize
+push(storage: MutSpan<T>, len: usize, value: T) -> usize
+removeSwap(storage: MutSpan<T>, len: usize, index: usize) -> usize
+view(storage: Span<T>, len: usize) -> Span<T>
+```
+
+### std.crypto
+
+```text
+hash32(arg0: Span<u8>) -> u32
+hmac32(arg0: Span<u8>, arg1: Span<u8>) -> u32
+constantTimeEql(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+secureRandomU32() -> u32
+```
+
+### std.env
+
+```text
+get(arg0: String) -> Maybe<String>
+has(arg0: String) -> Bool
+getOr(arg0: String, arg1: String) -> String
+parseBool(arg0: String) -> Maybe<Bool>
+parseU32(arg0: String) -> Maybe<u32>
+```
+
+### std.fmt
+
+```text
+bool(arg0: MutSpan<u8>, arg1: Bool) -> Maybe<Span<u8>>
+hexLowerU32(arg0: MutSpan<u8>, arg1: u32) -> Maybe<Span<u8>>
+i32(arg0: MutSpan<u8>, arg1: i32) -> Maybe<Span<u8>>
+u32(arg0: MutSpan<u8>, arg1: u32) -> Maybe<Span<u8>>
+usize(arg0: MutSpan<u8>, arg1: usize) -> Maybe<Span<u8>>
+```
+
+### std.fs
+
+```text
+host() -> Fs
+open(arg0: Fs, arg1: String) -> Maybe<owned<File>>
+openOrRaise(arg0: Fs, arg1: String) -> owned<File> raises [NotFound, TooLarge, Io]
+create(arg0: Fs, arg1: String) -> Maybe<owned<File>>
+createOrRaise(arg0: Fs, arg1: String) -> owned<File> raises [NotFound, TooLarge, Io]
+read(arg0: String, arg1: MutSpan<u8>) -> usize
+readOrRaise(arg0: mutref<File>, arg1: MutSpan<u8>) -> usize raises [NotFound, TooLarge, Io]
+write(arg0: String, arg1: String) -> usize
+writeAll(arg0: mutref<File>, arg1: Span<u8>) -> Bool
+writeAllOrRaise(arg0: mutref<File>, arg1: Span<u8>) -> Void raises [NotFound, TooLarge, Io]
+fileLenOrRaise(arg0: mutref<File>) -> usize raises [NotFound, TooLarge, Io]
+readAll(allocator: Alloc, fs: Fs, path: String, max: usize) -> Maybe<owned<ByteBuf>>
+readAllOrRaise(allocator: Alloc, fs: Fs, path: String, max: usize) -> owned<ByteBuf> raises [NotFound, TooLarge, Io]
+exists(arg0: String) -> Bool
+readBytes(arg0: String, arg1: MutSpan<u8>) -> Maybe<usize>
+writeBytes(arg0: String, arg1: Span<u8>) -> Maybe<usize>
+isDir(arg0: String) -> Bool
+makeDir(arg0: String) -> Bool
+removeDir(arg0: String) -> Bool
+remove(arg0: String) -> Bool
+rename(arg0: String, arg1: String) -> Bool
+dirEntryCount(arg0: String) -> Maybe<usize>
+tempName(arg0: MutSpan<u8>, arg1: String) -> Maybe<String>
+atomicWrite(arg0: String, arg1: String, arg2: Span<u8>) -> Bool
+fileLen(arg0: mutref<File>) -> Maybe<usize>
+close(arg0: mutref<File>) -> Void
+readFile(arg0: Fs, arg1: String, arg2: MutSpan<u8>) -> Maybe<usize>
+writeFile(arg0: Fs, arg1: String, arg2: Span<u8>) -> Bool
+copyFile(arg0: String, arg1: String, arg2: MutSpan<u8>) -> Bool
+```
+
+### std.http
+
+```text
+parseMethod(arg0: String) -> HttpMethod
+client(arg0: Net) -> HttpClient
+server(arg0: Net, arg1: Address) -> HttpServer
+listen(arg0: World, arg1: u16) -> Void
+fetch(arg0: HttpClient, arg1: Span<u8>, arg2: MutSpan<u8>, arg3: Duration) -> HttpResult
+resultOk(arg0: HttpResult) -> Bool
+resultStatus(arg0: HttpResult) -> u16
+resultBodyLen(arg0: HttpResult) -> usize
+resultError(arg0: HttpResult) -> HttpError
+errorNone() -> HttpError
+errorInvalidUrl() -> HttpError
+errorUnsupportedProtocol() -> HttpError
+errorDns() -> HttpError
+errorConnect() -> HttpError
+errorTls() -> HttpError
+errorTimeout() -> HttpError
+errorTooLarge() -> HttpError
+errorProviderUnavailable() -> HttpError
+errorIo() -> HttpError
+errorInvalidRequest() -> HttpError
+responseLen(arg0: Span<u8>) -> usize
+responseHeadersLen(arg0: Span<u8>) -> usize
+responseBodyOffset(arg0: Span<u8>) -> usize
+headerValue(arg0: Span<u8>, arg1: Span<u8>) -> HttpHeaderValue
+headerFound(arg0: HttpHeaderValue) -> Bool
+headerOffset(arg0: HttpHeaderValue) -> usize
+headerLen(arg0: HttpHeaderValue) -> usize
+tlsBoundary() -> String
+statusReason(arg0: u16) -> String
+statusIsInformational(arg0: u16) -> Bool
+statusIsSuccess(arg0: u16) -> Bool
+statusIsRedirect(arg0: u16) -> Bool
+statusIsClientError(arg0: u16) -> Bool
+statusIsServerError(arg0: u16) -> Bool
+writeRequest(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeJsonRequest(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeJsonResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeCorsPreflight(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeCorsJsonResponse(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeJsonOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonCreated(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonBadRequest(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonUnauthorized(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonForbidden(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonNotFound(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonMethodNotAllowed(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonConflict(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonUnprocessable(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonTooManyRequests(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeJsonInternalServerError(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeNoContent(arg0: MutSpan<u8>) -> Maybe<Span<u8>>
+requestMethodName(arg0: Span<u8>) -> Maybe<Span<u8>>
+requestTarget(arg0: Span<u8>) -> Maybe<Span<u8>>
+requestPath(arg0: Span<u8>) -> Maybe<Span<u8>>
+pathSegmentCount(arg0: Span<u8>) -> usize
+pathSegment(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
+requestPathSegmentCount(arg0: Span<u8>) -> usize
+requestPathSegment(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
+requestQuery(arg0: Span<u8>) -> Maybe<Span<u8>>
+requestQueryValue(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+requestHeader(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+requestBearerToken(arg0: Span<u8>) -> Maybe<Span<u8>>
+requestCookie(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+requestBody(arg0: Span<u8>) -> Maybe<Span<u8>>
+requestBodyWithin(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
+requestHasJsonContentType(arg0: Span<u8>) -> Bool
+requestJsonBodyWithin(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
+requestMatches(arg0: Span<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Bool
+requestMethodIs(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsGet(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsHead(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsOptions(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsPost(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsPut(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsPatch(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestIsDelete(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestPathStartsWith(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+requestPathTailAfter(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+headerBytes(arg0: Span<u8>, arg1: HttpHeaderValue) -> Maybe<Span<u8>>
+responseBody(arg0: Span<u8>, arg1: HttpResult) -> Maybe<Span<u8>>
+responseBodyBytes(arg0: Span<u8>) -> Maybe<Span<u8>>
+```
+
+### std.io
+
+```text
+bufferedReader(arg0: MutSpan<u8>) -> BufferedReader
+bufferedWriter(arg0: MutSpan<u8>) -> BufferedWriter
+readerCapacity(arg0: ref<BufferedReader>) -> usize
+writerCapacity(arg0: ref<BufferedWriter>) -> usize
+copy(arg0: MutSpan<u8>, arg1: Span<u8>) -> usize
+writeByte(arg0: MutSpan<u8>, arg1: usize, arg2: u8) -> Maybe<usize>
+writeSpan(arg0: MutSpan<u8>, arg1: usize, arg2: Span<u8>) -> Maybe<usize>
+written(arg0: Span<u8>, arg1: usize) -> Span<u8>
+remaining(arg0: Span<u8>, arg1: usize) -> usize
+nextLine(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
+nextLineStart(arg0: Span<u8>, arg1: usize) -> usize
+countLines(arg0: Span<u8>) -> usize
+```
+
+### std.json
+
+```text
+validate(arg0: String) -> Bool
+validateBytes(arg0: Span<u8>) -> Bool
+parse(allocator: Alloc, text: String) -> Maybe<JsonDoc>
+parseBytes(allocator: Alloc, bytes: Span<u8>) -> Maybe<JsonDoc>
+streamTokens(arg0: String) -> usize
+streamTokensBytes(arg0: Span<u8>) -> usize
+writeString(arg0: MutSpan<u8>, arg1: String) -> Maybe<String>
+decodeBoundary() -> String
+errorNone() -> u32
+errorInvalid() -> u32
+errorTrailing() -> u32
+validateError(arg0: Span<u8>) -> u32
+field(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+stringDecode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+string(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+u32(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<u32>
+bool(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Bool>
+writeStringBytes(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeObject1String(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeObject1U32(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: u32) -> Maybe<Span<u8>>
+writeObject1Bool(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Bool) -> Maybe<Span<u8>>
+```
+
+### std.toml
+
+```text
+validate(arg0: String) -> Bool
+validateBytes(arg0: Span<u8>) -> Bool
+field(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+stringDecode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+string(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+u32(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<u32>
+bool(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Bool>
+```
+
+### std.log
+
+```text
+message(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+keyValue(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+```
+
+### std.math
+
+```text
+absI32(arg0: i32) -> u32
+absI64(arg0: i64) -> u64
+binomialU32(arg0: u32, arg1: u32) -> Maybe<u32>
+checkedAddI32(arg0: i32, arg1: i32) -> Maybe<i32>
+checkedAddU32(arg0: u32, arg1: u32) -> Maybe<u32>
+checkedAddUsize(arg0: usize, arg1: usize) -> Maybe<usize>
+checkedLcmU32(arg0: u32, arg1: u32) -> Maybe<u32>
+checkedMulI32(arg0: i32, arg1: i32) -> Maybe<i32>
+checkedMulU32(arg0: u32, arg1: u32) -> Maybe<u32>
+checkedMulUsize(arg0: usize, arg1: usize) -> Maybe<usize>
+checkedPowU32(arg0: u32, arg1: u32) -> Maybe<u32>
+checkedSubI32(arg0: i32, arg1: i32) -> Maybe<i32>
+checkedSubU32(arg0: u32, arg1: u32) -> Maybe<u32>
+checkedSubUsize(arg0: usize, arg1: usize) -> Maybe<usize>
+clampI32(arg0: i32, arg1: i32, arg2: i32) -> i32
+clampI64(arg0: i64, arg1: i64, arg2: i64) -> i64
+clampU32(arg0: u32, arg1: u32, arg2: u32) -> u32
+clampU64(arg0: u64, arg1: u64, arg2: u64) -> u64
+clampUsize(arg0: usize, arg1: usize, arg2: usize) -> usize
+divisorCountU32(arg0: u32) -> u32
+factorialU32(arg0: u32) -> Maybe<u32>
+gcdU32(arg0: u32, arg1: u32) -> u32
+isEvenU32(arg0: u32) -> Bool
+isOddU32(arg0: u32) -> Bool
+isPrimeU32(arg0: u32) -> Bool
+lcmU32(arg0: u32, arg1: u32) -> u32
+maxI32(arg0: i32, arg1: i32) -> i32
+maxI64(arg0: i64, arg1: i64) -> i64
+maxU32(arg0: u32, arg1: u32) -> u32
+maxU64(arg0: u64, arg1: u64) -> u64
+maxUsize(arg0: usize, arg1: usize) -> usize
+minI32(arg0: i32, arg1: i32) -> i32
+minI64(arg0: i64, arg1: i64) -> i64
+minU32(arg0: u32, arg1: u32) -> u32
+minU64(arg0: u64, arg1: u64) -> u64
+minUsize(arg0: usize, arg1: usize) -> usize
+modPowU32(arg0: u32, arg1: u32, arg2: u32) -> u32
+powU32(arg0: u32, arg1: u32) -> u32
+properDivisorSumU32(arg0: u32) -> u32
+saturatingAddI32(arg0: i32, arg1: i32) -> i32
+saturatingAddU32(arg0: u32, arg1: u32) -> u32
+saturatingAddUsize(arg0: usize, arg1: usize) -> usize
+saturatingMulI32(arg0: i32, arg1: i32) -> i32
+saturatingMulU32(arg0: u32, arg1: u32) -> u32
+saturatingMulUsize(arg0: usize, arg1: usize) -> usize
+saturatingSubI32(arg0: i32, arg1: i32) -> i32
+saturatingSubU32(arg0: u32, arg1: u32) -> u32
+saturatingSubUsize(arg0: usize, arg1: usize) -> usize
+sqrtFloorU32(arg0: u32) -> u32
+```
+
+### std.mem
+
+```text
+copy(arg0: MutSpan<u8>, arg1: Span<u8>) -> usize
+copyItems(dst: MutSpan<T>, src: Span<T>) -> usize
+fill(arg0: MutSpan<u8>, arg1: u8) -> usize
+fillItems(dst: MutSpan<T>, value: T) -> usize
+eql(arg0: String, arg1: String) -> Bool
+span(arg0: String) -> Span<u8>
+contains(items: Span<T>, value: T) -> Bool
+isEmpty(items: Span<T>) -> Bool
+prefix(items: Span<T>, len: usize) -> Span<T>
+dropPrefix(items: Span<T>, len: usize) -> Span<T>
+len(items: Span<T>) -> usize
+get(items: Span<T>, index: usize) -> Maybe<T>
+eqlBytes(left: Span<T>, right: Span<T>) -> Bool
+nullAlloc() -> NullAlloc
+fixedBufAlloc(arg0: MutSpan<u8>) -> FixedBufAlloc
+arena(arg0: MutSpan<u8>) -> FixedBufAlloc
+pageAlloc() -> PageAlloc
+generalAlloc() -> GeneralAlloc
+allocBytes(allocator: Alloc, len: usize) -> Maybe<MutSpan<u8>>
+byteBuf(allocator: Alloc, capacity: usize) -> Maybe<owned<ByteBuf>>
+vec(arg0: MutSpan<u8>) -> Vec
+vecPush(arg0: mutref<Vec>, arg1: u8) -> Bool
+vecLen(arg0: ref<Vec>) -> usize
+vecCapacity(arg0: ref<Vec>) -> usize
+bufBytes(arg0: ref<ByteBuf>) -> MutSpan<u8>
+bufLen(arg0: ref<ByteBuf>) -> usize
+reset(arg0: mutref<FixedBufAlloc>) -> Void
+capacity(arg0: FixedBufAlloc) -> usize
+```
+
+### std.net
+
+```text
+host() -> Net
+address(arg0: String, arg1: u16) -> Address
+dnsName(arg0: Address) -> String
+connect(arg0: Net, arg1: Address) -> Maybe<Conn>
+listen(arg0: Net, arg1: Address) -> Maybe<Listener>
+withTimeout(arg0: Address, arg1: Duration) -> Address
+localhost(arg0: u16) -> Address
+loopback(arg0: u16) -> Address
+```
+
+### std.parse
+
+```text
+isAsciiDigit(arg0: Span<u8>) -> Bool
+isAsciiAlpha(arg0: Span<u8>) -> Bool
+isIdentifierStart(arg0: Span<u8>) -> Bool
+isWhitespace(arg0: Span<u8>) -> Bool
+scanDigits(arg0: Span<u8>) -> usize
+scanIdentifier(arg0: Span<u8>) -> usize
+scanUntilByte(arg0: Span<u8>, arg1: u8) -> usize
+scanWhitespace(arg0: Span<u8>) -> usize
+tokenAscii(arg0: Span<u8>) -> Span<u8>
+parseBool(arg0: Span<u8>) -> Maybe<Bool>
+parseI32(arg0: Span<u8>) -> Maybe<i32>
+parseU8(arg0: Span<u8>) -> Maybe<u8>
+parseU16(arg0: Span<u8>) -> Maybe<u16>
+parseU32(arg0: Span<u8>) -> Maybe<u32>
+parseUsize(arg0: Span<u8>) -> Maybe<usize>
+```
+
+### std.path
+
+```text
+basename(arg0: String) -> String
+dirname(arg0: String) -> String
+extension(arg0: String) -> String
+join(arg0: MutSpan<u8>, arg1: String, arg2: String) -> Maybe<String>
+normalize(arg0: MutSpan<u8>, arg1: String) -> Maybe<String>
+relative(arg0: MutSpan<u8>, arg1: String, arg2: String) -> Maybe<String>
+```
+
+### std.proc
+
+```text
+spawn(arg0: String) -> ProcStatus
+exitCode(arg0: ProcStatus) -> i32
+succeeded(arg0: ProcStatus) -> Bool
+failed(arg0: ProcStatus) -> Bool
+```
+
+### std.rand
+
+```text
+seed(arg0: u32) -> RandSource
+nextU32(arg0: mutref<RandSource>) -> u32
+nextBool(arg0: mutref<RandSource>) -> Bool
+entropyU32() -> u32
+entropySeed() -> RandSource
+```
+
+### std.search
+
+```text
+binaryI32(arg0: Span<i32>, arg1: i32) -> usize
+binaryU32(arg0: Span<u32>, arg1: u32) -> usize
+binaryUsize(arg0: Span<usize>, arg1: usize) -> usize
+indexOf(items: Span<T>, value: T) -> usize
+lastIndexOf(items: Span<T>, value: T) -> usize
+lowerBoundI32(arg0: Span<i32>, arg1: i32) -> usize
+lowerBoundU32(arg0: Span<u32>, arg1: u32) -> usize
+lowerBoundUsize(arg0: Span<usize>, arg1: usize) -> usize
+```
+
+### std.sort
+
+```text
+insertionI32(arg0: MutSpan<i32>) -> Void
+insertionU32(arg0: MutSpan<u32>) -> Void
+insertionUsize(arg0: MutSpan<usize>) -> Void
+isSortedI32(arg0: Span<i32>) -> Bool
+isSortedU32(arg0: Span<u32>) -> Bool
+isSortedUsize(arg0: Span<usize>) -> Bool
+```
+
+### std.str
+
+```text
+contains(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+concat(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+copy(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+count(arg0: Span<u8>, arg1: Span<u8>) -> usize
+countByte(arg0: Span<u8>, arg1: u8) -> usize
+eqlIgnoreAsciiCase(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+endsWith(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+indexOf(arg0: Span<u8>, arg1: Span<u8>) -> usize
+lastIndexOf(arg0: Span<u8>, arg1: Span<u8>) -> usize
+repeat(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: usize) -> Maybe<Span<u8>>
+reverse(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+startsWith(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+toLowerAscii(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+toUpperAscii(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+trimAscii(arg0: Span<u8>) -> Span<u8>
+trimEndAscii(arg0: Span<u8>) -> Span<u8>
+trimStartAscii(arg0: Span<u8>) -> Span<u8>
+wordCountAscii(arg0: Span<u8>) -> usize
+```
+
+### std.testing
+
+```text
+isTrue(arg0: Bool) -> Bool
+isFalse(arg0: Bool) -> Bool
+equalBool(arg0: Bool, arg1: Bool) -> Bool
+equalUsize(arg0: usize, arg1: usize) -> Bool
+equalU32(arg0: u32, arg1: u32) -> Bool
+equalI32(arg0: i32, arg1: i32) -> Bool
+equalBytes(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+containsBytes(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+startsWith(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+endsWith(arg0: Span<u8>, arg1: Span<u8>) -> Bool
+```
+
+### std.text
+
+```text
+isAscii(arg0: Span<u8>) -> Bool
+utf8Len(arg0: Span<u8>) -> Maybe<usize>
+utf8Valid(arg0: Span<u8>) -> Bool
+```
+
+### std.time
+
+```text
+ns(arg0: i64) -> Duration
+us(arg0: i64) -> Duration
+ms(arg0: i32) -> Duration
+seconds(arg0: i32) -> Duration
+minutes(arg0: i32) -> Duration
+hours(arg0: i32) -> Duration
+zero() -> Duration
+add(arg0: Duration, arg1: Duration) -> Duration
+monotonic() -> Duration
+wallSeconds() -> i64
+sub(arg0: Duration, arg1: Duration) -> Duration
+asNs(arg0: Duration) -> i64
+asUsFloor(arg0: Duration) -> i64
+asMsFloor(arg0: Duration) -> i32
+asSecondsFloor(arg0: Duration) -> i64
+min(arg0: Duration, arg1: Duration) -> Duration
+max(arg0: Duration, arg1: Duration) -> Duration
+clamp(arg0: Duration, arg1: Duration, arg2: Duration) -> Duration
+lessThan(arg0: Duration, arg1: Duration) -> Bool
+isZero(arg0: Duration) -> Bool
+```
+
+### std.url
+
+```text
+percentEncode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+percentDecode(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+queryEscape(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+queryUnescape(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+scheme(arg0: Span<u8>) -> Maybe<Span<u8>>
+authority(arg0: Span<u8>) -> Maybe<Span<u8>>
+host(arg0: Span<u8>) -> Maybe<Span<u8>>
+path(arg0: Span<u8>) -> Span<u8>
+query(arg0: Span<u8>) -> Maybe<Span<u8>>
+queryValue(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeQueryParam(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+appendQuery(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+```
+
 ## Maybe Pattern
 
 ```zero
@@ -267,21 +837,92 @@ pub fn main() -> Void {
 }
 ```
 
-For API-style handlers, parse the request envelope with `std.http.requestMatches`,
-`std.http.requestQueryValue`, `std.http.requestHeader`, and
-`std.http.requestBodyWithin`, then write responses with
-`std.http.writeJsonResponse`:
+For API-style handlers, parse the request envelope with route helpers such as
+`std.http.requestIsGet`, `std.http.requestIsHead`,
+`std.http.requestIsOptions`, `std.http.requestIsPost`,
+`std.http.requestPathStartsWith`, `std.http.requestPathTailAfter`,
+`std.http.pathSegmentCount`, `std.http.pathSegment`,
+`std.http.requestPathSegmentCount`, `std.http.requestPathSegment`,
+`std.http.requestQueryValue`, `std.http.requestHeader`,
+`std.http.requestBearerToken`, `std.http.requestCookie`,
+`std.http.requestHasJsonContentType`, and `std.http.requestJsonBodyWithin`.
+Use path segment helpers for resource routes such as `/users/7`; they borrow
+zero-based, non-empty segments and ignore leading, trailing, or repeated `/`.
+Prefer the status-specific JSON writers for common responses:
+`std.http.writeJsonOk`, `std.http.writeJsonCreated`,
+`std.http.writeJsonBadRequest`, `std.http.writeJsonUnauthorized`,
+`std.http.writeJsonForbidden`, `std.http.writeJsonNotFound`,
+`std.http.writeJsonMethodNotAllowed`, `std.http.writeJsonConflict`,
+`std.http.writeJsonUnprocessable`, `std.http.writeJsonTooManyRequests`, and
+`std.http.writeJsonInternalServerError`. Use `std.http.writeNoContent` for
+204 responses, `std.http.writeCorsPreflight` for `OPTIONS` preflight responses,
+and `std.http.writeCorsJsonResponse` when a JSON response also needs
+`access-control-allow-origin`. `writeCorsJsonResponse` takes a status-line
+fragment such as `"200 OK"` or `"422 Unprocessable Entity"`. Use
+`std.http.responseBodyBytes` to read the body from a response envelope produced
+locally by `writeResponse` or a JSON writer.
+
+For a runnable local API server, define a same-module handler and call
+`std.http.listen(world)` from `main`. The handler signature is
+`fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>>`.
+When no port is passed, `std.http.listen(world)` starts at development port
+`3000` and increments by one until it finds a free loopback port. It prints the
+actual URL, such as `listening on http://127.0.0.1:3001`; use that printed port
+for curl or browser checks. Do not assume `3000`, because the user may already
+have another local server there. When a port is explicit,
+`std.http.listen(world, 3000_u16)` tries exactly that port and fails with a bind
+diagnostic if it is occupied.
+
+```zero
+pub fn main(world: World) -> Void raises {
+    check std.http.listen(world)
+}
+
+fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
+    if std.http.requestIsGet(request, "/ping") {
+        return std.http.writeJsonOk(response, "{\"message\":\"pong\"}")
+    }
+    return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\"}")
+}
+```
 
 ```zero
 pub fn main() -> Void {
     let request: Span<u8> = "POST /users?tenant=demo\ncontent-type: application/json\n\n{\"id\":7}"
     var response_buf: [192]u8 = [0_u8; 192]
-    let body: Maybe<Span<u8>> = std.http.requestBodyWithin(request, 64)
+    let body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(request, 64)
     let tenant: Maybe<Span<u8>> = std.http.requestQueryValue(request, "tenant")
-    if std.http.requestMatches(request, "POST", "/users") && tenant.has && body.has {
-        let response: Maybe<Span<u8>> = std.http.writeJsonResponse(response_buf, 201_u16, "{\"created\":true}")
+    let resource: Maybe<Span<u8>> = std.http.requestPathSegment(request, 0)
+    if std.http.requestIsPost(request, "/users") && resource.has && std.mem.eql(resource.value, "users") && tenant.has && body.has {
+        let response: Maybe<Span<u8>> = std.http.writeJsonCreated(response_buf, "{\"created\":true}")
         expect response.has
     }
+}
+```
+
+For browser-facing APIs, handle preflight and CORS in the response writer
+instead of hand-assembling headers:
+
+```zero
+pub fn main() -> Void {
+    let request: Span<u8> = "OPTIONS /users\naccess-control-request-method: POST\n\n"
+    var response_buf: [256]u8 = [0_u8; 256]
+    if std.http.requestIsOptions(request, "/users") {
+        let response: Maybe<Span<u8>> = std.http.writeCorsPreflight(response_buf, "*", "GET, POST, OPTIONS", "content-type, authorization")
+        expect response.has
+    }
+}
+```
+
+For authenticated APIs, use header-specific helpers rather than parsing
+`authorization` or `cookie` by hand:
+
+```zero
+pub fn main() -> Void {
+    let request: Span<u8> = "GET /me\nauthorization: Bearer token-123\ncookie: sid=abc; theme=dark\n\n"
+    let token: Maybe<Span<u8>> = std.http.requestBearerToken(request)
+    let session: Maybe<Span<u8>> = std.http.requestCookie(request, "sid")
+    expect token.has && session.has
 }
 ```
 

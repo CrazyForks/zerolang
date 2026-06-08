@@ -1,5 +1,145 @@
+fn __zero_std_io_write_span(buffer: MutSpan<u8>, offset: usize, bytes: Span<u8>) -> Maybe<usize> {
+    if offset > std.mem.len(buffer) {
+        return null
+    }
+    if std.mem.len(bytes) > std.mem.len(buffer) - offset {
+        return null
+    }
+    var index: usize = 0
+    while index < std.mem.len(bytes) {
+        buffer[offset + index] = bytes[index]
+        index = index + 1
+    }
+    return offset + std.mem.len(bytes)
+}
+
+fn __zero_std_io_next_line_start(bytes: Span<u8>, start: usize) -> usize {
+    if start >= std.mem.len(bytes) {
+        return std.mem.len(bytes)
+    }
+    var end: usize = start
+    while end < std.mem.len(bytes) && bytes[end] != 10_u8 {
+        end = end + 1
+    }
+    if end < std.mem.len(bytes) {
+        return end + 1
+    }
+    return std.mem.len(bytes)
+}
+
+fn __zero_std_io_next_line(bytes: Span<u8>, start: usize) -> Maybe<Span<u8>> {
+    if start >= std.mem.len(bytes) {
+        return null
+    }
+    var end: usize = start
+    while end < std.mem.len(bytes) && bytes[end] != 10_u8 {
+        end = end + 1
+    }
+    if end > start && bytes[end - 1] == 13_u8 {
+        return bytes[start..end - 1]
+    }
+    return bytes[start..end]
+}
+
+fn __zero_std_url_path(url: Span<u8>) -> Span<u8> {
+    var start: usize = 0
+    let scheme: Maybe<Span<u8>> = __zero_std_url_scheme(url)
+    let authority_start: Maybe<usize> = __zero_std_url_authority_start(url)
+    if authority_start.has {
+        start = authority_start.value
+        while start < std.mem.len(url) && url[start] != 47_u8 && url[start] != 63_u8 && url[start] != 35_u8 {
+            start = start + 1
+        }
+    } else if scheme.has {
+        start = std.mem.len(scheme.value) + 1
+    }
+    if start >= std.mem.len(url) {
+        return url[std.mem.len(url)..]
+    }
+    var end: usize = start
+    while end < std.mem.len(url) && url[end] != 63_u8 && url[end] != 35_u8 {
+        end = end + 1
+    }
+    return url[start..end]
+}
+
+fn __zero_std_url_scheme(url: Span<u8>) -> Maybe<Span<u8>> {
+    var index: usize = 0
+    while index < std.mem.len(url) {
+        let byte: u8 = url[index]
+        if byte == 58_u8 {
+            if index == 0 {
+                return null
+            }
+            return url[..index]
+        }
+        if byte == 47_u8 || byte == 63_u8 || byte == 35_u8 {
+            return null
+        }
+        index = index + 1
+    }
+    return null
+}
+
+fn __zero_std_url_authority_start(url: Span<u8>) -> Maybe<usize> {
+    let scheme: Maybe<Span<u8>> = __zero_std_url_scheme(url)
+    if !scheme.has {
+        return null
+    }
+    let start: usize = std.mem.len(scheme.value) + 1
+    if start + 1 >= std.mem.len(url) || url[start] != 47_u8 || url[start + 1] != 47_u8 {
+        return null
+    }
+    return start + 2
+}
+
+fn __zero_std_url_query(url: Span<u8>) -> Maybe<Span<u8>> {
+    var start: usize = 0
+    while start < std.mem.len(url) && url[start] != 63_u8 {
+        if url[start] == 35_u8 {
+            return null
+        }
+        start = start + 1
+    }
+    if start >= std.mem.len(url) {
+        return null
+    }
+    start = start + 1
+    var end: usize = start
+    while end < std.mem.len(url) && url[end] != 35_u8 {
+        end = end + 1
+    }
+    return url[start..end]
+}
+
+fn __zero_std_url_query_value(query: Span<u8>, key: Span<u8>) -> Maybe<Span<u8>> {
+    var start: usize = 0
+    while start <= std.mem.len(query) {
+        var end: usize = start
+        while end < std.mem.len(query) && query[end] != 38_u8 {
+            end = end + 1
+        }
+        var eq: usize = start
+        while eq < end && query[eq] != 61_u8 {
+            eq = eq + 1
+        }
+        let name: Span<u8> = query[start..eq]
+        if std.mem.eql(name, key) {
+            if eq < end {
+                return query[eq + 1..end]
+            }
+            return query[end..end]
+        }
+        if end == std.mem.len(query) {
+            return null
+        }
+        start = end + 1
+    }
+    return null
+}
+
 fn __zero_std_http_token_char(byte: u8) -> Bool {
-    return (byte >= 65_u8 && byte <= 90_u8) || (byte >= 97_u8 && byte <= 122_u8) || (byte >= 48_u8 && byte <= 57_u8) || byte == 33_u8 || byte == 35_u8 || byte == 36_u8 || byte == 37_u8 || byte == 38_u8 || byte == 39_u8 || byte == 42_u8 || byte == 43_u8 || byte == 45_u8 || byte == 46_u8 || byte == 94_u8 || byte == 95_u8 || byte == 96_u8 || byte == 124_u8 || byte == 126_u8
+    return byte >= 65_u8 && byte <= 90_u8 || byte >= 97_u8 && byte <= 122_u8 || byte >= 48_u8 && byte <= 57_u8 || byte == 33_u8 || byte == 35_u8 || byte == 36_u8 || byte == 37_u8 || byte == 38_u8 || byte == 39_u8 || byte == 42_u8 || byte == 43_u8 || byte == 45_u8 || byte == 46_u8 || byte == 94_u8 || byte == 95_u8 || byte == 96_u8 || byte == 124_u8 || byte == 126_u8
 }
 
 fn __zero_std_http_method_valid(method: Span<u8>) -> Bool {
@@ -143,6 +283,9 @@ fn __zero_std_http_status_reason(status: u16) -> String {
     }
     if status == 404_u16 {
         return "Not Found"
+    }
+    if status == 405_u16 {
+        return "Method Not Allowed"
     }
     if status == 409_u16 {
         return "Conflict"
@@ -371,13 +514,28 @@ fn __zero_std_http_request_target(request: Span<u8>) -> Maybe<Span<u8>> {
         return null
     }
     var index: usize = space + 1
-    while index < line_end.value {
+    while index < line_end.value && request[index] != 32_u8 {
         if request[index] <= 32_u8 {
             return null
         }
         index = index + 1
     }
-    return request[space + 1..line_end.value]
+    if index == space + 1 {
+        return null
+    }
+    if index < line_end.value {
+        var version_start: usize = index
+        while version_start < line_end.value && request[version_start] == 32_u8 {
+            version_start = version_start + 1
+        }
+        if version_start < line_end.value {
+            let version: Span<u8> = request[version_start..line_end.value]
+            if !std.mem.eql(version, "HTTP/1.0") && !std.mem.eql(version, "HTTP/1.1") {
+                return null
+            }
+        }
+    }
+    return request[space + 1..index]
 }
 
 fn __zero_std_http_request_path(request: Span<u8>) -> Maybe<Span<u8>> {
@@ -517,4 +675,367 @@ fn __zero_std_http_response_body(response: Span<u8>, result: HttpResult) -> Mayb
         return null
     }
     return response[offset..offset + len]
+}
+
+fn __zero_std_http_write_json_ok(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 200_u16, body)
+}
+
+fn __zero_std_http_write_json_created(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 201_u16, body)
+}
+
+fn __zero_std_http_write_json_bad_request(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 400_u16, body)
+}
+
+fn __zero_std_http_write_json_not_found(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 404_u16, body)
+}
+
+fn __zero_std_http_write_json_method_not_allowed(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 405_u16, body)
+}
+
+fn __zero_std_http_request_has_json_content_type(request: Span<u8>) -> Bool {
+    let content_type: Maybe<Span<u8>> = std.http.requestHeader(request, "content-type")
+    if !content_type.has {
+        return false
+    }
+    let value: Span<u8> = std.str.trimAscii(content_type.value)
+    if std.mem.len(value) < 16 {
+        return false
+    }
+    let prefix: Span<u8> = value[..16]
+    if !std.str.eqlIgnoreAsciiCase(prefix, "application/json") {
+        return false
+    }
+    if std.mem.len(value) == 16 {
+        return true
+    }
+    return value[16] == 59_u8
+}
+
+fn __zero_std_http_request_json_body_within(request: Span<u8>, max: usize) -> Maybe<Span<u8>> {
+    if !__zero_std_http_request_has_json_content_type(request) {
+        return null
+    }
+    let body: Maybe<Span<u8>> = std.http.requestBodyWithin(request, max)
+    if !body.has {
+        return null
+    }
+    if !std.json.validateBytes(body.value) {
+        return null
+    }
+    return body.value
+}
+
+fn __zero_std_http_response_body_bytes(response: Span<u8>) -> Maybe<Span<u8>> {
+    let offset: usize = std.http.responseBodyOffset(response)
+    if offset > std.mem.len(response) {
+        return null
+    }
+    return response[offset..]
+}
+
+fn __zero_std_http_request_method_is(request: Span<u8>, method: Span<u8>) -> Bool {
+    let found: Maybe<Span<u8>> = std.http.requestMethodName(request)
+    if !found.has {
+        return false
+    }
+    return std.mem.eql(found.value, method)
+}
+
+fn __zero_std_http_request_is_get(request: Span<u8>, path: Span<u8>) -> Bool {
+    return std.http.requestMatches(request, "GET", path)
+}
+
+fn __zero_std_http_request_is_post(request: Span<u8>, path: Span<u8>) -> Bool {
+    return std.http.requestMatches(request, "POST", path)
+}
+
+fn __zero_std_http_request_is_put(request: Span<u8>, path: Span<u8>) -> Bool {
+    return std.http.requestMatches(request, "PUT", path)
+}
+
+fn __zero_std_http_request_is_patch(request: Span<u8>, path: Span<u8>) -> Bool {
+    return std.http.requestMatches(request, "PATCH", path)
+}
+
+fn __zero_std_http_request_is_delete(request: Span<u8>, path: Span<u8>) -> Bool {
+    return std.http.requestMatches(request, "DELETE", path)
+}
+
+fn __zero_std_http_request_path_starts_with(request: Span<u8>, prefix: Span<u8>) -> Bool {
+    let path: Maybe<Span<u8>> = std.http.requestPath(request)
+    if !path.has {
+        return false
+    }
+    return std.str.startsWith(path.value, prefix)
+}
+
+fn __zero_std_http_request_path_tail_after(request: Span<u8>, prefix: Span<u8>) -> Maybe<Span<u8>> {
+    let path: Maybe<Span<u8>> = std.http.requestPath(request)
+    if !path.has {
+        return null
+    }
+    if !std.str.startsWith(path.value, prefix) {
+        return null
+    }
+    let size: usize = std.mem.len(prefix)
+    return std.mem.dropPrefix(path.value, size)
+}
+
+fn __zero_std_http_write_json_unauthorized(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 401_u16, body)
+}
+
+fn __zero_std_http_write_json_forbidden(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 403_u16, body)
+}
+
+fn __zero_std_http_write_json_conflict(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 409_u16, body)
+}
+
+fn __zero_std_http_write_json_unprocessable(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 422_u16, body)
+}
+
+fn __zero_std_http_write_json_too_many_requests(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 429_u16, body)
+}
+
+fn __zero_std_http_write_json_internal_server_error(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeJsonResponse(buffer, 500_u16, body)
+}
+
+fn __zero_std_http_write_no_content(buffer: MutSpan<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeResponse(buffer, 204_u16, "")
+}
+
+fn __zero_std_http_path_segment_count(path: Span<u8>) -> usize {
+    var count: usize = 0
+    var index: usize = 0
+    while index < std.mem.len(path) {
+        while index < std.mem.len(path) && path[index] == 47_u8 {
+            index = index + 1
+        }
+        if index < std.mem.len(path) {
+            count = count + 1
+            while index < std.mem.len(path) && path[index] != 47_u8 {
+                index = index + 1
+            }
+        }
+    }
+    return count
+}
+
+fn __zero_std_http_path_segment(path: Span<u8>, index: usize) -> Maybe<Span<u8>> {
+    var current: usize = 0
+    var start: usize = 0
+    while start < std.mem.len(path) {
+        while start < std.mem.len(path) && path[start] == 47_u8 {
+            start = start + 1
+        }
+        if start < std.mem.len(path) {
+            var end: usize = start
+            while end < std.mem.len(path) && path[end] != 47_u8 {
+                end = end + 1
+            }
+            if current == index {
+                return path[start..end]
+            }
+            current = current + 1
+            start = end
+        }
+    }
+    return null
+}
+
+fn __zero_std_http_request_path_segment_count(request: Span<u8>) -> usize {
+    let path: Maybe<Span<u8>> = std.http.requestPath(request)
+    if !path.has {
+        return 0
+    }
+    return __zero_std_http_path_segment_count(path.value)
+}
+
+fn __zero_std_http_request_path_segment(request: Span<u8>, index: usize) -> Maybe<Span<u8>> {
+    let path: Maybe<Span<u8>> = std.http.requestPath(request)
+    if !path.has {
+        return null
+    }
+    return __zero_std_http_path_segment(path.value, index)
+}
+
+fn __zero_std_http_request_is_head(request: Span<u8>, path: Span<u8>) -> Bool {
+    return __zero_std_http_request_matches(request, "HEAD", path)
+}
+
+fn __zero_std_http_request_is_options(request: Span<u8>, path: Span<u8>) -> Bool {
+    return __zero_std_http_request_matches(request, "OPTIONS", path)
+}
+
+fn __zero_std_http_write_cors_preflight(buffer: MutSpan<u8>, allow_origin: Span<u8>, allow_methods: Span<u8>, allow_headers: Span<u8>) -> Maybe<Span<u8>> {
+    var offset: usize = 0
+    let status: Maybe<usize> = __zero_std_http_write(buffer, offset, "HTTP/1.1 204 No Content\n")
+    if !status.has {
+        return null
+    }
+    offset = status.value
+    let origin_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "access-control-allow-origin: ")
+    if !origin_label.has {
+        return null
+    }
+    offset = origin_label.value
+    let origin_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_origin)
+    if !origin_value.has {
+        return null
+    }
+    offset = origin_value.value
+    let origin_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !origin_line.has {
+        return null
+    }
+    offset = origin_line.value
+    let methods_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "access-control-allow-methods: ")
+    if !methods_label.has {
+        return null
+    }
+    offset = methods_label.value
+    let methods_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_methods)
+    if !methods_value.has {
+        return null
+    }
+    offset = methods_value.value
+    let methods_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !methods_line.has {
+        return null
+    }
+    offset = methods_line.value
+    let headers_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "access-control-allow-headers: ")
+    if !headers_label.has {
+        return null
+    }
+    offset = headers_label.value
+    let headers_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_headers)
+    if !headers_value.has {
+        return null
+    }
+    offset = headers_value.value
+    let headers_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !headers_line.has {
+        return null
+    }
+    offset = headers_line.value
+    let length: Maybe<usize> = __zero_std_http_write_content_length(buffer, offset, 0_usize)
+    if !length.has {
+        return null
+    }
+    offset = length.value
+    let blank: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !blank.has {
+        return null
+    }
+    return buffer[..blank.value]
+}
+
+fn __zero_std_http_write_cors_json_response(buffer: MutSpan<u8>, status_line: Span<u8>, body: Span<u8>, allow_origin: Span<u8>) -> Maybe<Span<u8>> {
+    var offset: usize = 0
+    let prefix: Maybe<usize> = __zero_std_http_write(buffer, offset, "HTTP/1.1 ")
+    if !prefix.has {
+        return null
+    }
+    offset = prefix.value
+    let status: Maybe<usize> = __zero_std_http_write(buffer, offset, status_line)
+    if !status.has {
+        return null
+    }
+    offset = status.value
+    let content_type: Maybe<usize> = __zero_std_http_write(buffer, offset, "\ncontent-type: application/json\naccess-control-allow-origin: ")
+    if !content_type.has {
+        return null
+    }
+    offset = content_type.value
+    let origin_value: Maybe<usize> = __zero_std_http_write(buffer, offset, allow_origin)
+    if !origin_value.has {
+        return null
+    }
+    offset = origin_value.value
+    let origin_line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !origin_line.has {
+        return null
+    }
+    offset = origin_line.value
+    let body_len: usize = std.mem.len(body)
+    let length: Maybe<usize> = __zero_std_http_write_content_length(buffer, offset, body_len)
+    if !length.has {
+        return null
+    }
+    offset = length.value
+    let blank: Maybe<usize> = __zero_std_http_write(buffer, offset, "\n")
+    if !blank.has {
+        return null
+    }
+    offset = blank.value
+    let wrote_body: Maybe<usize> = __zero_std_http_write(buffer, offset, body)
+    if !wrote_body.has {
+        return null
+    }
+    return buffer[..wrote_body.value]
+}
+
+fn __zero_std_http_request_bearer_token(request: Span<u8>) -> Maybe<Span<u8>> {
+    let authorization: Maybe<Span<u8>> = std.http.requestHeader(request, "authorization")
+    if !authorization.has {
+        return null
+    }
+    let value: Span<u8> = std.str.trimAscii(authorization.value)
+    if std.mem.len(value) <= 7 {
+        return null
+    }
+    let scheme: Span<u8> = value[..7]
+    if !std.str.eqlIgnoreAsciiCase(scheme, "Bearer ") {
+        return null
+    }
+    let token: Span<u8> = std.str.trimAscii(value[7..])
+    if std.mem.len(token) == 0 {
+        return null
+    }
+    return token
+}
+
+fn __zero_std_http_request_cookie(request: Span<u8>, name: Span<u8>) -> Maybe<Span<u8>> {
+    if std.mem.len(name) == 0 {
+        return null
+    }
+    let cookie: Maybe<Span<u8>> = std.http.requestHeader(request, "cookie")
+    if !cookie.has {
+        return null
+    }
+    var start: usize = 0
+    while start <= std.mem.len(cookie.value) {
+        var end: usize = start
+        while end < std.mem.len(cookie.value) && cookie.value[end] != 59_u8 {
+            end = end + 1
+        }
+        var eq: usize = start
+        while eq < end && cookie.value[eq] != 61_u8 {
+            eq = eq + 1
+        }
+        let cookie_name: Span<u8> = std.str.trimAscii(cookie.value[start..eq])
+        if std.mem.eql(cookie_name, name) {
+            if eq < end {
+                let value_start: usize = eq + 1
+                return std.str.trimAscii(cookie.value[value_start..end])
+            }
+            return cookie.value[end..end]
+        }
+        if end == std.mem.len(cookie.value) {
+            return null
+        }
+        start = end + 1
+    }
+    return null
 }

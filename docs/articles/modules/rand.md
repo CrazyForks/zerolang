@@ -1,4 +1,13 @@
-## Status
+## When To Use std.rand
+
+In Zerolang, use `std.rand` for deterministic random sources and target-gated entropy.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -17,7 +26,7 @@ Metadata labels:
 - target support: deterministic source is target-neutral; entropy requires a rand-capable target
 - error behavior: infallible helpers
 - ownership notes: `nextU32` and `nextBool` mutate the caller-owned source
-- example: `examples/std-platform.0`
+- example: `examples/std-platform.graph`
 
 ## Example
 

@@ -127,11 +127,19 @@ void z_aarch64_emit_ldp_x29_x30_sp_post16(ZBuf *text) {
 }
 
 void z_aarch64_emit_add_sp_imm(ZBuf *text, unsigned imm) {
-  z_aarch64_append_u32(text, 0x910003ffu | ((imm & 0xfffu) << 10));
+  while (imm > 0) {
+    unsigned chunk = imm > 4080u ? 4080u : imm;
+    z_aarch64_append_u32(text, 0x910003ffu | ((chunk & 0xfffu) << 10));
+    imm -= chunk;
+  }
 }
 
 void z_aarch64_emit_sub_sp_imm(ZBuf *text, unsigned imm) {
-  z_aarch64_append_u32(text, 0xd10003ffu | ((imm & 0xfffu) << 10));
+  while (imm > 0) {
+    unsigned chunk = imm > 4080u ? 4080u : imm;
+    z_aarch64_append_u32(text, 0xd10003ffu | ((chunk & 0xfffu) << 10));
+    imm -= chunk;
+  }
 }
 
 void z_aarch64_emit_add_x_sp_imm(ZBuf *text, unsigned dst, unsigned imm) {

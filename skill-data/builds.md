@@ -1,6 +1,6 @@
 ---
 name: builds
-description: Build, run, ship, target, and profile Zero programs.
+description: Build, run, target, and profile Zero programs.
 ---
 
 # Zero Builds
@@ -9,51 +9,61 @@ Use this when an agent needs to run, build, cross-build, inspect artifacts, or e
 
 ## Inputs
 
-Most build commands accept one of these:
+Most build commands accept one of these graph-backed inputs:
 
-- a single `.0` file
-- a package directory containing `zero.json`
-- a direct path to `zero.json`
+- a direct `.graph` or `.program-graph` artifact
+- a package directory containing `zero.toml` or `zero.json`
+- a direct path to `zero.toml` or `zero.json`
 
-For packages with `repositoryGraph.compilerInput: true`, normal check, build,
-run, test, size, ship, and mem commands compile from the checked-in
-`zero.graph` store. Source projections may be clean, missing, stale, or in
-conflict; commands report that state and do not rewrite `.0` files. Use
-`zero graph verify-sync` when CI or review needs graph/source drift to fail, and
-`zero graph sync --from-graph` to regenerate projections from the store. Other
-packages compile from `.0` source text.
+When both manifests are present in the same package root, Zero uses
+`zero.toml`. Prefer one checked-in manifest unless testing precedence.
+
+For packages, normal check, build, run, test, size, and mem commands
+compile from the checked-in `zero.graph` store. Source projections may be
+clean, missing, stale, or in conflict; commands report that state and do not
+rewrite `.0` files. Use `zero verify-projection` when CI or review needs
+projection drift to fail, and `zero export` only when a human-readable
+projection needs regeneration. `.0` files are projection/import inputs, not
+compiler inputs; pass the package, manifest, `.graph` store, or
+`.program-graph` artifact instead. When already inside a package, omit the input
+and commands default to the current directory.
 
 ## Run
 
 Use `zero run` for the host development loop:
 
 ```sh
-zero run examples/hello.0
-zero run examples/cli-file.0 -- input.txt
+zero run
+zero run -- input.txt
+zero run examples/hello.graph
+zero run examples/cli-file.graph -- input.txt
 ```
 
 Arguments after `--` are passed to the Zero program.
 
 ## Build
 
+Use `zero build` when the user asks for an artifact. It is the normal command
+for executables, object files, LLVM IR, cross-target artifacts, and CI outputs.
 Use direct emitters. The removed generated-C backend is not a fallback path.
 
 ```sh
-zero build --emit exe examples/hello.0 --out .zero/out/hello
-zero build --emit obj examples/hello.0 --out .zero/out/hello.o
+zero build --emit exe --out .zero/out/app
+zero build --emit obj --out .zero/out/app.o
+zero build --emit exe examples/hello.graph --out .zero/out/hello
+zero build --emit obj examples/hello.graph --out .zero/out/hello.o
 ```
 
 Use LLVM only when the request is explicit. LLVM is experimental: it is not the
-default backend, not release eligible, and not accepted by `zero ship`. Textual
-IR is inspectable with `--emit llvm-ir`; host executable builds require a ready
-clang toolchain. LLVM currently lowers scalar code, direct calls, branches,
-loops, primitive fixed arrays, byte views, readonly strings, and primitive
-`std.mem` helpers:
+default backend and not release eligible. Textual IR is inspectable with
+`--emit llvm-ir`; host executable builds require a ready clang toolchain. LLVM
+currently lowers scalar code, direct calls, branches, loops, primitive fixed
+arrays, byte views, readonly strings, and primitive `std.mem` helpers:
 
 ```sh
-zero build --backend llvm --emit llvm-ir examples/hello.0 --out .zero/out/hello.ll
-zero build --backend llvm --emit exe examples/hello.0 --out .zero/out/hello-llvm
-zero run --backend llvm examples/hello.0
+zero build --backend llvm --emit llvm-ir examples/hello.graph --out .zero/out/hello.ll
+zero build --backend llvm --emit exe examples/hello.graph --out .zero/out/hello-llvm
+zero run --backend llvm examples/hello.graph
 ```
 
 Use `--json` when a tool will read exact build fields:
@@ -66,17 +76,44 @@ Useful JSON fields include `artifact`, `sizeBytes`, `toolchain`, `releaseTargetC
 
 ## Graph Inputs
 
-When an agent is authoring through ProgramGraph, inspect and patch the canonical `.0` source directly. Use graph build and run only when you intentionally need to validate a derived interchange artifact:
+When an agent is authoring a repository graph package, patch the package graph
+and use normal build/run commands. They compile from `zero.graph` and do not
+require `.0` projections to exist:
 
 ```sh
-zero graph build --out .zero/out/app .zero/agent/app.program-graph
-zero graph run .zero/agent/app.program-graph
+zero patch --op 'addMain'
+zero run
+zero build --out .zero/out/app
 ```
 
-Use normal `zero build` and `zero run` after persisting the accepted change to
-canonical `.0` source text. If the package opts into repository graph compiler
-input, run `zero graph sync --from-source <package>` after reviewed source
-changes so normal commands can compile from the refreshed `zero.graph` store.
+Use `zero export` when humans need checked-in `.0` projections. If a human
+edits a projection, run `zero import` before the next graph-store compile.
+Normal build and run commands read binary `zero.graph` stores directly by
+default; `zero status` reports the active store format.
+
+Repository graph build/run/test/size/mem commands and standalone
+`.program-graph` build, run, and size artifact commands also maintain a final
+MIR cache under
+`.zero/cache/native/mir-*.zmir`. The cache is keyed by graph hash, compiler
+version, target, emit kind, and backend request. On a miss, the compiler lowers
+the graph once, writes compact final MIR, memory-maps and verifies that cache,
+borrows stable string and readonly-data storage from the mapped file, then sends
+the verified MIR to codegen. On warm repository `zero.graph` build/run hits and
+warm standalone `.program-graph` build/run hits, the mapped final MIR is the
+immediate codegen input: the compiler skips graph-to-MIR lowering and checked
+Program reconstruction. Graph-backed `zero size` derives helper and capability
+summaries from graph/IR facts instead of reconstructing checked Program facts.
+JSON outputs report graph `lowering: "mapped-final-mir"` when this path is used
+and include a `mappedFinalMir` compiler cache row with `path`, `hit`,
+`written`, `memoryMapped`, `borrowedStorage`, `byteLength`,
+`codegenImmediate`, and `programReconstructed` facts. Do not assume standalone
+artifact commands outside build/run/size use the mapped MIR path unless their
+JSON output reports it.
+
+If another tool hands you a standalone `.program-graph`, normal `zero build`
+and `zero run` can validate it as an interchange artifact. Do not create a
+standalone graph artifact for the ordinary package loop; use the package path so
+the compiler reads `zero.graph` directly.
 
 ## Targets
 
@@ -85,7 +122,7 @@ Inspect target names and capability facts before cross-building:
 ```sh
 zero targets
 zero check --target linux-musl-x64 examples/memory-package
-zero graph --target linux-musl-x64 examples/memory-package
+zero inspect --target linux-musl-x64 examples/memory-package
 ```
 
 Hosted APIs such as process args, environment, filesystem, net, and proc are target-gated. A non-host target may reject code that checks on the host.
@@ -95,23 +132,12 @@ Hosted APIs such as process args, environment, filesystem, net, and proc are tar
 Common profile names are `debug`, `dev`, `release-fast`, `release-small`, `tiny`, and `audit`.
 
 ```sh
-zero build --profile release-small examples/hello.0
-zero size --profile tiny examples/hello.0
+zero build --profile release-small examples/hello.graph
+zero size --profile tiny examples/hello.graph
 ```
 
 Use `zero size` to explain retained functions, sections, literals, runtime shims, imports, debug metadata, and optimization hints. Add `--json` when a tool needs exact fields.
 Use `zero size --backend llvm` when the question is specifically about the explicit LLVM backend; the report includes LLVM target triple, optimization level, retained runtime/helper facts, toolchain readiness, and direct-vs-LLVM comparison rows.
-
-## Ship
-
-`zero ship` produces a release preview:
-
-```sh
-zero ship --target linux-musl-x64 examples/hello.0 \
-  --out .zero/ship/hello
-```
-
-The preview includes artifact names, sizes, hashes, checksum file metadata, size report data, debug-symbol metadata, and target contract facts.
 
 ## Troubleshooting
 

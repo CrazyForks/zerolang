@@ -1,4 +1,14 @@
-## Status
+## When To Use std.http
+
+In Zerolang, use `std.http` for HTTP request parsing, response envelope writing, hosted
+fetch, local listen support, and web API helpers.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -7,6 +17,8 @@ Runnable today:
 | `std.http.parseMethod(text)` | `HttpMethod` | Parses a small HTTP method token. |
 | `std.http.client(net)` | `HttpClient` | Creates hosted client metadata from a network capability. |
 | `std.http.server(net, address)` | `HttpServer` | Creates hosted server metadata from a network capability and address. |
+| `std.http.listen(world)` | `Void` | Starts a loopback HTTP listener from `zero run`, auto-selecting a development port from 3000 upward. |
+| `std.http.listen(world, port)` | `Void` | Starts a loopback HTTP listener on exactly `port`, failing if the port is occupied. |
 | `std.http.fetch(client, request, response, timeout)` | `HttpResult` | Performs a hosted HTTP(S) request with a `Duration` timeout and writes response metadata, headers, and body into caller-owned storage. |
 | `std.http.resultOk(result)` | `Bool` | True when transport succeeded and the status is 2xx. |
 | `std.http.resultStatus(result)` | `u16` | Reads the HTTP status, or `0` when no status was available. |
@@ -41,17 +53,50 @@ Runnable today:
 | `std.http.writeJsonRequest(buffer, startLine, body)` | `Maybe<Span<u8>>` | Writes a JSON request envelope with `content-type` and `content-length`. |
 | `std.http.writeResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes an HTTP/1.1 response envelope into caller storage. |
 | `std.http.writeJsonResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a JSON HTTP/1.1 response envelope into caller storage. |
+| `std.http.writeCorsPreflight(buffer, allowOrigin, allowMethods, allowHeaders)` | `Maybe<Span<u8>>` | Writes a 204 CORS preflight response with caller-provided allow headers. |
+| `std.http.writeCorsJsonResponse(buffer, statusLine, body, allowOrigin)` | `Maybe<Span<u8>>` | Writes a JSON response with `access-control-allow-origin`; `statusLine` is a fragment such as `"200 OK"`. |
+| `std.http.writeJsonOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 JSON response envelope into caller storage. |
+| `std.http.writeJsonCreated(buffer, body)` | `Maybe<Span<u8>>` | Writes a 201 JSON response envelope into caller storage. |
+| `std.http.writeJsonBadRequest(buffer, body)` | `Maybe<Span<u8>>` | Writes a 400 JSON response envelope into caller storage. |
+| `std.http.writeJsonUnauthorized(buffer, body)` | `Maybe<Span<u8>>` | Writes a 401 JSON response envelope into caller storage. |
+| `std.http.writeJsonForbidden(buffer, body)` | `Maybe<Span<u8>>` | Writes a 403 JSON response envelope into caller storage. |
+| `std.http.writeJsonNotFound(buffer, body)` | `Maybe<Span<u8>>` | Writes a 404 JSON response envelope into caller storage. |
+| `std.http.writeJsonMethodNotAllowed(buffer, body)` | `Maybe<Span<u8>>` | Writes a 405 JSON response envelope into caller storage. |
+| `std.http.writeJsonConflict(buffer, body)` | `Maybe<Span<u8>>` | Writes a 409 JSON response envelope into caller storage. |
+| `std.http.writeJsonUnprocessable(buffer, body)` | `Maybe<Span<u8>>` | Writes a 422 JSON response envelope into caller storage. |
+| `std.http.writeJsonTooManyRequests(buffer, body)` | `Maybe<Span<u8>>` | Writes a 429 JSON response envelope into caller storage. |
+| `std.http.writeJsonInternalServerError(buffer, body)` | `Maybe<Span<u8>>` | Writes a 500 JSON response envelope into caller storage. |
+| `std.http.writeNoContent(buffer)` | `Maybe<Span<u8>>` | Writes a 204 response envelope with an empty body. |
 | `std.http.requestMethodName(request)` | `Maybe<Span<u8>>` | Borrows the method token from a request envelope. |
 | `std.http.requestTarget(request)` | `Maybe<Span<u8>>` | Borrows the raw target from a request envelope. |
 | `std.http.requestPath(request)` | `Maybe<Span<u8>>` | Borrows the path from an absolute or origin-form request target. |
+| `std.http.pathSegmentCount(path)` | `usize` | Counts non-empty path segments in a path span. |
+| `std.http.pathSegment(path, index)` | `Maybe<Span<u8>>` | Borrows a zero-based non-empty path segment from a path span. |
+| `std.http.requestPathSegmentCount(request)` | `usize` | Counts non-empty path segments from a request envelope path. |
+| `std.http.requestPathSegment(request, index)` | `Maybe<Span<u8>>` | Borrows a zero-based non-empty request path segment. |
 | `std.http.requestQuery(request)` | `Maybe<Span<u8>>` | Borrows the query string from a request target. |
 | `std.http.requestQueryValue(request, name)` | `Maybe<Span<u8>>` | Borrows a query value by name from a request envelope. |
 | `std.http.requestHeader(request, name)` | `Maybe<Span<u8>>` | Borrows a case-insensitive request header value. |
+| `std.http.requestBearerToken(request)` | `Maybe<Span<u8>>` | Borrows the bearer token from the `Authorization` request header. |
+| `std.http.requestCookie(request, name)` | `Maybe<Span<u8>>` | Borrows a named cookie value from the `Cookie` request header. |
 | `std.http.requestBody(request)` | `Maybe<Span<u8>>` | Borrows the request body after the blank line. |
 | `std.http.requestBodyWithin(request, max)` | `Maybe<Span<u8>>` | Borrows the request body only when it is at most `max` bytes. |
+| `std.http.requestHasJsonContentType(request)` | `Bool` | True when the request content type is `application/json`, ignoring ASCII case and allowing parameters. |
+| `std.http.requestJsonBodyWithin(request, max)` | `Maybe<Span<u8>>` | Borrows the body only when content type is JSON, body length is within `max`, and bytes validate as JSON. |
 | `std.http.requestMatches(request, method, path)` | `Bool` | True when a request envelope has the exact method and normalized path. |
+| `std.http.requestMethodIs(request, method)` | `Bool` | True when a request envelope has the exact method. |
+| `std.http.requestIsGet(request, path)` | `Bool` | True when a request envelope is `GET` for the normalized path. |
+| `std.http.requestIsHead(request, path)` | `Bool` | True when a request envelope is `HEAD` for the normalized path. |
+| `std.http.requestIsOptions(request, path)` | `Bool` | True when a request envelope is `OPTIONS` for the normalized path. |
+| `std.http.requestIsPost(request, path)` | `Bool` | True when a request envelope is `POST` for the normalized path. |
+| `std.http.requestIsPut(request, path)` | `Bool` | True when a request envelope is `PUT` for the normalized path. |
+| `std.http.requestIsPatch(request, path)` | `Bool` | True when a request envelope is `PATCH` for the normalized path. |
+| `std.http.requestIsDelete(request, path)` | `Bool` | True when a request envelope is `DELETE` for the normalized path. |
+| `std.http.requestPathStartsWith(request, prefix)` | `Bool` | True when the normalized request path starts with `prefix`. |
+| `std.http.requestPathTailAfter(request, prefix)` | `Maybe<Span<u8>>` | Borrows the normalized request path after `prefix`, or `null` when it does not match. |
 | `std.http.headerBytes(response, value)` | `Maybe<Span<u8>>` | Borrows a response header value after validating packed metadata. |
 | `std.http.responseBody(response, result)` | `Maybe<Span<u8>>` | Borrows the response body when the transport result succeeded. |
+| `std.http.responseBodyBytes(response)` | `Maybe<Span<u8>>` | Borrows the body bytes from a local response envelope written by response helpers. |
 
 Metadata labels:
 
@@ -59,23 +104,26 @@ Metadata labels:
 - allocation behavior: metadata helpers do not allocate; `fetch` writes into a
   caller-owned response buffer and uses the provider runtime internally
 - target support: request/response parsing and writing helpers are
-  target-neutral; client/server require a net-capable target; `fetch` runs on
-  supported Darwin arm64 and Linux x64 host executable targets
+  target-neutral; client/server require a net-capable target; `fetch` and
+  `listen` run on supported Darwin arm64 and Linux x64 host executable targets
 - error behavior: metadata helpers are infallible; `fetch` returns status,
   body length, and error metadata so non-2xx responses are distinguishable from
   transport failures
 - ownership notes: HTTP helpers borrow network capability metadata and write
   only to caller-owned buffers
-- examples: `conformance/native/pass/std-http-metadata-neutral.0`,
-  `conformance/native/pass/std-http-fetch.0`,
-  `conformance/native/pass/std-http-errors.0`,
-  `conformance/native/pass/std-http-response-helpers.0`,
-  `conformance/native/pass/std-http-api-helpers.0`,
-  `examples/json-api-client.0`,
-  `examples/json-api-router.0`,
-  `examples/std-http-json.0`,
-  `examples/std-http-request.0`,
-  `examples/std-http-headers.0`
+- examples: `conformance/native/pass/std-http-metadata-neutral.graph`,
+  `conformance/native/pass/std-http-fetch.graph`,
+  `conformance/native/pass/std-http-errors.graph`,
+  `conformance/native/pass/std-http-response-helpers.graph`,
+  `conformance/native/pass/std-http-api-helpers.graph`,
+  `conformance/native/pass/std-http-cors-helpers.graph`,
+  `conformance/native/pass/std-http-auth-helpers.graph`,
+  `conformance/native/pass/std-http-path-segments.graph`,
+  `examples/json-api-client.graph`,
+  `examples/json-api-router.graph`,
+  `examples/std-http-json.graph`,
+  `examples/std-http-request.graph`,
+  `examples/std-http-headers.graph`
 
 ## Example
 
@@ -137,18 +185,52 @@ Request routing:
 pub fn main(world: World) -> Void raises {
     let request: Span<u8> = std.mem.span("POST /users?tenant=demo\ncontent-type: application/json\n\n{\"id\":7}")
     var response: [256]u8 = [0_u8; 256]
-    let body: Maybe<Span<u8>> = std.http.requestBodyWithin(request, 64)
+    let body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(request, 64)
     let tenant: Maybe<Span<u8>> = std.http.requestQueryValue(request, "tenant")
-    if std.http.requestMatches(request, "POST", "/users") && tenant.has && body.has && std.json.validateBytes(body.value) {
-        let written: Maybe<Span<u8>> = std.http.writeJsonResponse(response, 201_u16, "{\"created\":true}")
+    let resource: Maybe<Span<u8>> = std.http.requestPathSegment(request, 0)
+    if std.http.requestIsPost(request, "/users") && resource.has && std.mem.eql(resource.value, "users") && tenant.has && body.has {
+        let written: Maybe<Span<u8>> = std.http.writeJsonCreated(response, "{\"created\":true}")
         if written.has {
             check world.out.write("http route ok\n")
             return
         }
     }
-    let failed: Maybe<Span<u8>> = std.http.writeJsonResponse(response, 400_u16, "{\"error\":\"bad_request\"}")
+    let failed: Maybe<Span<u8>> = std.http.writeJsonBadRequest(response, "{\"error\":\"bad_request\"}")
     if failed.has {
         check world.err.write("http route failed\n")
+    }
+}
+```
+
+CORS preflight and JSON response:
+
+```zero
+pub fn main(world: World) -> Void raises {
+    let request: Span<u8> = std.mem.span("OPTIONS /users\naccess-control-request-method: POST\n\n")
+    var response: [256]u8 = [0_u8; 256]
+    if std.http.requestIsOptions(request, "/users") {
+        let written: Maybe<Span<u8>> = std.http.writeCorsPreflight(response, "*", "GET, POST, OPTIONS", "content-type, authorization")
+        if written.has {
+            check world.out.write("http cors preflight ok\n")
+            return
+        }
+    }
+    let failed: Maybe<Span<u8>> = std.http.writeCorsJsonResponse(response, "400 Bad Request", "{\"error\":\"bad_request\"}", "*")
+    if failed.has {
+        check world.err.write("http cors failed\n")
+    }
+}
+```
+
+Authorization and session cookie helpers:
+
+```zero
+pub fn main(world: World) -> Void raises {
+    let request: Span<u8> = std.mem.span("GET /me\nauthorization: Bearer token-123\ncookie: sid=abc; theme=dark\n\n")
+    let token: Maybe<Span<u8>> = std.http.requestBearerToken(request)
+    let session: Maybe<Span<u8>> = std.http.requestCookie(request, "sid")
+    if token.has && session.has {
+        check world.out.write("http auth ok\n")
     }
 }
 ```
@@ -180,6 +262,36 @@ pub fn main(world: World) -> Void raises {
     check world.err.write("http response json failed\n")
 }
 ```
+
+Loopback API server:
+
+```zero
+pub fn main(world: World) -> Void raises {
+    check std.http.listen(world)
+}
+
+fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
+    if std.http.requestIsGet(request, "/ping") {
+        return std.http.writeJsonOk(response, "{\"message\":\"pong\"}")
+    }
+    return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\"}")
+}
+```
+
+Run it through the graph-backed package and use the port printed by the
+listener:
+
+```sh
+zero run .
+# listening on http://127.0.0.1:3001
+curl -sS -i http://127.0.0.1:3001/ping
+```
+
+When no port is passed, `listen(world)` starts at `3000` and increments by one
+until it finds a free loopback port. This lets agent-run examples coexist with
+a user's docs server or other local development process. When the program passes
+an explicit port, such as `std.http.listen(world, 3000_u16)`, Zero tries exactly
+that port and reports the bind failure instead of auto-incrementing.
 
 ## Design Notes
 

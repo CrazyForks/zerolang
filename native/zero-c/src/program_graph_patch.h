@@ -21,6 +21,12 @@ typedef struct {
   char *name;
   char *type;
   char *path;
+  char *function;
+  char *left;
+  char *right;
+  char *arg0;
+  char *arg1;
+  char *call;
   size_t order;
   int line_value;
   int column_value;
@@ -55,8 +61,8 @@ typedef struct {
   size_t operation_len;
   size_t operation_cap;
 } ZProgramGraphPatchResult;
-
 bool z_program_graph_patch_apply_operation(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op);
+const char *const *z_program_graph_patch_operation_examples(void);
 bool z_program_graph_apply_patch_text(const char *label, const char *text, size_t text_len, ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZDiag *diag);
 bool z_program_graph_apply_patch_file(const char *path, ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZDiag *diag);
 void z_program_graph_patch_result_free(ZProgramGraphPatchResult *result);

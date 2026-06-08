@@ -94,21 +94,21 @@ static void input_state_free(RepositoryGraphInputState *state) {
   memset(state, 0, sizeof(*state));
 }
 
-static const char *input_sync_state(const RepositoryGraphInputState *state) {
+static const char *input_projection_state(const RepositoryGraphInputState *state) {
   if (state && state->store_present && state->store_valid && state->projection_error) return "conflict";
   if (state && state->store_present && state->store_valid && state->projection_missing) return "source-missing";
   if (state && state->store_present && state->store_valid && state->projection_checked && !state->projection_current) return "source-stale";
   if (state && state->store_present && state->store_valid && state->projection_checked) return state->projection_current ? "clean" : "source-stale";
   if (state && state->store_present && state->store_valid) return "store-valid";
   if (state && state->store_present) return "store-invalid";
-  return "not-enabled";
+  return "store-missing";
 }
 
 static const char *input_projection_validity_label(const RepositoryGraphInputState *state) {
   if (!state || !state->store_valid) return "unavailable";
   if (state->projection_error) return "conflict";
-  if (!state->projection_checked) return "unavailable";
   if (state->projection_missing) return "missing";
+  if (!state->projection_checked) return "unavailable";
   return state->projection_current ? "clean" : "stale";
 }
 
@@ -122,10 +122,10 @@ static void input_append_state_json(ZBuf *buf, const RepositoryGraphInputState *
   zbuf_append(buf, ", \"storeValid\": ");
   zbuf_append(buf, state->store_valid ? "true" : "false");
   zbuf_append(buf, ", \"enabled\": ");
-  zbuf_append(buf, state->store_valid ? "true" : "false");
-  zbuf_append(buf, ", \"syncState\": ");
-  input_append_json_string(buf, input_sync_state(state));
-  zbuf_append(buf, ", \"possibleSyncStates\": [\"not-enabled\", \"store-invalid\", \"clean\", \"source-missing\", \"source-stale\", \"conflict\"], \"canonicalSourceExtension\": \".0\", \"compilerInput\": \"repository-graph\", \"semanticValidity\": ");
+  zbuf_append(buf, "true");
+  zbuf_append(buf, ", \"projectionState\": ");
+  input_append_json_string(buf, input_projection_state(state));
+  zbuf_append(buf, ", \"possibleProjectionStates\": [\"store-missing\", \"store-invalid\", \"clean\", \"source-missing\", \"source-stale\", \"conflict\"], \"canonicalSourceExtension\": \".0\", \"compilerInput\": \"repository-graph\", \"semanticValidity\": ");
   input_append_json_string(buf, state->store_valid ? "shape-valid" : "unavailable");
   zbuf_append(buf, ", \"projectionValidity\": ");
   input_append_json_string(buf, input_projection_validity_label(state));
@@ -154,7 +154,7 @@ static int input_error(const RepositoryGraphInputState *state, bool json, const 
     input_append_json_string(&buf, actual);
     zbuf_append(&buf, ",\"help\":");
     input_append_json_string(&buf, help);
-    zbuf_append(&buf, ",\"fixSafety\":\"requires-human-review\",\"repair\":{\"id\":\"inspect-repository-graph-status\",\"summary\":\"Inspect graph/source sync state before choosing a sync direction.\"},\"related\":[]}],\n  \"repairCommands\": ");
+    zbuf_append(&buf, ",\"fixSafety\":\"requires-human-review\",\"repair\":{\"id\":\"inspect-repository-graph-status\",\"summary\":\"Inspect projection state before choosing import or export.\"},\"related\":[]}],\n  \"repairCommands\": ");
     z_repository_graph_append_repair_commands_json(&buf, state->input, repair);
     zbuf_append(&buf, "\n}\n");
     fputs(buf.data, stdout);
@@ -181,9 +181,9 @@ static int input_manifest_identity_error(const RepositoryGraphInputState *state,
                          json,
                          identity_error ? "RGP007" : "RGP003",
                          diag.message[0] ? diag.message : (identity_error ? "repository graph compiler input requires package.name" : "package manifest could not be read"),
-                         diag.expected[0] ? diag.expected : (identity_error ? "zero.json package.name matching zero.graph module identity" : "valid zero.json package manifest"),
+                         diag.expected[0] ? diag.expected : (identity_error ? "zero.toml or zero.json package.name matching zero.graph module identity" : "valid zero.toml or zero.json package manifest"),
                          identity_error ? actual : (diag.message[0] ? diag.message : "manifest unavailable"),
-                         diag.help[0] ? diag.help : (identity_error ? "add package.name before using repository graph compiler input" : "fix zero.json before using repository graph compiler input"),
+                         diag.help[0] ? diag.help : (identity_error ? "add package.name before using repository graph compiler input" : "fix zero.toml or zero.json before using repository graph compiler input"),
                          identity_error ? REPO_GRAPH_REPAIR_STATUS : REPO_GRAPH_REPAIR_NONE);
     free((char *)diag.path);
     return rc;
@@ -195,7 +195,7 @@ static int input_manifest_identity_error(const RepositoryGraphInputState *state,
                          "repository graph store module identity does not match package manifest",
                          expected,
                          state && state->module_identity ? state->module_identity : "missing module identity",
-                         "check in the zero.graph generated for this package, or update zero.json after reviewing the package identity",
+                         "check in the zero.graph generated for this package, or update the package manifest after reviewing the package identity",
                          REPO_GRAPH_REPAIR_STATUS);
     free(expected);
     return rc;
@@ -208,12 +208,12 @@ int z_repository_graph_verify_compiler_input(const char *input, const ZTargetInf
   if (out_store_path) *out_store_path = NULL;
   RepositoryGraphInputState state = input_state(input, target);
   if (!state.store_present) {
-    int rc = input_error(&state, json, "RGP001", "repository graph store is missing", "checked-in zero.graph repository graph store", "missing zero.graph", "run zero graph sync --from-source to create the repository graph store", REPO_GRAPH_REPAIR_FROM_SOURCE);
+    int rc = input_error(&state, json, "RGP001", "repository graph store is missing", "checked-in zero.graph repository graph store", "missing zero.graph", "run zero import to create the repository graph store from the source projection", REPO_GRAPH_REPAIR_FROM_SOURCE);
     input_state_free(&state);
     return rc;
   }
   if (!state.store_valid) {
-    int rc = input_error(&state, json, "RGP003", "repository graph store is invalid", "valid zero.graph repository graph store", state.store_error ? state.store_error : "invalid zero.graph", "run zero graph sync --from-source after reviewing the source projection", REPO_GRAPH_REPAIR_FROM_SOURCE);
+    int rc = input_error(&state, json, "RGP003", "repository graph store is invalid", "valid zero.graph repository graph store", state.store_error ? state.store_error : "invalid zero.graph", "run zero import after reviewing the source projection", REPO_GRAPH_REPAIR_FROM_SOURCE);
     input_state_free(&state);
     return rc;
   }

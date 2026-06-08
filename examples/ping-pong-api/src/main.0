@@ -1,0 +1,13 @@
+pub fn main(world: World) -> Void raises {
+    check std.http.listen(world)
+}
+
+fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
+    if std.http.requestIsGet(request, "/ping") {
+        return std.http.writeJsonOk(response, "{\"message\":\"pong\"}")
+    }
+    if std.http.requestIsGet(request, "/health") {
+        return std.http.writeJsonOk(response, "{\"ok\":true}")
+    }
+    return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\"}")
+}

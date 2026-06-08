@@ -1,4 +1,5 @@
 #include "program_graph.h"
+#include "program_graph_order.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -203,21 +204,6 @@ static bool graph_edge_child_allowed(const ZProgramGraphNode *owner, const char 
     default:
       return false;
   }
-}
-
-static bool graph_order_must_be_contiguous(const ZProgramGraphNode *owner, const char *kind) {
-  if (!owner || !kind) return false;
-  if (graph_text_eq(kind, "arg") && owner->kind == Z_PROGRAM_GRAPH_NODE_SLICE) return false;
-  return graph_text_eq(kind, "import") || graph_text_eq(kind, "cImport") ||
-         graph_text_eq(kind, "const") || graph_text_eq(kind, "alias") ||
-         graph_text_eq(kind, "shape") || graph_text_eq(kind, "interface") ||
-         graph_text_eq(kind, "enum") || graph_text_eq(kind, "choice") ||
-         graph_text_eq(kind, "function") || graph_text_eq(kind, "method") ||
-         graph_text_eq(kind, "typeParam") || graph_text_eq(kind, "param") ||
-         graph_text_eq(kind, "error") || graph_text_eq(kind, "field") ||
-         graph_text_eq(kind, "case") || graph_text_eq(kind, "statement") ||
-         graph_text_eq(kind, "arg") || graph_text_eq(kind, "typeArg") ||
-         graph_text_eq(kind, "arm");
 }
 
 static size_t graph_count_node_edges(const ZProgramGraph *graph, const char *from, const char *kind) {
@@ -473,7 +459,7 @@ static bool graph_validate_order_groups(const ZProgramGraph *graph, ZProgramGrap
     const ZProgramGraphEdge *edge = &graph->edges[i];
     if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE) continue;
     const ZProgramGraphNode *owner = graph_find_node(graph, edge->from);
-    if (!graph_order_must_be_contiguous(owner, edge->kind)) continue;
+    if (!z_program_graph_order_must_be_contiguous(owner, edge->kind)) continue;
     bool first = true;
     for (size_t j = 0; j < i; j++) {
       const ZProgramGraphEdge *prior = &graph->edges[j];
@@ -525,7 +511,9 @@ bool z_program_graph_validate(const ZProgramGraph *graph, ZProgramGraphValidatio
       const ZProgramGraphEdge *other = &graph->edges[j];
       if (edge->from && other->from && edge->kind && other->kind &&
           edge->target == other->target && strcmp(edge->from, other->from) == 0 && strcmp(edge->kind, other->kind) == 0 && edge->order == other->order) {
-        return graph_validation_fail(validation, "GRF006", "duplicate ordered edge", NULL, edge->from, edge->to, edge_target);
+        char message[160];
+        snprintf(message, sizeof(message), "duplicate ordered edge: %s[%zu]", edge->kind, edge->order);
+        return graph_validation_fail(validation, "GRF006", message, NULL, edge->from, edge->to, edge_target);
       }
     }
   }

@@ -46,20 +46,32 @@ where they will run.
 ## Useful Checks
 
 ```sh
-pnpm run docs:test
+pnpm run docs:build
 pnpm run conformance
 pnpm run native:test
 pnpm run command-contracts
 ```
 
+`pnpm run conformance:local` and `pnpm run command-contracts:local` use the
+aggregate validation runner. Add `-- --shard 1/4` to run one conformance phase
+shard, `-- --list` to see phases, and `-- --fail-fast` only when a narrow loop
+should stop at the first failing phase.
+`pnpm run conformance` runs the sandbox suite with four isolated conformance
+check workers. Local validation stays serial by default; set
+`ZERO_CONFORMANCE_CHECK_JOBS=<n>` only when measuring that path on the current
+machine.
+Validation scripts prefer the built native compiler at `.zero/bin/zero` after
+`native-build`; set `ZERO_BIN=<path>` only when comparing another compiler
+binary deliberately.
+
 For focused compiler work:
 
 ```sh
-bin/zero check --json <file-or-package>
-bin/zero graph --json <file-or-package>
-bin/zero size --json <file-or-package>
+bin/zero check --json <graph-input>
+bin/zero inspect --json <graph-input>
+bin/zero size --json <graph-input>
 bin/zero explain <diagnostic-code>
-bin/zero fix --plan --json <file-or-package>
+bin/zero fix --plan --json <graph-backed-file-or-package>
 ```
 
 ## Project Layout
@@ -101,7 +113,7 @@ make -C native/zero-c
 bin/zero --version --json
 pnpm run test:zero
 pnpm run command-contracts:local
-pnpm run docs:test
+pnpm run docs:build
 ```
 
 The release workflow reads the version from `package.json`, builds release

@@ -20,12 +20,18 @@ type StdHelper = {
 type StdSourceModule = {
   module: string;
   path: string;
+  graphPath: string;
 };
 
 type StdSourceCall = {
   publicName: string;
   targetName: string;
   module: string;
+};
+
+type StdSkillSignature = {
+  returnType: string;
+  argTypes: string[];
 };
 
 const targetSupportValues = new Set(["target-neutral", "host", "host-runtime"]);
@@ -36,7 +42,7 @@ const publicModuleDocsDir = "docs/articles/modules";
 const skillPath = "skill-data/stdlib.md";
 const stdSigPath = "native/zero-c/src/std_sig.c";
 const stdSourcePath = "native/zero-c/src/std_source.c";
-const embeddedStdlibPath = "native/zero-c/src/embedded_stdlib.inc";
+const embeddedStdlibGraphPath = "native/zero-c/src/embedded_stdlib_graph.inc";
 const fixtureRoots = ["examples", "conformance", "benchmarks/rosetta"];
 
 function cBlock(text: string, marker: string): string {
@@ -78,15 +84,12 @@ function cIdent(text: string): string {
   return text.replace(/[^A-Za-z0-9_]/g, "_");
 }
 
-function parseEmbeddedStdlibSource(text: string, sourcePath: string): string | null {
-  const ident = `zero_embedded_stdlib_${cIdent(sourcePath)}_chunks`;
-  const block = cBlock(text, `static const char *const ${ident}[] =`);
+function parseEmbeddedStdlibGraphBytes(text: string, graphPath: string): Buffer | null {
+  const ident = `zero_embedded_stdlib_graph_${cIdent(graphPath)}_bytes`;
+  const block = cBlock(text, `static const unsigned char ${ident}[] =`);
   if (block.length === 0) return null;
-  let source = "";
-  for (const match of block.matchAll(/"((?:\\.|[^"\\])*)"/g)) {
-    source += JSON.parse(match[0]);
-  }
-  return source;
+  const bytes = [...block.matchAll(/0x([0-9a-fA-F]{2})/g)].map((match) => Number.parseInt(match[1], 16));
+  return Buffer.from(bytes);
 }
 
 function parseStdHelpers(text: string): StdHelper[] {
@@ -113,10 +116,38 @@ function parseStdHelpers(text: string): StdHelper[] {
   return helpers.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+function parseSkillSignatures(text: string): Map<string, StdSkillSignature> {
+  const start = text.indexOf("## Function Signatures");
+  if (start < 0) return new Map();
+  const end = text.indexOf("## Maybe Pattern", start);
+  const catalog = text.slice(start, end < 0 ? undefined : end);
+  const signatures = new Map<string, StdSkillSignature>();
+  const modulePattern = /### (std\.[A-Za-z0-9]+)\s+```text\n([\s\S]*?)\n```/g;
+  for (const moduleMatch of catalog.matchAll(modulePattern)) {
+    const module = moduleMatch[1];
+    for (const rawLine of moduleMatch[2].split(/\r?\n/)) {
+      const line = rawLine.trim();
+      if (line.length === 0) continue;
+      const signatureMatch = line.match(/^([A-Za-z][A-Za-z0-9]*)\((.*)\) -> (.+)$/);
+      if (!signatureMatch) continue;
+      const argText = signatureMatch[2].trim();
+      const argTypes = argText.length === 0
+        ? []
+        : argText.split(/\s*,\s*/).map((arg) => {
+            const colon = arg.indexOf(":");
+            return (colon >= 0 ? arg.slice(colon + 1) : arg).trim();
+          });
+      const returnType = signatureMatch[3].replace(/\s+raises\s+\[[^\]]*\]\s*$/, "").trim();
+      signatures.set(`${module}.${signatureMatch[1]}`, { returnType, argTypes });
+    }
+  }
+  return signatures;
+}
+
 function parseStdSourceModules(text: string): StdSourceModule[] {
   const block = cBlock(text, "static const ZStdSourceModule std_source_modules[] =");
-  return [...block.matchAll(/\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*zero_embedded_stdlib_[A-Za-z0-9_]+_chunks\s*\}/g)]
-    .map((match) => ({ module: match[1], path: match[2] }))
+  return [...block.matchAll(/\{\s*"([^"]+)"\s*,\s*"([^"]+)"\s*,\s*zero_embedded_stdlib_graph_[A-Za-z0-9_]+_bytes\s*,\s*sizeof\s*\(\s*zero_embedded_stdlib_graph_[A-Za-z0-9_]+_bytes\s*\)\s*\}/g)]
+    .map((match) => ({ module: match[1], path: match[2], graphPath: match[2].replace(/\.0$/, ".graph") }))
     .sort((a, b) => a.module.localeCompare(b.module));
 }
 
@@ -148,14 +179,24 @@ function pushIf(condition: boolean, failures: string[], message: string) {
   if (condition) failures.push(message);
 }
 
-const [stdSig, stdSource, embeddedStdlib, skill] = await Promise.all([
+const [stdSig, stdSource, embeddedStdlibGraph, skill] = await Promise.all([
   readFile(stdSigPath, "utf8"),
   readFile(stdSourcePath, "utf8"),
-  readFile(embeddedStdlibPath, "utf8"),
+  readFile(embeddedStdlibGraphPath, "utf8"),
   readFile(skillPath, "utf8"),
 ]);
 
+const stdEntries = await readdir("std", { withFileTypes: true });
+const stdProjectionFiles = stdEntries
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".0"))
+  .map((entry) => `std/${entry.name}`)
+  .sort((a, b) => a.localeCompare(b));
+const stdGraphFiles = stdEntries
+  .filter((entry) => entry.isFile() && entry.name.endsWith(".graph"))
+  .map((entry) => `std/${entry.name}`)
+  .sort((a, b) => a.localeCompare(b));
 const helpers = parseStdHelpers(stdSig);
+const skillSignatures = parseSkillSignatures(skill);
 const modules = [...new Set(helpers.map((helper) => helper.module))].sort((a, b) => a.localeCompare(b));
 const sourceModules = parseStdSourceModules(stdSource);
 const sourceCalls = parseStdSourceCalls(stdSource);
@@ -168,8 +209,11 @@ const fixtureTexts = await Promise.all(fixtureFiles.map(async (path) => ({
 })));
 const helpersByName = new Map(helpers.map((helper) => [helper.name, helper]));
 const sourceModulesByName = new Map(sourceModules.map((module) => [module.module, module]));
+const sourceModulePaths = new Set(sourceModules.map((module) => module.path));
+const sourceModuleGraphPaths = new Set(sourceModules.map((module) => module.graphPath));
 const sourceCallsByPublicName = new Map(sourceCalls.map((call) => [call.publicName, call]));
-const partiallySourceBackedModules = new Set(["std.args", "std.codec", "std.env", "std.fs", "std.http", "std.io", "std.json", "std.mem", "std.net", "std.proc", "std.time"]);
+const graphImplementedHelperModules = new Set(sourceCalls.map((call) => call.module));
+const partiallyGraphBackedModules = new Set(["std.args", "std.cli", "std.codec", "std.env", "std.fs", "std.http", "std.io", "std.json", "std.math", "std.mem", "std.net", "std.parse", "std.path", "std.proc", "std.search", "std.time", "std.toml"]);
 const docsEntries = await readdir(publicModuleDocsDir, { withFileTypes: true });
 const publicModuleDocs = new Set(
   docsEntries
@@ -185,6 +229,10 @@ await Promise.all(modules.map(async (module) => {
 
 const failures: string[] = [];
 
+pushIf(stdSource.includes("embedded_stdlib.inc"), failures, "std_source.c must not include embedded stdlib source chunks");
+pushIf(/zero_embedded_stdlib_[A-Za-z0-9_]+_chunks/.test(stdSource), failures, "std_source.c must not reference embedded stdlib source chunks");
+pushIf(/z_std_source_module_copy_source/.test(stdSource), failures, "std_source.c must not expose source-copy stdlib bridges");
+
 pushIf(helpers.length === 0, failures, "no stdlib helpers were parsed from std_sig.c");
 for (const duplicate of duplicateValues(helpers.map((helper) => helper.name))) {
   failures.push(`duplicate stdlib helper contract: ${duplicate}`);
@@ -195,6 +243,9 @@ for (const helper of helpers) {
   pushIf(helper.returnType.length === 0, failures, `${helper.name}: return type is empty`);
   pushIf(helper.argCount < 0 || helper.argCount > 4, failures, `${helper.name}: arg count ${helper.argCount} exceeds contract bounds`);
   pushIf(helper.argTypes.length > 4, failures, `${helper.name}: arg type list exceeds contract bounds`);
+  for (let index = 0; index < helper.argCount; index++) {
+    pushIf(helper.argTypes[index] === null || helper.argTypes[index] === undefined, failures, `${helper.name}: arg ${index + 1} is missing from std_sig.c`);
+  }
   pushIf(helper.errorNames.length > 4, failures, `${helper.name}: error list exceeds contract bounds`);
   pushIf(!targetSupportValues.has(helper.targetSupport), failures, `${helper.name}: unknown target support '${helper.targetSupport}'`);
   pushIf(helper.capability.length === 0, failures, `${helper.name}: capability is empty`);
@@ -209,35 +260,63 @@ for (const module of modules) {
 }
 
 for (const helper of helpers) {
+  const signature = skillSignatures.get(helper.name);
+  pushIf(!signature, failures, `${helper.name}: skill-data/stdlib.md is missing a Function Signatures row`);
+  if (signature) {
+    pushIf(signature.returnType !== helper.returnType, failures, `${helper.name}: skill return type ${signature.returnType} does not match std_sig.c ${helper.returnType}`);
+    pushIf(signature.argTypes.length !== helper.argCount, failures, `${helper.name}: skill arg count ${signature.argTypes.length} does not match std_sig.c ${helper.argCount}`);
+    for (let index = 0; index < helper.argCount && index < signature.argTypes.length; index++) {
+      const expected = helper.argTypes[index];
+      if (expected !== null && expected !== undefined) {
+        pushIf(signature.argTypes[index] !== expected, failures, `${helper.name}: skill arg ${index + 1} type ${signature.argTypes[index]} does not match std_sig.c ${expected}`);
+      }
+    }
+  }
   const docs = docsByModule.get(helper.module);
   if (docs) {
     pushIf(!docs.includes(helper.name), failures, `${helper.name}: public module docs do not mention helper`);
   }
   pushIf(!fixtureTexts.some((fixture) => fixture.text.includes(helper.name)), failures, `${helper.name}: no example, conformance fixture, or Rosetta task exercises helper`);
 }
+for (const name of [...skillSignatures.keys()].sort((a, b) => a.localeCompare(b))) {
+  pushIf(!helpersByName.has(name), failures, `${name}: skill-data/stdlib.md Function Signatures row has no std_sig.c helper`);
+}
+
+for (const projectionPath of stdProjectionFiles) {
+  const graphPath = projectionPath.replace(/\.0$/, ".graph");
+  pushIf(!stdGraphFiles.includes(graphPath), failures, `${projectionPath}: missing sibling graph store ${graphPath}`);
+  pushIf(!sourceModulePaths.has(projectionPath), failures, `${projectionPath}: std projection is not registered as an embedded graph-backed module`);
+}
+for (const graphPath of stdGraphFiles) {
+  const projectionPath = graphPath.replace(/\.graph$/, ".0");
+  pushIf(!stdProjectionFiles.includes(projectionPath), failures, `${graphPath}: graph store has no sibling projection ${projectionPath}`);
+  pushIf(!sourceModuleGraphPaths.has(graphPath), failures, `${graphPath}: std graph store is not registered for embedding`);
+}
 
 for (const sourceModule of sourceModules) {
-  pushIf(!moduleNamePattern.test(sourceModule.module), failures, `${sourceModule.module}: invalid source-backed std module name`);
-  pushIf(!existsSync(sourceModule.path), failures, `${sourceModule.module}: missing source-backed std module ${sourceModule.path}`);
-  pushIf(!modules.includes(sourceModule.module), failures, `${sourceModule.module}: source-backed module has no public helpers`);
-  const embedded = parseEmbeddedStdlibSource(embeddedStdlib, sourceModule.path);
-  const source = existsSync(sourceModule.path) ? await readFile(sourceModule.path, "utf8") : null;
-  pushIf(embedded === null, failures, `${sourceModule.module}: embedded stdlib source is missing for ${sourceModule.path}`);
-  pushIf(source !== null && embedded !== null && embedded !== source, failures, `${sourceModule.module}: embedded stdlib source is stale for ${sourceModule.path}`);
+  pushIf(!moduleNamePattern.test(sourceModule.module), failures, `${sourceModule.module}: invalid graph-backed std module name`);
+  pushIf(!existsSync(sourceModule.path), failures, `${sourceModule.module}: missing std projection ${sourceModule.path}`);
+  pushIf(!modules.includes(sourceModule.module), failures, `${sourceModule.module}: graph-backed module has no public helpers`);
+  const embeddedGraph = parseEmbeddedStdlibGraphBytes(embeddedStdlibGraph, sourceModule.graphPath);
+  const graph = existsSync(sourceModule.graphPath) ? await readFile(sourceModule.graphPath) : null;
+  pushIf(!existsSync(sourceModule.graphPath), failures, `${sourceModule.module}: missing graph-backed std module ${sourceModule.graphPath}`);
+  pushIf(embeddedGraph === null, failures, `${sourceModule.module}: embedded stdlib graph is missing for ${sourceModule.graphPath}`);
+  pushIf(graph !== null && graph.subarray(0, 8).toString("latin1") !== "ZRGBIN1\0", failures, `${sourceModule.module}: std graph store must be binary ${sourceModule.graphPath}`);
+  pushIf(graph !== null && embeddedGraph !== null && Buffer.compare(embeddedGraph, graph) !== 0, failures, `${sourceModule.module}: embedded stdlib graph is stale for ${sourceModule.graphPath}`);
 }
 for (const duplicate of duplicateValues(sourceCalls.map((call) => call.publicName))) {
-  failures.push(`duplicate source-backed public helper mapping: ${duplicate}`);
+  failures.push(`duplicate graph-backed public helper mapping: ${duplicate}`);
 }
 for (const duplicate of duplicateValues(sourceCalls.map((call) => call.targetName))) {
-  failures.push(`duplicate source-backed target helper mapping: ${duplicate}`);
+  failures.push(`duplicate graph-backed target helper mapping: ${duplicate}`);
 }
 for (const call of sourceCalls) {
   const helper = helpersByName.get(call.publicName);
   const sourceModule = sourceModulesByName.get(call.module);
-  pushIf(!helper, failures, `${call.publicName}: source-backed mapping has no std_sig contract`);
-  pushIf(!sourceModule, failures, `${call.publicName}: source-backed mapping references unknown module ${call.module}`);
-  pushIf(helper !== undefined && helper.module !== call.module, failures, `${call.publicName}: source-backed mapping module ${call.module} does not match helper module ${helper?.module}`);
-  pushIf(helper !== undefined && !helper.emitsRuntimeHelper, failures, `${call.publicName}: source-backed helper must emit runtime helper code`);
+  pushIf(!helper, failures, `${call.publicName}: graph-backed mapping has no std_sig contract`);
+  pushIf(!sourceModule, failures, `${call.publicName}: graph-backed mapping references unknown module ${call.module}`);
+  pushIf(helper !== undefined && helper.module !== call.module, failures, `${call.publicName}: graph-backed mapping module ${call.module} does not match helper module ${helper?.module}`);
+  pushIf(helper !== undefined && !helper.emitsRuntimeHelper, failures, `${call.publicName}: graph-backed helper must emit runtime helper code`);
   if (sourceModule && existsSync(sourceModule.path)) {
     const source = await readFile(sourceModule.path, "utf8");
     const targetPattern = new RegExp(`\\bfn\\s+${call.targetName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:<[^>]+>)?\\s*\\(`);
@@ -245,18 +324,28 @@ for (const call of sourceCalls) {
   }
 }
 for (const sourceModule of sourceModules) {
-  if (partiallySourceBackedModules.has(sourceModule.module)) continue;
+  if (!graphImplementedHelperModules.has(sourceModule.module)) continue;
+  if (partiallyGraphBackedModules.has(sourceModule.module)) continue;
   for (const helper of helpers.filter((candidate) => candidate.module === sourceModule.module)) {
-    pushIf(!sourceCallsByPublicName.has(helper.name), failures, `${helper.name}: source-backed module helper is missing std_source.c mapping`);
+    pushIf(!sourceCallsByPublicName.has(helper.name), failures, `${helper.name}: graph-backed module helper is missing embedded std graph mapping`);
   }
 }
+const graphStorageComplete = stdProjectionFiles.length === sourceModules.length &&
+  stdGraphFiles.length === sourceModules.length &&
+  stdProjectionFiles.every((projectionPath) => sourceModulePaths.has(projectionPath)) &&
+  stdGraphFiles.every((graphPath) => sourceModuleGraphPaths.has(graphPath));
 const summary = {
   schema: 1,
   helperCount: helpers.length,
   moduleCount: modules.length,
   modules,
-  sourceBackedModuleCount: sourceModules.length,
-  sourceBackedHelperCount: sourceCalls.length,
+  stdProjectionModuleCount: stdProjectionFiles.length,
+  embeddedStdModuleCount: sourceModules.length,
+  graphStoredModuleCount: sourceModules.length,
+  graphStorageComplete,
+  graphImplementedHelperModuleCount: graphImplementedHelperModules.size,
+  graphBackedHelperCount: sourceCalls.length,
+  nativeOrTableHelperCount: helpers.length - sourceCalls.length,
   fixtureFileCount: fixtureFiles.length,
   ok: failures.length === 0,
   failures,
@@ -265,7 +354,7 @@ const summary = {
 if (process.argv.includes("--json")) {
   console.log(JSON.stringify(summary, null, 2));
 } else if (failures.length === 0) {
-  console.log(`stdlib contracts ok (${summary.helperCount} helpers, ${summary.moduleCount} modules, ${summary.sourceBackedHelperCount} source-backed helpers)`);
+  console.log(`stdlib contracts ok (${summary.helperCount} helpers, ${summary.graphStoredModuleCount}/${summary.stdProjectionModuleCount} std modules graph-stored, ${summary.graphBackedHelperCount} graph-backed helper mappings)`);
 } else {
   console.error(`stdlib contracts failed (${failures.length} issue${failures.length === 1 ? "" : "s"})`);
   for (const failure of failures.slice(0, 40)) console.error(`- ${failure}`);

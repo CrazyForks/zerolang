@@ -1,4 +1,13 @@
-## Status
+## When To Use std.log
+
+In Zerolang, use `std.log` for explicit-buffer structured log record formatting.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -14,7 +23,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: returns `null` when the buffer is too small or a value cannot be JSON-escaped
 - ownership notes: borrows returned bytes from caller-owned storage
-- example: `examples/std-testing-log.0`
+- example: `examples/std-testing-log.graph`
 
 ## Example
 

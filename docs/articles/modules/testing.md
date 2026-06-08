@@ -1,4 +1,14 @@
-## Status
+## When To Use std.testing
+
+In Zerolang, use `std.testing` inside test blocks for output checks and small boolean
+assertion helpers.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -22,7 +32,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: infallible
 - ownership notes: no ownership transfer
-- example: `examples/std-testing-log.0`
+- example: `examples/std-testing-log.graph`
 
 ## Example
 

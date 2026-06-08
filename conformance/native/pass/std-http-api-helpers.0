@@ -50,6 +50,50 @@ export c fn main() -> i32 {
     if !std.http.requestMatches(request.value, "POST", "/api") || std.http.requestMatches(request.value, "GET", "/api") {
         return 30
     }
+    if !std.http.requestMethodIs(request.value, "POST") || std.http.requestMethodIs(request.value, "GET") {
+        return 44
+    }
+    if !std.http.requestIsPost(request.value, "/api") || std.http.requestIsGet(request.value, "/api") {
+        return 45
+    }
+    if !std.http.requestPathStartsWith(request.value, "/a") || std.http.requestPathStartsWith(request.value, "/users") {
+        return 46
+    }
+    let path_tail: Maybe<Span<u8>> = std.http.requestPathTailAfter(request.value, "/")
+    if !path_tail.has || !std.mem.eql(path_tail.value, "api") {
+        return 47
+    }
+    let missing_tail: Maybe<Span<u8>> = std.http.requestPathTailAfter(request.value, "/users/")
+    if missing_tail.has {
+        return 48
+    }
+    let put_request: Span<u8> = "PUT /users/7\n\n"
+    let patch_request: Span<u8> = "PATCH /users/7\n\n"
+    let delete_request: Span<u8> = "DELETE /users/7\n\n"
+    if !std.http.requestIsPut(put_request, "/users/7") || !std.http.requestIsPatch(patch_request, "/users/7") || !std.http.requestIsDelete(delete_request, "/users/7") {
+        return 49
+    }
+    let user_id: Maybe<Span<u8>> = std.http.requestPathTailAfter(put_request, "/users/")
+    if !user_id.has || !std.mem.eql(user_id.value, "7") {
+        return 50
+    }
+    if !std.http.requestHasJsonContentType(request.value) {
+        return 35
+    }
+    let json_body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(request.value, 16)
+    let too_large_json_body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(request.value, 4)
+    if !json_body.has || !std.mem.eql(json_body.value, "{\"ping\":1}") || too_large_json_body.has {
+        return 36
+    }
+    let upper_json_request: Span<u8> = "POST /api\ncontent-type: Application/JSON; charset=utf-8\n\n{\"ok\":true}"
+    if !std.http.requestHasJsonContentType(upper_json_request) {
+        return 37
+    }
+    let invalid_json_request: Span<u8> = "POST /api\ncontent-type: application/json\n\nnot-json"
+    let invalid_json_body: Maybe<Span<u8>> = std.http.requestJsonBodyWithin(invalid_json_request, 64)
+    if invalid_json_body.has {
+        return 38
+    }
     var get_buf: [64]u8 = [0_u8; 64]
     let get_request: Maybe<Span<u8>> = std.http.writeRequest(get_buf, "GET /health", "")
     if !get_request.has || !std.mem.eql(get_request.value, "GET /health\n\n") {
@@ -70,7 +114,7 @@ export c fn main() -> i32 {
         return 34
     }
     var response_buf: [256]u8 = [0_u8; 256]
-    let response: Maybe<Span<u8>> = std.http.writeJsonResponse(response_buf, 201_u16, "{\"ok\":true}")
+    let response: Maybe<Span<u8>> = std.http.writeJsonCreated(response_buf, "{\"ok\":true}")
     if !response.has {
         return 24
     }
@@ -82,8 +126,62 @@ export c fn main() -> i32 {
     if std.http.responseBodyOffset(response.value) >= std.mem.len(response.value) {
         return 26
     }
+    let response_body: Maybe<Span<u8>> = std.http.responseBodyBytes(response.value)
+    if !response_body.has || !std.mem.eql(response_body.value, "{\"ok\":true}") {
+        return 39
+    }
+    var ok_buf: [128]u8 = [0_u8; 128]
+    let ok_response: Maybe<Span<u8>> = std.http.writeJsonOk(ok_buf, "{\"ok\":true}")
+    if !ok_response.has || !std.str.contains(ok_response.value, "200 OK") {
+        return 40
+    }
+    var bad_buf: [128]u8 = [0_u8; 128]
+    let bad_response: Maybe<Span<u8>> = std.http.writeJsonBadRequest(bad_buf, "{\"error\":\"bad\"}")
+    if !bad_response.has || !std.str.contains(bad_response.value, "400 Bad Request") {
+        return 41
+    }
+    var unauthorized_buf: [128]u8 = [0_u8; 128]
+    let unauthorized_response: Maybe<Span<u8>> = std.http.writeJsonUnauthorized(unauthorized_buf, "{\"error\":\"unauthorized\"}")
+    if !unauthorized_response.has || !std.str.contains(unauthorized_response.value, "401 Unauthorized") {
+        return 51
+    }
+    var forbidden_buf: [128]u8 = [0_u8; 128]
+    let forbidden_response: Maybe<Span<u8>> = std.http.writeJsonForbidden(forbidden_buf, "{\"error\":\"forbidden\"}")
+    if !forbidden_response.has || !std.str.contains(forbidden_response.value, "403 Forbidden") {
+        return 52
+    }
+    var not_found_buf: [128]u8 = [0_u8; 128]
+    let not_found_response: Maybe<Span<u8>> = std.http.writeJsonNotFound(not_found_buf, "{\"error\":\"not_found\"}")
+    if !not_found_response.has || !std.str.contains(not_found_response.value, "404 Not Found") {
+        return 42
+    }
+    var method_buf: [128]u8 = [0_u8; 128]
+    let method_response: Maybe<Span<u8>> = std.http.writeJsonMethodNotAllowed(method_buf, "{\"error\":\"method_not_allowed\"}")
+    if !method_response.has || !std.str.contains(method_response.value, "405 Method Not Allowed") {
+        return 43
+    }
+    var conflict_buf: [128]u8 = [0_u8; 128]
+    let conflict_response: Maybe<Span<u8>> = std.http.writeJsonConflict(conflict_buf, "{\"error\":\"conflict\"}")
+    if !conflict_response.has || !std.str.contains(conflict_response.value, "409 Conflict") {
+        return 53
+    }
+    var unprocessable_buf: [160]u8 = [0_u8; 160]
+    let unprocessable_response: Maybe<Span<u8>> = std.http.writeJsonUnprocessable(unprocessable_buf, "{\"error\":\"unprocessable\"}")
+    if !unprocessable_response.has || !std.str.contains(unprocessable_response.value, "422 Unprocessable Content") {
+        return 54
+    }
+    var limited_buf: [160]u8 = [0_u8; 160]
+    let limited_response: Maybe<Span<u8>> = std.http.writeJsonTooManyRequests(limited_buf, "{\"error\":\"rate_limited\"}")
+    if !limited_response.has || !std.str.contains(limited_response.value, "429 Too Many Requests") {
+        return 55
+    }
+    var internal_buf: [160]u8 = [0_u8; 160]
+    let internal_response: Maybe<Span<u8>> = std.http.writeJsonInternalServerError(internal_buf, "{\"error\":\"internal\"}")
+    if !internal_response.has || !std.str.contains(internal_response.value, "500 Internal Server Error") {
+        return 56
+    }
     var plain_response_buf: [128]u8 = [0_u8; 128]
-    let plain_response: Maybe<Span<u8>> = std.http.writeResponse(plain_response_buf, 204_u16, "")
+    let plain_response: Maybe<Span<u8>> = std.http.writeNoContent(plain_response_buf)
     if !plain_response.has || !std.str.contains(plain_response.value, "204 No Content") {
         return 27
     }

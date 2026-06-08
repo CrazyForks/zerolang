@@ -303,11 +303,10 @@ static char *graph_resolve_binding_name(const ZProgramGraphNode *node) {
 }
 
 static bool graph_resolve_binding_is_ordered(const ZProgramGraph *graph, const ZProgramGraphNode *node) {
+  (void)graph;
   if (!node) return false;
   if (node->kind == Z_PROGRAM_GRAPH_NODE_LET) return true;
-  if (node->kind != Z_PROGRAM_GRAPH_NODE_PARAM) return false;
-  const ZProgramGraphEdge *owner = graph_resolve_owner_edge(graph, node->id);
-  return !owner || !graph_resolve_text_eq(owner->kind, "typeParam");
+  return false;
 }
 
 static void graph_resolve_add_binding(ZGraphResolver *resolver, size_t scope_index, size_t node_index, const char *name, const char *kind, const char *target_module, const char *target_name, bool ordered) {
@@ -962,10 +961,21 @@ static void graph_resolve_call_reference(ZGraphResolver *resolver, size_t node_i
   }
 
   if (strncmp(qualified, "std.", 4) == 0 && !first_is_shadowed) {
+    const char *std_source_target_name = z_std_source_target_for_public_call(qualified);
+    const ZStdSourceModule *std_source_module = z_std_source_module_for_public_call(qualified);
     const ZGraphBindingFact *source_binding = graph_resolve_std_source_binding(resolver, qualified);
     if (source_binding) {
-      const ZGraphBindingFact *via = graph_resolve_import_binding_for_module(resolver, scope, z_std_source_module_for_public_call(qualified)->module);
-      graph_resolve_reference_to_binding(ref, resolver, source_binding, "sourceBackedStdlib", via ? via->symbol_id : NULL);
+      const ZGraphBindingFact *via = graph_resolve_import_binding_for_module(resolver, scope, std_source_module->module);
+      graph_resolve_reference_to_binding(ref, resolver, source_binding, "graphBackedStdlib", via ? via->symbol_id : NULL);
+    } else if (std_source_target_name && std_source_module) {
+      ZBuf symbol;
+      zbuf_init(&symbol);
+      zbuf_append(&symbol, "symbol:");
+      zbuf_append(&symbol, std_source_module->module);
+      zbuf_append(&symbol, "::value.");
+      zbuf_append(&symbol, std_source_target_name);
+      graph_resolve_reference_builtin(ref, "graphBackedStdlib", symbol.data ? symbol.data : "");
+      zbuf_free(&symbol);
     } else if (z_std_helper_find(qualified)) {
       ZBuf symbol;
       zbuf_init(&symbol);

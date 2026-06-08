@@ -1,4 +1,14 @@
-## Status
+## When To Use std.time
+
+In Zerolang, use `std.time` for duration math and target-gated monotonic or wall-clock
+helpers.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -38,7 +48,7 @@ Metadata labels:
 - target support: duration math is target-neutral; clock reads require a time-capable target
 - error behavior: infallible helpers
 - ownership notes: no ownership transfer
-- example: `examples/std-platform.0`
+- example: `examples/std-platform.graph`
 
 ## Example
 

@@ -1,4 +1,14 @@
-## Status
+## When To Use std.json
+
+In Zerolang, use `std.json` for validation, shallow field lookup, explicit-allocator parsing,
+and caller-buffer JSON writing.
+
+This module is graph-backed. The compiler uses its standard-library graph store,
+while the projection snippets below show the human-readable projection that agents may
+export for review. Agents should discover helpers with `zero skills get stdlib`,
+inspect user packages with `zero query [graph-input]` or
+`zero inspect [graph-input]`, and patch user code through the graph instead of
+hand-editing `.0` files.
 
 Runnable today:
 
@@ -33,7 +43,7 @@ Metadata labels:
 - target support: target-neutral
 - error behavior: `Maybe` helpers return null on failure
 - ownership notes: parsed documents are owned by explicit allocator storage in this compiler slice
-- examples: `examples/std-data-formats.0`, `examples/std-json-bytes.0`, `conformance/native/pass/std-codec-json-url.0`
+- examples: `examples/std-data-formats.graph`, `examples/std-json-bytes.graph`, `conformance/native/pass/std-codec-json-url.graph`
 
 ## Example
 

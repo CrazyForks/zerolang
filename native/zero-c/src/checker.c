@@ -1501,8 +1501,7 @@ static bool actual_storage_value_provenance_under_path(CheckContext *ctx, const 
 static char *provenance_context_type_text(const CheckContext *ctx, const Program *program, const char *type, GenericBinding *bindings, size_t binding_len);
 static void scope_clear_maybe_guards_for_mutating_call_args(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope);
 
-static bool std_source_function_allows_raw_maybe_return(const Program *program, Scope *scope, const Function *fun, const char *expected, const char *actual) {
-  if (!fun || !fun->name || strncmp(fun->name, "__zero_std_", strlen("__zero_std_")) != 0) return false;
+static bool maybe_type_accepts_present_value(const Program *program, Scope *scope, const char *expected, const char *actual) {
   const char *inner = NULL;
   size_t inner_len = 0;
   if (!type_has_generic_arg(expected, "Maybe", &inner, &inner_len)) return false;
@@ -6421,7 +6420,7 @@ static void record_stdlib_arg_fact(ZCallResolution *resolution, size_t index, co
 static bool check_stdlib_allocator_arg(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution, size_t index, const char *display_name, const char *alloc_help, const char *mut_help) {
   if (!check_expr(ctx, program, expr->args.items[index], scope, diag)) return false;
   const char *alloc_type = expr_type(ctx, program, expr->args.items[index], scope);
-  record_stdlib_arg_fact(resolution, index, expr->args.items[index], NULL, alloc_type);
+  record_stdlib_arg_fact(resolution, index, expr->args.items[index], "Alloc", alloc_type);
   if (!is_allocator_type(alloc_type)) {
     char message[256];
     snprintf(message, sizeof(message), "%s expects an allocator primitive", display_name);
@@ -6453,11 +6452,11 @@ static bool check_stdlib_mem_len_call_expected(CheckContext *ctx, const Program 
 static bool check_stdlib_mem_get_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
   if (!check_expr(ctx, program, expr->args.items[0], scope, diag)) return false;
   const char *actual = expr_type(ctx, program, expr->args.items[0], scope);
-  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], NULL, actual);
   char element_type[128];
   if (!index_element_type(actual, element_type, sizeof(element_type))) {
     return set_diag_detail(diag, 3012, "std.mem.get expects an indexable value", expr->args.items[0]->line, expr->args.items[0]->column, "[N]T, Span<T>, MutSpan<T>, or String", actual, "pass an indexable value and handle the Maybe<T> result");
   }
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], "Span<T>", actual);
   if (!check_expr_expected(ctx, program, expr->args.items[1], scope, diag, "usize")) return false;
   const char *index_type = expr_type(ctx, program, expr->args.items[1], scope);
   if (!is_int_type(index_type)) {
@@ -6475,13 +6474,13 @@ static bool check_stdlib_mem_eql_bytes_call_expected(CheckContext *ctx, const Pr
   if (!check_expr(ctx, program, expr->args.items[0], scope, diag) || !check_expr(ctx, program, expr->args.items[1], scope, diag)) return false;
   const char *left_type = expr_type(ctx, program, expr->args.items[0], scope);
   const char *right_type = expr_type(ctx, program, expr->args.items[1], scope);
-  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], NULL, left_type);
-  record_stdlib_arg_fact(resolution, 1, expr->args.items[1], NULL, right_type);
   char left_element[128];
   char right_element[128];
   if (!span_element_text(left_type, left_element, sizeof(left_element)) || !span_element_text(right_type, right_element, sizeof(right_element))) {
     return set_diag_detail(diag, 3012, "std.mem.eqlBytes expects Span<T> arguments", expr->line, expr->column, "two Span<T> values", "non-span argument", "pass spans with matching element types");
   }
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], "Span<T>", left_type);
+  record_stdlib_arg_fact(resolution, 1, expr->args.items[1], "Span<T>", right_type);
   if (!types_compatible_in_scope(program, scope, left_element, right_element)) {
     return set_diag_detail(diag, 3012, "std.mem.eqlBytes span element types must match", expr->line, expr->column, left_element, right_element, "compare spans with the same element type");
   }
@@ -6564,6 +6563,49 @@ static bool stdlib_require_supported_item_element(const Program *program, const 
   return set_diag_detail(diag, 3012, message, expr ? expr->line : 0, expr ? expr->column : 0, "Bool, u8, u16, usize, i32, u32, i64, or u64 item storage", element_type ? element_type : "Unknown", "use a supported scalar item type or write a specialized helper for this type");
 }
 
+static bool stdlib_validate_item_write_lifetimes(Scope *scope, const char *target_root, const ValueProvenance *origins, const Expr *site, ZDiag *diag, const char *display_name) {
+  if (!scope || !target_root || !origins) return true;
+  Scope *target_scope = scope_binding_scope(scope, target_root);
+  for (size_t i = 0; i < origins->len; i++) {
+    const ProvenanceEntry *entry = &origins->items[i];
+    Scope *root_scope = entry->origin.root_scope ? entry->origin.root_scope : scope_binding_scope(scope, entry->origin.root);
+    if (target_scope && root_scope && !scope_is_ancestor_or_self(root_scope, target_scope)) {
+      char actual[256];
+      snprintf(actual, sizeof(actual), "reference to shorter-lived local '%s'", entry->origin.root ? entry->origin.root : "<unknown>");
+      char message[256];
+      snprintf(message, sizeof(message), "cannot store a shorter-lived reference through %s", display_name ? display_name : "std.mem item write");
+      return set_diag_detail(diag, 3030, message, site ? site->line : 0, site ? site->column : 0, "borrow source that outlives the destination storage", actual, "copy only references derived from caller-owned values into longer-lived storage");
+    }
+  }
+  return true;
+}
+
+static bool stdlib_install_item_write_provenance(CheckContext *ctx, const Program *program, const Expr *dst, const Expr *value, Scope *scope, ZDiag *diag, const char *value_type, bool value_is_span, const char *display_name) {
+  ValueProvenance origins = {0};
+  bool have_origins = value_is_span
+    ? span_view_expr_provenance(ctx, program, value, scope, value_type, &origins)
+    : (expr_reference_provenance(ctx, program, value, scope, &origins) || span_view_expr_provenance(ctx, program, value, scope, value_type, &origins));
+  if (!have_origins || origins.len == 0) {
+    value_provenance_free(&origins);
+    return true;
+  }
+  char root[128];
+  char path[256];
+  if (!expr_binding_path(dst, root, sizeof(root), path, sizeof(path)) || !scope_has(scope, root)) {
+    value_provenance_free(&origins);
+    return true;
+  }
+  if (!stdlib_validate_item_write_lifetimes(scope, root, &origins, value, diag, display_name)) {
+    value_provenance_free(&origins);
+    return false;
+  }
+  char *target_path = origin_path_join(path, "[*]");
+  scope_set_value_provenance_path_in_scope(scope, scope_binding_scope(scope, root), root, target_path, &origins);
+  free(target_path);
+  value_provenance_free(&origins);
+  return true;
+}
+
 static bool check_stdlib_mem_copy_items_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
   const char *dst_actual = NULL;
   char element_type[128];
@@ -6581,6 +6623,7 @@ static bool check_stdlib_mem_copy_items_call_expected(CheckContext *ctx, const P
   if (!types_compatible_in_scope(program, scope, expected_src, src_actual)) {
     return set_diag_detail(diag, 3012, "std.mem.copyItems source element type must match destination", expr->args.items[1]->line, expr->args.items[1]->column, expected_src, src_actual, "copy between spans with the same element type");
   }
+  if (!stdlib_install_item_write_provenance(ctx, program, expr->args.items[0], expr->args.items[1], scope, diag, expected_src, true, "std.mem.copyItems")) return false;
   set_expr_resolved_type(expr, "usize");
   z_call_resolution_set_return_type(resolution, "usize");
   stdlib_record_single_type_arg(expr, element_type);
@@ -6602,6 +6645,7 @@ static bool check_stdlib_mem_fill_items_call_expected(CheckContext *ctx, const P
   if (!types_compatible_in_scope(program, scope, element_type, value_actual)) {
     return set_diag_detail(diag, 3012, "std.mem.fillItems value type must match destination element", expr->args.items[1]->line, expr->args.items[1]->column, element_type, value_actual, "fill storage with a value of the same element type");
   }
+  if (!stdlib_install_item_write_provenance(ctx, program, expr->args.items[0], expr->args.items[1], scope, diag, element_type, false, "std.mem.fillItems")) return false;
   set_expr_resolved_type(expr, "usize");
   z_call_resolution_set_return_type(resolution, "usize");
   stdlib_record_single_type_arg(expr, element_type);
@@ -6905,10 +6949,45 @@ static bool check_stdlib_table_call_expected(CheckContext *ctx, const Program *p
   return true;
 }
 
+static bool check_stdlib_call_fallibility_expected(CheckContext *ctx, const Expr *expr, ZDiag *diag, const ZCallResolution *resolution);
+
+static bool check_stdlib_http_listen_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
+  if (!expr) return true;
+  if (expr->args.len != 1 && expr->args.len != 2) {
+    return set_diag_detail(diag,
+                           3011,
+                           "std function 'std.http.listen' expects World plus an optional u16 port",
+                           expr->line,
+                           expr->column,
+                           "std.http.listen(world) or std.http.listen(world, 3000_u16)",
+                           "wrong argument count",
+                           "omit the port for auto-incrementing dev port selection, or pass one explicit u16 port");
+  }
+  if (!check_stdlib_call_fallibility_expected(ctx, expr, diag, resolution)) return false;
+  if (!check_expr_expected(ctx, program, expr->args.items[0], scope, diag, "World")) return false;
+  const char *world_type = expr_type(ctx, program, expr->args.items[0], scope);
+  record_stdlib_arg_fact(resolution, 0, expr->args.items[0], "World", world_type);
+  if (!types_compatible_in_scope(program, scope, "World", world_type)) {
+    return set_diag_detail(diag, 3012, "argument 1 to 'std.http.listen' has incompatible type", expr->args.items[0]->line, expr->args.items[0]->column, "World", world_type, "pass the main function's World capability");
+  }
+  if (expr->args.len == 2) {
+    if (!check_expr_expected(ctx, program, expr->args.items[1], scope, diag, "u16")) return false;
+    const char *port_type = expr_type(ctx, program, expr->args.items[1], scope);
+    record_stdlib_arg_fact(resolution, 1, expr->args.items[1], "u16", port_type);
+    if (!types_compatible_in_scope(program, scope, "u16", port_type)) {
+      return set_diag_detail(diag, 3012, "argument 2 to 'std.http.listen' has incompatible type", expr->args.items[1]->line, expr->args.items[1]->column, "u16", port_type, "pass a u16 port literal such as 3000_u16");
+    }
+  }
+  set_expr_resolved_type(expr, "Void");
+  return true;
+}
+
 static bool check_stdlib_known_call_expected(CheckContext *ctx, const Program *program, const Expr *expr, Scope *scope, ZDiag *diag, ZCallResolution *resolution) {
   const char *name = resolution && resolution->callee_name ? resolution->callee_name : "std helper";
   ZStdHelperKind kind = z_std_helper_kind(resolution ? resolution->std_helper : NULL);
   switch (kind) {
+    case Z_STD_HELPER_KIND_HTTP_LISTEN:
+      return check_stdlib_http_listen_call_expected(ctx, program, expr, scope, diag, resolution);
     case Z_STD_HELPER_KIND_MEM_LEN:
       return check_stdlib_mem_len_call_expected(ctx, program, expr, scope, diag, resolution);
     case Z_STD_HELPER_KIND_MEM_GET:
@@ -6985,12 +7064,14 @@ static bool check_stdlib_call_expected(CheckContext *ctx, const Program *program
     z_call_resolution_free(&std_resolution);
     return false;
   }
-  size_t expected_count = z_call_resolution_expected_arg_count(&std_resolution);
-  if (expected_count != expr->args.len) {
-    char message[256];
-    snprintf(message, sizeof(message), "std function '%s' expects %zu argument(s), got %zu", std_name, expected_count, expr->args.len);
-    z_call_resolution_free(&std_resolution);
-    return set_diag_detail(diag, 3011, message, expr->line, expr->column, "matching std helper signature", "wrong argument count", "update the std helper call");
+  if (z_std_helper_kind(std_resolution.std_helper) != Z_STD_HELPER_KIND_HTTP_LISTEN) {
+    size_t expected_count = z_call_resolution_expected_arg_count(&std_resolution);
+    if (expected_count != expr->args.len) {
+      char message[256];
+      snprintf(message, sizeof(message), "std function '%s' expects %zu argument(s), got %zu", std_name, expected_count, expr->args.len);
+      z_call_resolution_free(&std_resolution);
+      return set_diag_detail(diag, 3011, message, expr->line, expr->column, "matching std helper signature", "wrong argument count", "update the std helper call");
+    }
   }
   if (!check_stdlib_call_fallibility_expected(ctx, expr, diag, &std_resolution)) {
     z_call_resolution_free(&std_resolution);
@@ -8406,7 +8487,7 @@ static bool resolve_named_provenance_call(CheckContext *ctx, const Program *prog
   return true;
 }
 
-static bool resolve_source_backed_stdlib_provenance_call(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, const char *return_type, GenericBinding *context_bindings, size_t context_binding_len, ResolvedProvenanceCall *out, bool *handled) {
+static bool resolve_graph_backed_stdlib_provenance_call(CheckContext *ctx, const Program *program, const Expr *call, Scope *scope, const char *return_type, GenericBinding *context_bindings, size_t context_binding_len, ResolvedProvenanceCall *out, bool *handled) {
   if (handled) *handled = false;
   if (!program || !call || call->kind != EXPR_CALL || !call->left || call->left->kind != EXPR_MEMBER || !out) return true;
 
@@ -8514,7 +8595,7 @@ static bool resolve_provenance_call(CheckContext *ctx, const Program *program, c
   if (call->left->kind != EXPR_MEMBER) return false;
 
   bool handled = false;
-  if (!resolve_source_backed_stdlib_provenance_call(ctx, program, call, scope, return_type, context_bindings, context_binding_len, out, &handled)) return false;
+  if (!resolve_graph_backed_stdlib_provenance_call(ctx, program, call, scope, return_type, context_bindings, context_binding_len, out, &handled)) return false;
   if (handled) return true;
 
   if (!resolve_shape_namespace_provenance_call(ctx, program, call, scope, return_type, context_bindings, context_binding_len, out, &handled)) return false;
@@ -10726,7 +10807,7 @@ static bool check_stmt(CheckContext *ctx, const Program *program, const Function
   if (stmt->kind == STMT_RETURN) {
     if (!check_expr_expected(ctx, program, stmt->expr, scope, diag, fun->return_type)) return false;
     const char *actual = stmt->expr ? expr_type(ctx, program, stmt->expr, scope) : "Void";
-    if (!types_compatible_in_scope(program, scope, fun->return_type, actual) && !std_source_function_allows_raw_maybe_return(program, scope, fun, fun->return_type, actual)) {
+    if (!types_compatible_in_scope(program, scope, fun->return_type, actual) && !maybe_type_accepts_present_value(program, scope, fun->return_type, actual)) {
       return set_diag_detail(diag, 3007, "return type does not match function return type", stmt->line, stmt->column, fun->return_type, actual, "return a value compatible with the function signature");
     }
     if (!check_return_reference_escape(ctx, program, stmt->expr, scope, fun->return_type, diag)) return false;

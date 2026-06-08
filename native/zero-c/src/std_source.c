@@ -1,7 +1,10 @@
 #include "std_source.h"
 
-#include "embedded_stdlib.inc"
+#include "embedded_stdlib_graph.inc"
+#include "program_graph_format.h"
+#include "program_graph_store_binary.h"
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -12,57 +15,35 @@ typedef struct {
 } ZStdSourceCall;
 
 static const ZStdSourceModule std_source_modules[] = {
-  {"std.args", "std/args.0", zero_embedded_stdlib_std_args_0_chunks},
-  {"std.ascii", "std/ascii.0", zero_embedded_stdlib_std_ascii_0_chunks},
-  {"std.cli", "std/cli.0", zero_embedded_stdlib_std_cli_0_chunks},
-  {"std.codec", "std/codec.0", zero_embedded_stdlib_std_codec_0_chunks},
-  {"std.collections", "std/collections.0", zero_embedded_stdlib_std_collections_0_chunks},
-  {"std.env", "std/env.0", zero_embedded_stdlib_std_env_0_chunks},
-  {"std.fmt", "std/fmt.0", zero_embedded_stdlib_std_fmt_0_chunks},
-  {"std.fs", "std/fs.0", zero_embedded_stdlib_std_fs_0_chunks},
-  {"std.http", "std/http.0", zero_embedded_stdlib_std_http_0_chunks},
-  {"std.io", "std/io.0", zero_embedded_stdlib_std_io_0_chunks},
-  {"std.json", "std/json.0", zero_embedded_stdlib_std_json_0_chunks},
-  {"std.log", "std/log.0", zero_embedded_stdlib_std_log_0_chunks},
-  {"std.math", "std/math.0", zero_embedded_stdlib_std_math_0_chunks},
-  {"std.mem", "std/mem.0", zero_embedded_stdlib_std_mem_0_chunks},
-  {"std.net", "std/net.0", zero_embedded_stdlib_std_net_0_chunks},
-  {"std.parse", "std/parse.0", zero_embedded_stdlib_std_parse_0_chunks},
-  {"std.path", "std/path.0", zero_embedded_stdlib_std_path_0_chunks},
-  {"std.proc", "std/proc.0", zero_embedded_stdlib_std_proc_0_chunks},
-  {"std.search", "std/search.0", zero_embedded_stdlib_std_search_0_chunks},
-  {"std.sort", "std/sort.0", zero_embedded_stdlib_std_sort_0_chunks},
-  {"std.str", "std/str.0", zero_embedded_stdlib_std_str_0_chunks},
-  {"std.testing", "std/testing.0", zero_embedded_stdlib_std_testing_0_chunks},
-  {"std.text", "std/text.0", zero_embedded_stdlib_std_text_0_chunks},
-  {"std.time", "std/time.0", zero_embedded_stdlib_std_time_0_chunks},
-  {"std.url", "std/url.0", zero_embedded_stdlib_std_url_0_chunks},
+  {"std.args", "std/args.0", zero_embedded_stdlib_graph_std_args_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_args_graph_bytes)},
+  {"std.ascii", "std/ascii.0", zero_embedded_stdlib_graph_std_ascii_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_ascii_graph_bytes)},
+  {"std.cli", "std/cli.0", zero_embedded_stdlib_graph_std_cli_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_cli_graph_bytes)},
+  {"std.codec", "std/codec.0", zero_embedded_stdlib_graph_std_codec_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_codec_graph_bytes)},
+  {"std.collections", "std/collections.0", zero_embedded_stdlib_graph_std_collections_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_collections_graph_bytes)},
+  {"std.env", "std/env.0", zero_embedded_stdlib_graph_std_env_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_env_graph_bytes)},
+  {"std.fmt", "std/fmt.0", zero_embedded_stdlib_graph_std_fmt_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_fmt_graph_bytes)},
+  {"std.fs", "std/fs.0", zero_embedded_stdlib_graph_std_fs_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_fs_graph_bytes)},
+  {"std.http", "std/http.0", zero_embedded_stdlib_graph_std_http_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_http_graph_bytes)},
+  {"std.io", "std/io.0", zero_embedded_stdlib_graph_std_io_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_io_graph_bytes)},
+  {"std.json", "std/json.0", zero_embedded_stdlib_graph_std_json_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_json_graph_bytes)},
+  {"std.log", "std/log.0", zero_embedded_stdlib_graph_std_log_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_log_graph_bytes)},
+  {"std.math", "std/math.0", zero_embedded_stdlib_graph_std_math_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_math_graph_bytes)},
+  {"std.mem", "std/mem.0", zero_embedded_stdlib_graph_std_mem_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_mem_graph_bytes)},
+  {"std.net", "std/net.0", zero_embedded_stdlib_graph_std_net_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_net_graph_bytes)},
+  {"std.parse", "std/parse.0", zero_embedded_stdlib_graph_std_parse_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_parse_graph_bytes)},
+  {"std.path", "std/path.0", zero_embedded_stdlib_graph_std_path_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_path_graph_bytes)},
+  {"std.proc", "std/proc.0", zero_embedded_stdlib_graph_std_proc_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_proc_graph_bytes)},
+  {"std.search", "std/search.0", zero_embedded_stdlib_graph_std_search_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_search_graph_bytes)},
+  {"std.sort", "std/sort.0", zero_embedded_stdlib_graph_std_sort_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_sort_graph_bytes)},
+  {"std.str", "std/str.0", zero_embedded_stdlib_graph_std_str_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_str_graph_bytes)},
+  {"std.testing", "std/testing.0", zero_embedded_stdlib_graph_std_testing_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_testing_graph_bytes)},
+  {"std.text", "std/text.0", zero_embedded_stdlib_graph_std_text_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_text_graph_bytes)},
+  {"std.time", "std/time.0", zero_embedded_stdlib_graph_std_time_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_time_graph_bytes)},
+  {"std.toml", "std/toml.0", zero_embedded_stdlib_graph_std_toml_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_toml_graph_bytes)},
+  {"std.url", "std/url.0", zero_embedded_stdlib_graph_std_url_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_url_graph_bytes)},
 };
 
 static const ZStdSourceCall std_source_calls[] = {
-  {"std.args.find", "__zero_std_args_find", "std.args"},
-  {"std.args.getOr", "__zero_std_args_get_or", "std.args"},
-  {"std.args.has", "__zero_std_args_has", "std.args"},
-  {"std.args.parseU32", "__zero_std_args_parse_u32", "std.args"},
-  {"std.args.valueAfter", "__zero_std_args_value_after", "std.args"},
-  {"std.ascii.digitValue", "__zero_std_ascii_digit_value", "std.ascii"},
-  {"std.ascii.hexValue", "__zero_std_ascii_hex_value", "std.ascii"},
-  {"std.ascii.isAlnum", "__zero_std_ascii_is_alnum", "std.ascii"},
-  {"std.ascii.isAlpha", "__zero_std_ascii_is_alpha", "std.ascii"},
-  {"std.ascii.isDigit", "__zero_std_ascii_is_digit", "std.ascii"},
-  {"std.ascii.isHexDigit", "__zero_std_ascii_is_hex_digit", "std.ascii"},
-  {"std.ascii.isLower", "__zero_std_ascii_is_lower", "std.ascii"},
-  {"std.ascii.isUpper", "__zero_std_ascii_is_upper", "std.ascii"},
-  {"std.ascii.isWhitespace", "__zero_std_ascii_is_whitespace", "std.ascii"},
-  {"std.ascii.toLower", "__zero_std_ascii_to_lower", "std.ascii"},
-  {"std.ascii.toUpper", "__zero_std_ascii_to_upper", "std.ascii"},
-  {"std.cli.argEquals", "__zero_std_cli_arg_equals", "std.cli"},
-  {"std.cli.hasFlag", "__zero_std_cli_has_flag", "std.cli"},
-  {"std.cli.optionU32", "__zero_std_cli_option_u32", "std.cli"},
-  {"std.cli.optionValue", "__zero_std_cli_option_value", "std.cli"},
-  {"std.cli.optionValueOr", "__zero_std_cli_option_value_or", "std.cli"},
-  {"std.cli.successExitCode", "__zero_std_cli_success_exit_code", "std.cli"},
-  {"std.cli.usageExitCode", "__zero_std_cli_usage_exit_code", "std.cli"},
   {"std.codec.base64EncodedLen", "__zero_std_codec_base64_encoded_len", "std.codec"},
   {"std.codec.base64Encode", "__zero_std_codec_base64_encode", "std.codec"},
   {"std.codec.base64Decode", "__zero_std_codec_base64_decode", "std.codec"},
@@ -81,7 +62,6 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.codec.writeU16Le", "__zero_std_codec_write_u16_le", "std.codec"},
   {"std.codec.writeU32Be", "__zero_std_codec_write_u32_be", "std.codec"},
   {"std.codec.writeU32Le", "__zero_std_codec_write_u32_le", "std.codec"},
-  {"std.codec.utf8Valid", "__zero_std_codec_utf8_valid", "std.codec"},
   {"std.codec.urlEncode", "__zero_std_codec_url_encode", "std.codec"},
   {"std.collections.append", "__zero_std_collections_append", "std.collections"},
   {"std.collections.contains", "__zero_std_collections_contains", "std.collections"},
@@ -94,46 +74,62 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.env.has", "__zero_std_env_has", "std.env"},
   {"std.env.parseBool", "__zero_std_env_parse_bool", "std.env"},
   {"std.env.parseU32", "__zero_std_env_parse_u32", "std.env"},
-  {"std.fmt.bool", "__zero_std_fmt_bool", "std.fmt"},
-  {"std.fmt.hexLowerU32", "__zero_std_fmt_hex_lower_u32", "std.fmt"},
-  {"std.fmt.i32", "__zero_std_fmt_i32", "std.fmt"},
-  {"std.fmt.u32", "__zero_std_fmt_u32", "std.fmt"},
-  {"std.fmt.usize", "__zero_std_fmt_usize", "std.fmt"},
   {"std.fs.copyFile", "__zero_std_fs_copy_file", "std.fs"},
   {"std.fs.readFile", "__zero_std_fs_read_file", "std.fs"},
   {"std.fs.writeFile", "__zero_std_fs_write_file", "std.fs"},
   {"std.http.headerBytes", "__zero_std_http_header_bytes", "std.http"},
+  {"std.http.pathSegment", "__zero_std_http_path_segment", "std.http"},
+  {"std.http.pathSegmentCount", "__zero_std_http_path_segment_count", "std.http"},
   {"std.http.requestBody", "__zero_std_http_request_body", "std.http"},
   {"std.http.requestBodyWithin", "__zero_std_http_request_body_within", "std.http"},
+  {"std.http.requestBearerToken", "__zero_std_http_request_bearer_token", "std.http"},
+  {"std.http.requestCookie", "__zero_std_http_request_cookie", "std.http"},
   {"std.http.requestHeader", "__zero_std_http_request_header", "std.http"},
+  {"std.http.requestHasJsonContentType", "__zero_std_http_request_has_json_content_type", "std.http"},
+  {"std.http.requestJsonBodyWithin", "__zero_std_http_request_json_body_within", "std.http"},
   {"std.http.requestMatches", "__zero_std_http_request_matches", "std.http"},
-  {"std.http.requestMethodName", "__zero_std_http_request_method_name", "std.http"},
-  {"std.http.requestPath", "__zero_std_http_request_path", "std.http"},
+  {"std.http.requestMethodIs", "__zero_std_http_request_method_is", "std.http"},
   {"std.http.requestQuery", "__zero_std_http_request_query", "std.http"},
   {"std.http.requestQueryValue", "__zero_std_http_request_query_value", "std.http"},
+  {"std.http.requestIsDelete", "__zero_std_http_request_is_delete", "std.http"},
+  {"std.http.requestIsGet", "__zero_std_http_request_is_get", "std.http"},
+  {"std.http.requestIsHead", "__zero_std_http_request_is_head", "std.http"},
+  {"std.http.requestIsOptions", "__zero_std_http_request_is_options", "std.http"},
+  {"std.http.requestIsPatch", "__zero_std_http_request_is_patch", "std.http"},
+  {"std.http.requestIsPost", "__zero_std_http_request_is_post", "std.http"},
+  {"std.http.requestIsPut", "__zero_std_http_request_is_put", "std.http"},
+  {"std.http.requestPathSegment", "__zero_std_http_request_path_segment", "std.http"},
+  {"std.http.requestPathSegmentCount", "__zero_std_http_request_path_segment_count", "std.http"},
+  {"std.http.requestPathStartsWith", "__zero_std_http_request_path_starts_with", "std.http"},
+  {"std.http.requestPathTailAfter", "__zero_std_http_request_path_tail_after", "std.http"},
   {"std.http.requestTarget", "__zero_std_http_request_target", "std.http"},
   {"std.http.responseBody", "__zero_std_http_response_body", "std.http"},
-  {"std.http.statusIsClientError", "__zero_std_http_status_is_client_error", "std.http"},
-  {"std.http.statusIsInformational", "__zero_std_http_status_is_informational", "std.http"},
-  {"std.http.statusIsRedirect", "__zero_std_http_status_is_redirect", "std.http"},
-  {"std.http.statusIsServerError", "__zero_std_http_status_is_server_error", "std.http"},
-  {"std.http.statusIsSuccess", "__zero_std_http_status_is_success", "std.http"},
+  {"std.http.responseBodyBytes", "__zero_std_http_response_body_bytes", "std.http"},
   {"std.http.statusReason", "__zero_std_http_status_reason", "std.http"},
+  {"std.http.writeCorsJsonResponse", "__zero_std_http_write_cors_json_response", "std.http"},
+  {"std.http.writeCorsPreflight", "__zero_std_http_write_cors_preflight", "std.http"},
+  {"std.http.writeJsonBadRequest", "__zero_std_http_write_json_bad_request", "std.http"},
+  {"std.http.writeJsonConflict", "__zero_std_http_write_json_conflict", "std.http"},
+  {"std.http.writeJsonCreated", "__zero_std_http_write_json_created", "std.http"},
+  {"std.http.writeJsonForbidden", "__zero_std_http_write_json_forbidden", "std.http"},
+  {"std.http.writeJsonInternalServerError", "__zero_std_http_write_json_internal_server_error", "std.http"},
+  {"std.http.writeJsonMethodNotAllowed", "__zero_std_http_write_json_method_not_allowed", "std.http"},
+  {"std.http.writeJsonNotFound", "__zero_std_http_write_json_not_found", "std.http"},
+  {"std.http.writeJsonOk", "__zero_std_http_write_json_ok", "std.http"},
   {"std.http.writeJsonRequest", "__zero_std_http_write_json_request", "std.http"},
-  {"std.http.writeJsonResponse", "__zero_std_http_write_json_response", "std.http"},
+  {"std.http.writeJsonTooManyRequests", "__zero_std_http_write_json_too_many_requests", "std.http"},
+  {"std.http.writeJsonUnauthorized", "__zero_std_http_write_json_unauthorized", "std.http"},
+  {"std.http.writeJsonUnprocessable", "__zero_std_http_write_json_unprocessable", "std.http"},
+  {"std.http.writeNoContent", "__zero_std_http_write_no_content", "std.http"},
   {"std.http.writeRequest", "__zero_std_http_write_request", "std.http"},
   {"std.http.writeResponse", "__zero_std_http_write_response", "std.http"},
   {"std.io.countLines", "__zero_std_io_count_lines", "std.io"},
   {"std.io.nextLine", "__zero_std_io_next_line", "std.io"},
   {"std.io.nextLineStart", "__zero_std_io_next_line_start", "std.io"},
-  {"std.io.remaining", "__zero_std_io_remaining", "std.io"},
   {"std.io.writeByte", "__zero_std_io_write_byte", "std.io"},
   {"std.io.writeSpan", "__zero_std_io_write_span", "std.io"},
   {"std.io.written", "__zero_std_io_written", "std.io"},
   {"std.json.bool", "__zero_std_json_bool", "std.json"},
-  {"std.json.errorInvalid", "__zero_std_json_error_invalid", "std.json"},
-  {"std.json.errorNone", "__zero_std_json_error_none", "std.json"},
-  {"std.json.errorTrailing", "__zero_std_json_error_trailing", "std.json"},
   {"std.json.field", "__zero_std_json_field", "std.json"},
   {"std.json.string", "__zero_std_json_string", "std.json"},
   {"std.json.stringDecode", "__zero_std_json_string_decode", "std.json"},
@@ -150,141 +146,25 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.json.writeStringBytes", "__zero_std_json_write_string_bytes", "std.json"},
   {"std.log.keyValue", "__zero_std_log_key_value", "std.log"},
   {"std.log.message", "__zero_std_log_message", "std.log"},
-  {"std.math.absI32", "__zero_std_math_abs_i32", "std.math"},
-  {"std.math.absI64", "__zero_std_math_abs_i64", "std.math"},
-  {"std.math.binomialU32", "__zero_std_math_binomial_u32", "std.math"},
-  {"std.math.checkedAddI32", "__zero_std_math_checked_add_i32", "std.math"},
-  {"std.math.checkedAddU32", "__zero_std_math_checked_add_u32", "std.math"},
-  {"std.math.checkedAddUsize", "__zero_std_math_checked_add_usize", "std.math"},
-  {"std.math.checkedLcmU32", "__zero_std_math_checked_lcm_u32", "std.math"},
-  {"std.math.checkedMulI32", "__zero_std_math_checked_mul_i32", "std.math"},
-  {"std.math.checkedMulU32", "__zero_std_math_checked_mul_u32", "std.math"},
-  {"std.math.checkedMulUsize", "__zero_std_math_checked_mul_usize", "std.math"},
-  {"std.math.checkedPowU32", "__zero_std_math_checked_pow_u32", "std.math"},
-  {"std.math.checkedSubI32", "__zero_std_math_checked_sub_i32", "std.math"},
-  {"std.math.checkedSubU32", "__zero_std_math_checked_sub_u32", "std.math"},
-  {"std.math.checkedSubUsize", "__zero_std_math_checked_sub_usize", "std.math"},
-  {"std.math.clampI32", "__zero_std_math_clamp_i32", "std.math"},
-  {"std.math.clampI64", "__zero_std_math_clamp_i64", "std.math"},
-  {"std.math.clampU32", "__zero_std_math_clamp_u32", "std.math"},
-  {"std.math.clampU64", "__zero_std_math_clamp_u64", "std.math"},
-  {"std.math.clampUsize", "__zero_std_math_clamp_usize", "std.math"},
-  {"std.math.divisorCountU32", "__zero_std_math_divisor_count_u32", "std.math"},
-  {"std.math.factorialU32", "__zero_std_math_factorial_u32", "std.math"},
-  {"std.math.gcdU32", "__zero_std_math_gcd_u32", "std.math"},
-  {"std.math.isEvenU32", "__zero_std_math_is_even_u32", "std.math"},
-  {"std.math.isOddU32", "__zero_std_math_is_odd_u32", "std.math"},
-  {"std.math.isPrimeU32", "__zero_std_math_is_prime_u32", "std.math"},
-  {"std.math.lcmU32", "__zero_std_math_lcm_u32", "std.math"},
-  {"std.math.maxI32", "__zero_std_math_max_i32", "std.math"},
-  {"std.math.maxI64", "__zero_std_math_max_i64", "std.math"},
-  {"std.math.maxU32", "__zero_std_math_max_u32", "std.math"},
-  {"std.math.maxU64", "__zero_std_math_max_u64", "std.math"},
-  {"std.math.maxUsize", "__zero_std_math_max_usize", "std.math"},
-  {"std.math.minI32", "__zero_std_math_min_i32", "std.math"},
-  {"std.math.minI64", "__zero_std_math_min_i64", "std.math"},
-  {"std.math.minU32", "__zero_std_math_min_u32", "std.math"},
-  {"std.math.minU64", "__zero_std_math_min_u64", "std.math"},
-  {"std.math.minUsize", "__zero_std_math_min_usize", "std.math"},
-  {"std.math.modPowU32", "__zero_std_math_mod_pow_u32", "std.math"},
-  {"std.math.powU32", "__zero_std_math_pow_u32", "std.math"},
-  {"std.math.properDivisorSumU32", "__zero_std_math_proper_divisor_sum_u32", "std.math"},
-  {"std.math.saturatingAddI32", "__zero_std_math_saturating_add_i32", "std.math"},
-  {"std.math.saturatingAddU32", "__zero_std_math_saturating_add_u32", "std.math"},
-  {"std.math.saturatingAddUsize", "__zero_std_math_saturating_add_usize", "std.math"},
-  {"std.math.saturatingMulI32", "__zero_std_math_saturating_mul_i32", "std.math"},
-  {"std.math.saturatingMulU32", "__zero_std_math_saturating_mul_u32", "std.math"},
-  {"std.math.saturatingMulUsize", "__zero_std_math_saturating_mul_usize", "std.math"},
-  {"std.math.saturatingSubI32", "__zero_std_math_saturating_sub_i32", "std.math"},
-  {"std.math.saturatingSubU32", "__zero_std_math_saturating_sub_u32", "std.math"},
-  {"std.math.saturatingSubUsize", "__zero_std_math_saturating_sub_usize", "std.math"},
-  {"std.math.sqrtFloorU32", "__zero_std_math_sqrt_floor_u32", "std.math"},
   {"std.mem.contains", "__zero_std_mem_contains", "std.mem"},
   {"std.mem.copyItems", "__zero_std_mem_copy_items", "std.mem"},
   {"std.mem.dropPrefix", "__zero_std_mem_drop_prefix", "std.mem"},
   {"std.mem.fillItems", "__zero_std_mem_fill_items", "std.mem"},
-  {"std.mem.isEmpty", "__zero_std_mem_is_empty", "std.mem"},
   {"std.mem.prefix", "__zero_std_mem_prefix", "std.mem"},
   {"std.net.localhost", "__zero_std_net_localhost", "std.net"},
   {"std.net.loopback", "__zero_std_net_loopback", "std.net"},
-  {"std.parse.isAsciiAlpha", "__zero_std_parse_is_ascii_alpha", "std.parse"},
-  {"std.parse.isAsciiDigit", "__zero_std_parse_is_ascii_digit", "std.parse"},
-  {"std.parse.isIdentifierStart", "__zero_std_parse_is_identifier_start", "std.parse"},
-  {"std.parse.isWhitespace", "__zero_std_parse_is_whitespace", "std.parse"},
-  {"std.parse.parseBool", "__zero_std_parse_parse_bool", "std.parse"},
-  {"std.parse.parseI32", "__zero_std_parse_parse_i32", "std.parse"},
-  {"std.parse.parseU8", "__zero_std_parse_parse_u8", "std.parse"},
-  {"std.parse.parseU16", "__zero_std_parse_parse_u16", "std.parse"},
-  {"std.parse.parseU32", "__zero_std_parse_parse_u32", "std.parse"},
-  {"std.parse.parseUsize", "__zero_std_parse_parse_usize", "std.parse"},
-  {"std.parse.scanDigits", "__zero_std_parse_scan_digits", "std.parse"},
-  {"std.parse.scanIdentifier", "__zero_std_parse_scan_identifier", "std.parse"},
-  {"std.parse.scanUntilByte", "__zero_std_parse_scan_until_byte", "std.parse"},
-  {"std.parse.scanWhitespace", "__zero_std_parse_scan_whitespace", "std.parse"},
-  {"std.parse.tokenAscii", "__zero_std_parse_token_ascii", "std.parse"},
-  {"std.path.basename", "__zero_std_path_basename", "std.path"},
-  {"std.path.dirname", "__zero_std_path_dirname", "std.path"},
-  {"std.path.extension", "__zero_std_path_extension", "std.path"},
   {"std.path.join", "__zero_std_path_join", "std.path"},
   {"std.path.normalize", "__zero_std_path_normalize", "std.path"},
   {"std.path.relative", "__zero_std_path_relative", "std.path"},
-  {"std.proc.failed", "__zero_std_proc_failed", "std.proc"},
-  {"std.proc.succeeded", "__zero_std_proc_succeeded", "std.proc"},
-  {"std.search.binaryI32", "__zero_std_search_binary_i32", "std.search"},
-  {"std.search.binaryU32", "__zero_std_search_binary_u32", "std.search"},
-  {"std.search.binaryUsize", "__zero_std_search_binary_usize", "std.search"},
   {"std.search.indexOf", "__zero_std_search_index_of", "std.search"},
   {"std.search.lastIndexOf", "__zero_std_search_last_index_of", "std.search"},
-  {"std.search.lowerBoundI32", "__zero_std_search_lower_bound_i32", "std.search"},
-  {"std.search.lowerBoundU32", "__zero_std_search_lower_bound_u32", "std.search"},
-  {"std.search.lowerBoundUsize", "__zero_std_search_lower_bound_usize", "std.search"},
-  {"std.sort.insertionI32", "__zero_std_sort_insertion_i32", "std.sort"},
-  {"std.sort.insertionU32", "__zero_std_sort_insertion_u32", "std.sort"},
-  {"std.sort.insertionUsize", "__zero_std_sort_insertion_usize", "std.sort"},
-  {"std.sort.isSortedI32", "__zero_std_sort_is_sorted_i32", "std.sort"},
-  {"std.sort.isSortedU32", "__zero_std_sort_is_sorted_u32", "std.sort"},
-  {"std.sort.isSortedUsize", "__zero_std_sort_is_sorted_usize", "std.sort"},
-  {"std.str.contains", "__zero_std_str_contains", "std.str"},
-  {"std.str.concat", "__zero_std_str_concat", "std.str"},
-  {"std.str.copy", "__zero_std_str_copy", "std.str"},
-  {"std.str.count", "__zero_std_str_count", "std.str"},
-  {"std.str.countByte", "__zero_std_str_count_byte", "std.str"},
-  {"std.str.eqlIgnoreAsciiCase", "__zero_std_str_eql_ignore_ascii_case", "std.str"},
-  {"std.str.endsWith", "__zero_std_str_ends_with", "std.str"},
-  {"std.str.indexOf", "__zero_std_str_index_of", "std.str"},
-  {"std.str.lastIndexOf", "__zero_std_str_last_index_of", "std.str"},
-  {"std.str.repeat", "__zero_std_str_repeat", "std.str"},
-  {"std.str.reverse", "__zero_std_str_reverse", "std.str"},
-  {"std.str.startsWith", "__zero_std_str_starts_with", "std.str"},
-  {"std.str.toLowerAscii", "__zero_std_str_to_lower_ascii", "std.str"},
-  {"std.str.toUpperAscii", "__zero_std_str_to_upper_ascii", "std.str"},
-  {"std.str.trimAscii", "__zero_std_str_trim_ascii", "std.str"},
-  {"std.str.trimEndAscii", "__zero_std_str_trim_end_ascii", "std.str"},
-  {"std.str.trimStartAscii", "__zero_std_str_trim_start_ascii", "std.str"},
-  {"std.str.wordCountAscii", "__zero_std_str_word_count_ascii", "std.str"},
-  {"std.testing.containsBytes", "__zero_std_testing_contains_bytes", "std.testing"},
-  {"std.testing.endsWith", "__zero_std_testing_ends_with", "std.testing"},
-  {"std.testing.equalBool", "__zero_std_testing_equal_bool", "std.testing"},
-  {"std.testing.equalBytes", "__zero_std_testing_equal_bytes", "std.testing"},
-  {"std.testing.equalI32", "__zero_std_testing_equal_i32", "std.testing"},
-  {"std.testing.equalU32", "__zero_std_testing_equal_u32", "std.testing"},
-  {"std.testing.equalUsize", "__zero_std_testing_equal_usize", "std.testing"},
-  {"std.testing.isFalse", "__zero_std_testing_is_false", "std.testing"},
-  {"std.testing.isTrue", "__zero_std_testing_is_true", "std.testing"},
-  {"std.testing.startsWith", "__zero_std_testing_starts_with", "std.testing"},
-  {"std.text.isAscii", "__zero_std_text_is_ascii", "std.text"},
-  {"std.text.utf8Len", "__zero_std_text_utf8_len", "std.text"},
-  {"std.text.utf8Valid", "__zero_std_text_utf8_valid", "std.text"},
-  {"std.time.asMsFloor", "__zero_std_time_as_ms_floor", "std.time"},
-  {"std.time.asSecondsFloor", "__zero_std_time_as_seconds_floor", "std.time"},
-  {"std.time.asUsFloor", "__zero_std_time_as_us_floor", "std.time"},
-  {"std.time.clamp", "__zero_std_time_clamp", "std.time"},
-  {"std.time.hours", "__zero_std_time_hours", "std.time"},
-  {"std.time.isZero", "__zero_std_time_is_zero", "std.time"},
-  {"std.time.max", "__zero_std_time_max", "std.time"},
-  {"std.time.min", "__zero_std_time_min", "std.time"},
-  {"std.time.minutes", "__zero_std_time_minutes", "std.time"},
-  {"std.time.zero", "__zero_std_time_zero", "std.time"},
+  {"std.toml.bool", "__zero_std_toml_bool", "std.toml"},
+  {"std.toml.field", "__zero_std_toml_field", "std.toml"},
+  {"std.toml.string", "__zero_std_toml_string", "std.toml"},
+  {"std.toml.stringDecode", "__zero_std_toml_string_decode", "std.toml"},
+  {"std.toml.u32", "__zero_std_toml_u32", "std.toml"},
+  {"std.toml.validate", "__zero_std_toml_validate", "std.toml"},
+  {"std.toml.validateBytes", "__zero_std_toml_validate_bytes", "std.toml"},
   {"std.url.appendQuery", "__zero_std_url_append_query", "std.url"},
   {"std.url.authority", "__zero_std_url_authority", "std.url"},
   {"std.url.host", "__zero_std_url_host", "std.url"},
@@ -299,6 +179,49 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.url.writeQueryParam", "__zero_std_url_write_query_param", "std.url"},
 };
 
+static bool std_source_text_eq(const char *left, const char *right) {
+  left = left ? left : "";
+  right = right ? right : "";
+  size_t left_len = strlen(left);
+  return left_len == strlen(right) && memcmp(left, right, left_len) == 0;
+}
+
+static uint64_t std_source_hash_text(uint64_t hash, const char *text) {
+  const unsigned char *bytes = (const unsigned char *)(text ? text : "");
+  while (*bytes) {
+    hash ^= (uint64_t)*bytes++;
+    hash *= 1099511628211ull;
+  }
+  hash ^= 0xffu;
+  hash *= 1099511628211ull;
+  return hash;
+}
+
+static uint64_t std_source_hash_bytes(uint64_t hash, const unsigned char *bytes, size_t len) {
+  hash ^= (uint64_t)len;
+  hash *= 1099511628211ull;
+  for (size_t i = 0; bytes && i < len; i++) {
+    hash ^= (uint64_t)bytes[i];
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+uint64_t z_std_source_graph_fingerprint(void) {
+  static uint64_t cached = 0;
+  if (cached != 0) return cached;
+  uint64_t hash = 1469598103934665603ull;
+  hash = std_source_hash_text(hash, "zero-embedded-stdlib-graph-v1");
+  for (size_t i = 0; i < z_std_source_module_count(); i++) {
+    const ZStdSourceModule *module = z_std_source_module_at(i);
+    hash = std_source_hash_text(hash, module ? module->module : "");
+    hash = std_source_hash_text(hash, module ? module->path : "");
+    hash = std_source_hash_bytes(hash, module ? module->graph_bytes : NULL, module ? module->graph_len : 0);
+  }
+  cached = hash ? hash : 1;
+  return cached;
+}
+
 size_t z_std_source_module_count(void) {
   return sizeof(std_source_modules) / sizeof(std_source_modules[0]);
 }
@@ -309,14 +232,47 @@ const ZStdSourceModule *z_std_source_module_at(size_t index) {
 
 const ZStdSourceModule *z_std_source_module_for_name(const char *module) {
   for (size_t i = 0; i < sizeof(std_source_modules) / sizeof(std_source_modules[0]); i++) {
-    if (strcmp(std_source_modules[i].module, module ? module : "") == 0) return &std_source_modules[i];
+    if (std_source_text_eq(std_source_modules[i].module, module)) return &std_source_modules[i];
   }
   return NULL;
 }
 
+static const char *std_source_basename(const char *path) {
+  const char *slash = path ? strrchr(path, '/') : NULL;
+  return slash ? slash + 1 : (path ? path : "");
+}
+
+static bool std_source_stem_eq(const char *left, const char *right) {
+  const char *left_base = std_source_basename(left);
+  const char *right_base = std_source_basename(right);
+  const char *left_dot = strrchr(left_base, '.');
+  const char *right_dot = strrchr(right_base, '.');
+  size_t left_len = left_dot ? (size_t)(left_dot - left_base) : strlen(left_base);
+  size_t right_len = right_dot ? (size_t)(right_dot - right_base) : strlen(right_base);
+  return left_len == right_len && strncmp(left_base, right_base, left_len) == 0;
+}
+
+const ZStdSourceModule *z_std_source_module_for_path(const char *path) {
+  for (size_t i = 0; path && i < sizeof(std_source_modules) / sizeof(std_source_modules[0]); i++) {
+    const ZStdSourceModule *module = &std_source_modules[i];
+    if (std_source_text_eq(module->path, path) ||
+        std_source_text_eq(std_source_basename(module->path), std_source_basename(path)) ||
+        std_source_stem_eq(module->path, path)) {
+      return module;
+    }
+  }
+  return NULL;
+}
+
+bool z_std_source_path_is_module_artifact(const char *path) {
+  return path && path[0] &&
+         (strncmp(path, "std/", strlen("std/")) == 0 || strstr(path, "/std/") != NULL) &&
+         z_std_source_module_for_path(path) != NULL;
+}
+
 static const ZStdSourceCall *std_source_call_for_name(const char *qualified_name) {
   for (size_t i = 0; i < sizeof(std_source_calls) / sizeof(std_source_calls[0]); i++) {
-    if (strcmp(std_source_calls[i].public_name, qualified_name ? qualified_name : "") == 0) return &std_source_calls[i];
+    if (std_source_text_eq(std_source_calls[i].public_name, qualified_name)) return &std_source_calls[i];
   }
   return NULL;
 }
@@ -331,10 +287,58 @@ const char *z_std_source_target_for_public_call(const char *qualified_name) {
   return call ? call->target_name : NULL;
 }
 
-char *z_std_source_module_copy_source(const ZStdSourceModule *module) {
-  if (!module || !module->chunks) return z_strdup("");
-  ZBuf source;
-  zbuf_init(&source);
-  for (size_t i = 0; module->chunks[i]; i++) zbuf_append(&source, module->chunks[i]);
-  return source.data ? source.data : z_strdup("");
+bool z_std_source_module_load_graph(const ZStdSourceModule *module, ZProgramGraph *out, ZDiag *diag) {
+  if (out) z_program_graph_init(out);
+  if (!module || !module->graph_bytes || module->graph_len == 0) {
+    if (diag) {
+      *diag = (ZDiag){0};
+      diag->code = 1001;
+      diag->path = module ? module->path : "std";
+      diag->line = 1;
+      diag->column = 1;
+      diag->length = 1;
+      snprintf(diag->message, sizeof(diag->message), "embedded stdlib graph is missing");
+      snprintf(diag->expected, sizeof(diag->expected), "binary graph bytes");
+      snprintf(diag->actual, sizeof(diag->actual), "%s", module && module->module ? module->module : "unknown std module");
+    }
+    return false;
+  }
+  if (!z_program_graph_store_bytes_are_binary(module->graph_bytes, module->graph_len)) {
+    char *text = z_checked_malloc(module->graph_len + 1);
+    memcpy(text, module->graph_bytes, module->graph_len);
+    text[module->graph_len] = '\0';
+    bool ok = z_program_graph_parse_dump(text, out, diag);
+    free(text);
+    if (ok) {
+      ZProgramGraphValidation validation = {0};
+      ok = z_program_graph_validate(out, &validation);
+      if (!ok && diag) {
+        *diag = (ZDiag){0};
+        diag->code = 1001;
+        diag->path = module->path;
+        diag->line = 1;
+        diag->column = 1;
+        diag->length = 1;
+        snprintf(diag->message, sizeof(diag->message), "embedded stdlib graph failed validation: %s",
+                 validation.message[0] ? validation.message : "invalid graph shape");
+        snprintf(diag->expected, sizeof(diag->expected), "shape-valid program graph");
+        snprintf(diag->actual, sizeof(diag->actual), "%s", validation.code[0] ? validation.code : "invalid graph");
+      }
+    }
+    if (!ok) {
+      if (diag && !diag->path) diag->path = module->path;
+      if (out) z_program_graph_free(out);
+    }
+    return ok;
+  }
+  ZProgramGraphStore store;
+  z_program_graph_store_init(&store);
+  bool ok = z_program_graph_store_parse_binary(module->path, module->graph_bytes, module->graph_len, &store, diag);
+  if (ok && out) {
+    *out = store.graph;
+    store.graph = (ZProgramGraph){0};
+  }
+  z_program_graph_store_free(&store);
+  if (!ok && diag && !diag->path) diag->path = module->path;
+  return ok;
 }
