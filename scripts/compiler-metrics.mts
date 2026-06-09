@@ -1094,6 +1094,7 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
       !backendFormats.fileIo.readSeekChecked ||
       !backendFormats.fileIo.readSizeChecked ||
       !backendFormats.fileIo.readShortReadChecked ||
+      !backendFormats.fileIo.optionalReadChecked ||
       !backendFormats.fileIo.textWriteChecked ||
       !backendFormats.fileIo.binaryWriteChecked ||
       !backendFormats.fileIo.closeChecked ||
@@ -1476,6 +1477,7 @@ const repositoryGraphCheckJsonRawBody = cBlock(main, "static void append_reposit
 const repositoryGraphCheckJsonBody = cCodeText(cBlock(main, "static void append_repository_graph_compiler_path_json"));
 const repositoryGraphDefaultReadinessRawBody = cBlock(main, "static void append_repository_graph_default_readiness_json");
 const directManifestGraphInputBody = cCodeText(cBlock(main, "static int resolve_direct_command_manifest_graph_input"));
+const readOptionalFileBody = cCodeText(cBlock(main, "static char *read_optional_file"));
 const readFileBody = cCodeText(cBlock(fsRaw, "char *z_read_file"));
 const writeFileBody = cCodeText(cBlock(fsRaw, "bool z_write_file"));
 const writeBinaryFileBody = cCodeText(cBlock(fsRaw, "bool z_write_binary_file"));
@@ -1542,6 +1544,12 @@ const backendFormats = {
     readSizeChecked: /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readFileBody),
     readShortReadChecked: /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readFileBody) &&
       /free\s*\(\s*data\s*\)/.test(readFileBody),
+    optionalReadChecked: /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
+      /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
+      /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readOptionalFileBody) &&
+      /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readOptionalFileBody) &&
+      /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
+      !/\brewind\s*\(\s*file\s*\)\s*;/.test(readOptionalFileBody),
     textWriteChecked: /fwrite\s*\(\s*data\s*,\s*1\s*,\s*len\s*,\s*file\s*\)\s*!=\s*len/.test(writeFileBody) &&
       !/\bfputs\s*\(\s*text\s*,\s*file\s*\)\s*;/.test(writeFileBody),
     binaryWriteChecked: /fwrite\s*\(\s*data\s*,\s*1\s*,\s*len\s*,\s*file\s*\)\s*!=\s*len/.test(writeBinaryFileBody),

@@ -1901,18 +1901,24 @@ static char *read_optional_file(const char *path) {
     return NULL;
   }
   long size = ftell(file);
-  if (size < 0) {
+  if (size < 0 || (size_t)size > SIZE_MAX - 1) {
     fclose(file);
     return NULL;
   }
-  rewind(file);
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    return NULL;
+  }
   char *data = z_checked_calloc((size_t)size + 1, 1);
   if (size > 0 && fread(data, 1, (size_t)size, file) != (size_t)size) {
     free(data);
     fclose(file);
     return NULL;
   }
-  fclose(file);
+  if (fclose(file) != 0) {
+    free(data);
+    return NULL;
+  }
   return data;
 }
 
