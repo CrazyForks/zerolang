@@ -56,11 +56,11 @@ These modules depend on host or runtime capabilities:
 
 - `std.args`: process arguments
 - `std.cli`: command-line flag and option helpers over process arguments
-- `std.env`: process environment
-- `std.fs`: hosted filesystem and explicit `Fs` or `owned<File>` handles
+- `std.env`: process environment lookup, comparisons, and typed fallback parsing
+- `std.fs`: hosted filesystem, explicit `Fs` or `owned<File>` handles, and file-level byte helpers
 - `std.net`: bootstrap network handles
 - `std.http`: HTTP request/response helpers and loopback listeners
-- `std.proc`: process execution helpers
+- `std.proc`: process execution and exit-status helpers
 - `World.out` and `World.err`: program output capabilities
 
 Non-host targets may reject these APIs with target diagnostics. Inspect target facts before cross-building:
@@ -341,8 +341,11 @@ randomId32(arg0: MutSpan<u8>) -> Maybe<Span<u8>>
 get(arg0: String) -> Maybe<String>
 has(arg0: String) -> Bool
 getOr(arg0: String, arg1: String) -> String
+equals(arg0: String, arg1: String) -> Bool
 parseBool(arg0: String) -> Maybe<Bool>
+parseBoolOr(arg0: String, arg1: Bool) -> Bool
 parseU32(arg0: String) -> Maybe<u32>
+parseU32Or(arg0: String, arg1: u32) -> u32
 ```
 
 ### std.fmt
@@ -386,6 +389,8 @@ fileLen(arg0: mutref<File>) -> Maybe<usize>
 close(arg0: mutref<File>) -> Void
 readFile(arg0: Fs, arg1: String, arg2: MutSpan<u8>) -> Maybe<usize>
 writeFile(arg0: Fs, arg1: String, arg2: Span<u8>) -> Bool
+readFileBytes(arg0: Fs, arg1: String, arg2: MutSpan<u8>) -> Maybe<Span<u8>>
+readFileEquals(arg0: Fs, arg1: String, arg2: MutSpan<u8>, arg3: Span<u8>) -> Bool
 copyFile(arg0: String, arg1: String, arg2: MutSpan<u8>) -> Bool
 ```
 
@@ -681,6 +686,8 @@ spawn(arg0: String) -> ProcStatus
 exitCode(arg0: ProcStatus) -> i32
 succeeded(arg0: ProcStatus) -> Bool
 failed(arg0: ProcStatus) -> Bool
+runOk(arg0: String) -> Bool
+runCode(arg0: String) -> i32
 ```
 
 ### std.rand
@@ -955,7 +962,8 @@ Hosted file APIs can use explicit handles:
 ```zero
 pub fn main(world: World) -> Void raises {
     let fs: Fs = std.fs.host()
-    if std.fs.writeFile(fs, ".zero/out/log.txt", "hello\n") {
+    var read_buf: [32]u8 = [0_u8; 32]
+    if std.fs.writeFile(fs, ".zero/out/log.txt", "hello\n") && std.fs.readFileEquals(fs, ".zero/out/log.txt", read_buf, "hello\n") {
         check world.out.write("wrote\n")
     }
 }

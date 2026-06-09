@@ -6112,6 +6112,7 @@ static bool ir_value_needs_zero_runtime_object(const IrValue *value) {
       value->kind == IR_VALUE_FMT_I32 ||
       value->kind == IR_VALUE_FMT_U32 ||
       value->kind == IR_VALUE_FMT_USIZE ||
+      value->kind == IR_VALUE_FS_READ_BYTES_PATH ||
       value->kind == IR_VALUE_HTTP_FETCH ||
       value->kind == IR_VALUE_HTTP_RESULT_OK ||
       value->kind == IR_VALUE_HTTP_RESULT_STATUS ||
@@ -10512,7 +10513,7 @@ static bool validate_package_dependencies_for_target(const SourceInput *input, c
 
 static bool self_host_caps_allowed(const CapabilitySummary *caps) {
   if (!caps) return true;
-  return !caps->fs && !caps->time && !caps->rand && !caps->net && !caps->proc && !caps->web;
+  return !caps->web;
 }
 
 static bool self_host_subset_compatible(const Program *program, const CapabilitySummary *caps) {
@@ -10530,7 +10531,7 @@ static void append_self_host_subset_json(ZBuf *buf, const Program *program, cons
   zbuf_append(buf, ",\"backend\":\"native-direct\"");
   zbuf_append(buf, ",\"selectedTarget\":");
   append_json_string(buf, target && target->name ? target->name : "host");
-  zbuf_append(buf, ",\"allowedCapabilities\":[\"memory\",\"alloc\",\"path\",\"codec\",\"parse\",\"args\",\"env\",\"World.stdout\",\"World.stderr\"]");
+  zbuf_append(buf, ",\"allowedCapabilities\":[\"memory\",\"alloc\",\"path\",\"codec\",\"parse\",\"args\",\"env\",\"fs\",\"time\",\"rand\",\"net\",\"proc\",\"World.stdout\",\"World.stderr\"]");
   zbuf_appendf(buf, ",\"cInterop\":{\"headerImports\":%s,\"typedBindings\":%s,\"generatedCRequired\":false,\"externalCallBoundary\":\"direct-abi-audit\"}", program && program->c_imports.len > 0 ? "true" : "false", program && program->c_imports.len > 0 ? "true" : "false");
   zbuf_append(buf, ",\"blockedReasons\":[");
   bool wrote = false;
@@ -10541,11 +10542,6 @@ static void append_self_host_subset_json(ZBuf *buf, const Program *program, cons
       wrote = true; \
     } \
   } while (0)
-  APPEND_BLOCKED_CAP(fs, "fs");
-  APPEND_BLOCKED_CAP(time, "time");
-  APPEND_BLOCKED_CAP(rand, "rand");
-  APPEND_BLOCKED_CAP(net, "net");
-  APPEND_BLOCKED_CAP(proc, "proc");
   APPEND_BLOCKED_CAP(web, "web");
 #undef APPEND_BLOCKED_CAP
   zbuf_append(buf, "],\"sourceForms\":[\"package-local-modules\",\"functions\",\"while\",\"if\",\"return\",\"fixed-arrays\",\"primitive-locals\",\"shape\",\"enum\",\"minimal-choice\",\"strings\",\"byte-spans\",\"fallibility\",\"explicit-alloc\"]");
@@ -10556,7 +10552,7 @@ static void append_self_host_subset_json(ZBuf *buf, const Program *program, cons
   zbuf_append(buf, ",\"fallibility\":{\"status\":\"staged\",\"directLowering\":false}");
   zbuf_append(buf, ",\"containers\":{\"status\":\"staged-explicit-storage\",\"directLowering\":false}");
   zbuf_append(buf, ",\"generics\":{\"status\":\"staged-concrete-specializations-only\",\"runtimeMetadata\":false}");
-  zbuf_append(buf, "},\"targetLimitations\":[\"no-host-fs\",\"no-subprocesses\",\"hosted-runtime-limited-to-world-stdio\",\"external-c-calls-require-target-library-audit\"]}");
+  zbuf_append(buf, "},\"targetLimitations\":[\"hosted-runtime-checked-per-mir\",\"external-c-calls-require-target-library-audit\"]}");
 }
 
 static void append_self_host_routing_json(ZBuf *buf, const char *command_name, const char *emit_kind, const Program *program, const CapabilitySummary *caps, const ZTargetInfo *target) {

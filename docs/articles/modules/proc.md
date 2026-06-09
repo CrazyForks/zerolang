@@ -18,6 +18,8 @@ Runnable today:
 | `std.proc.exitCode(status)` | `i32` | Reads the process status code. |
 | `std.proc.succeeded(status)` | `Bool` | Reports whether the status exit code is `0`. |
 | `std.proc.failed(status)` | `Bool` | Reports whether the status exit code is nonzero. |
+| `std.proc.runOk(command)` | `Bool` | Spawns a hosted command and reports whether the resulting status succeeded. |
+| `std.proc.runCode(command)` | `i32` | Spawns a hosted command and returns its exit code. |
 
 Metadata labels:
 
@@ -33,7 +35,7 @@ Metadata labels:
 ```zero
 pub fn main(world: World) -> Void raises {
     let status: ProcStatus = std.proc.spawn("zero-noop")
-    if std.proc.succeeded(status) {
+    if std.proc.succeeded(status) && std.proc.runOk("zero-noop") && std.proc.runCode("zero-noop") == 0 {
         check world.out.write("proc ok\n")
     }
 }

@@ -42,6 +42,8 @@ Runnable today:
 | `std.fs.close(&mut file)` | `Void` | Closes an owned file handle explicitly; remaining owned files are cleaned up deterministically. |
 | `std.fs.readFile(fs, path, buffer)` | `Maybe<usize>` | Opens, reads the full file into caller storage, and closes through explicit `Fs`; returns `null` when unavailable or too large. |
 | `std.fs.writeFile(fs, path, bytes)` | `Bool` | Creates, writes all bytes, and closes through explicit `Fs`. |
+| `std.fs.readFileBytes(fs, path, buffer)` | `Maybe<Span<u8>>` | Opens, reads a full file, closes it, and returns the live prefix of caller storage. |
+| `std.fs.readFileEquals(fs, path, buffer, expected)` | `Bool` | Reads a full file through caller storage and compares the bytes with an expected span. |
 | `std.fs.copyFile(from, to, buffer)` | `Bool` | Copies a hosted file through caller-provided scratch storage. |
 
 Current limits:
@@ -55,8 +57,10 @@ Current limits:
 ```zero
 pub fn main(world: World) -> Void raises [NotFound, TooLarge, Io] {
     let fs: Fs = std.fs.host()
+    var buf: [32]u8 = [0_u8; 32]
     if std.fs.writeFile(fs, ".zero/out/example.txt", "hello\n") {
-        if std.fs.rename(".zero/out/example.txt", ".zero/out/example-renamed.txt") {
+        let bytes: Maybe<Span<u8>> = std.fs.readFileBytes(fs, ".zero/out/example.txt", buf)
+        if bytes.has && std.fs.readFileEquals(fs, ".zero/out/example.txt", buf, "hello\n") && std.fs.rename(".zero/out/example.txt", ".zero/out/example-renamed.txt") {
             if std.fs.remove(".zero/out/example-renamed.txt") {
                 check world.out.write("fs ok\n")
             }

@@ -1780,6 +1780,9 @@ static bool macho_emit_value_to_reg_at(ZBuf *text, const IrFunction *fun, const 
     case IR_VALUE_BINARY: return macho_emit_binary_value_to_reg_at(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_COMPARE: return macho_emit_compare_to_reg_at(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_CALL: return macho_emit_call_to_reg(text, fun, value, reg, frame_size, scratch_slot, ctx, diag);
+    case IR_VALUE_FS_HOST:
+      z_aarch64_emit_movz_w(text, reg, 0);
+      return true;
     case IR_VALUE_FS_READ_BYTES_PATH: return macho_emit_fs_read_bytes_to_maybe_regs_at(text, fun, value, frame_size, scratch_slot, ctx, diag);
     case IR_VALUE_JSON_PARSE_BYTES:
       if (!macho_emit_json_parse_bytes_call_at(text, fun, value, frame_size, scratch_slot, ctx, diag)) return false;
@@ -1999,6 +2002,63 @@ static bool macho_emit_args_get_to_local(ZBuf *text, const IrFunction *fun, cons
   return true;
 }
 
+static bool macho_emit_env_get_to_local(ZBuf *text, const IrFunction *fun, const IrValue *value, const IrLocal *local, unsigned frame_size, MachOEmitContext *ctx, ZDiag *diag) {
+  if (!value || !value->left) return macho_diag_at(diag, "direct AArch64 Mach-O std.env.get requires a key", value ? value->line : 1, value ? value->column : 1, "missing key");
+  if (!macho_emit_byte_view_pair(text, fun, value->left, 9, 10, frame_size, ctx, diag)) return false;
+
+  z_aarch64_emit_mov_w(text, 8, 20);
+  z_aarch64_emit_add_w_imm(text, 8, 8, 1);
+  z_aarch64_emit_add_x_reg_lsl(text, 8, 21, 8, 3);
+  size_t env_loop = text->len;
+  z_aarch64_emit_load_x_imm(text, 3, 8, 0);
+  z_aarch64_emit_movz_x(text, 14, 0);
+  z_aarch64_emit_cmp_x(text, 3, 14);
+  size_t none = z_aarch64_emit_b_cond_placeholder(text, 0);
+  z_aarch64_emit_movz_w(text, 1, 0);
+
+  size_t compare_loop = text->len;
+  z_aarch64_emit_cmp_w(text, 1, 10);
+  size_t key_done = z_aarch64_emit_b_cond_placeholder(text, 2); // unsigned >= key length
+  z_aarch64_emit_add_x_reg(text, 12, 9, 1);
+  z_aarch64_emit_load_b_imm(text, 12, 12, 0);
+  z_aarch64_emit_add_x_reg(text, 13, 3, 1);
+  z_aarch64_emit_load_b_imm(text, 13, 13, 0);
+  z_aarch64_emit_cmp_w(text, 12, 13);
+  size_t next = z_aarch64_emit_b_cond_placeholder(text, 1); // not equal
+  z_aarch64_emit_add_w_imm(text, 1, 1, 1);
+  size_t compare_back = z_aarch64_emit_b_placeholder(text);
+  z_aarch64_patch_branch26(text, compare_back, compare_loop);
+
+  z_aarch64_patch_cond19(text, key_done, text->len);
+  z_aarch64_emit_add_x_reg(text, 13, 3, 10);
+  z_aarch64_emit_load_b_imm(text, 13, 13, 0);
+  z_aarch64_emit_movz_w(text, 12, 0x3d);
+  z_aarch64_emit_cmp_w(text, 13, 12);
+  size_t next_after_key = z_aarch64_emit_b_cond_placeholder(text, 1); // not '='
+  z_aarch64_emit_add_x_reg(text, 12, 3, 10);
+  z_aarch64_emit_add_x_imm(text, 12, 12, 1);
+  macho_emit_strlen_x12_to_w10(text);
+  z_aarch64_emit_movz_w(text, 8, 1);
+  macho_emit_store_local_w(text, fun, 8, local->index, 0, frame_size);
+  macho_emit_store_local_x(text, fun, 12, local->index, 8, frame_size);
+  macho_emit_store_local_w(text, fun, 10, local->index, 16, frame_size);
+  size_t end = z_aarch64_emit_b_placeholder(text);
+
+  z_aarch64_patch_cond19(text, next, text->len);
+  z_aarch64_patch_cond19(text, next_after_key, text->len);
+  z_aarch64_emit_add_x_imm(text, 8, 8, 8);
+  size_t loop_back = z_aarch64_emit_b_placeholder(text);
+  z_aarch64_patch_branch26(text, loop_back, env_loop);
+
+  z_aarch64_patch_cond19(text, none, text->len);
+  z_aarch64_emit_movz_w(text, 8, 0);
+  macho_emit_store_local_w(text, fun, 8, local->index, 0, frame_size);
+  macho_emit_store_local_x(text, fun, 8, local->index, 8, frame_size);
+  macho_emit_store_local_w(text, fun, 8, local->index, 16, frame_size);
+  z_aarch64_patch_branch26(text, end, text->len);
+  return true;
+}
+
 static bool macho_emit_local_set_byte_view(ZBuf *text, const IrFunction *fun, const IrInstr *instr, unsigned frame_size, MachOEmitContext *ctx, ZDiag *diag) {
   if (!macho_emit_byte_view_pair(text, fun, instr->value, 8, 9, frame_size, ctx, diag)) return false;
   macho_emit_store_local_x(text, fun, 8, instr->local_index, 0, frame_size);
@@ -2029,6 +2089,9 @@ static bool macho_emit_local_set_vec(ZBuf *text, const IrFunction *fun, const Ir
 static bool macho_emit_local_set_maybe_byte_view(ZBuf *text, const IrFunction *fun, const IrInstr *instr, unsigned frame_size, MachOEmitContext *ctx, ZDiag *diag) {
   if (instr->value && instr->value->kind == IR_VALUE_ARGS_GET) {
     return macho_emit_args_get_to_local(text, fun, instr->value, &fun->locals[instr->local_index], frame_size, ctx, diag);
+  }
+  if (instr->value && instr->value->kind == IR_VALUE_ENV_GET) {
+    return macho_emit_env_get_to_local(text, fun, instr->value, &fun->locals[instr->local_index], frame_size, ctx, diag);
   }
   if (instr->value && instr->value->kind == IR_VALUE_ARGS_VALUE_AFTER) {
     return macho_emit_args_value_after_to_local(text, fun, instr->value, instr->local_index, frame_size, ctx, diag);

@@ -3150,11 +3150,19 @@ static bool ir_graph_lower_std_testing_call(const ZProgramGraph *graph, IrProgra
   return true;
 }
 
+static bool ir_graph_lower_std_env_get_call(const ZProgramGraph *graph, IrProgram *ir, const IrFunction *fun, const ZProgramGraphNode *expr, IrValue **out) {
+  IrValue *key = NULL;
+  if (!ir_graph_lower_byte_view(graph, ir, fun, ir_graph_ordered_node(graph, expr->id, "arg", 0), &key)) return false;
+  IrValue *value = ir_new_value(ir, IR_VALUE_ENV_GET, IR_TYPE_MAYBE_BYTE_VIEW, ir_graph_line(expr), ir_graph_column(expr));
+  value->left = key;
+  *out = value;
+  return true;
+}
+
 static bool ir_graph_lower_std_byte_call(const ZProgramGraph *graph, IrProgram *ir, const IrFunction *fun, const ZProgramGraphNode *expr, const char *callee_name, size_t arg_count, bool *handled, IrValue **out) {
   *handled = true;
   if (ir_text_eq(callee_name, "std.args.len") && arg_count == 0) {
-    *out = ir_new_value(ir, IR_VALUE_ARGS_LEN, IR_TYPE_USIZE, ir_graph_line(expr), ir_graph_column(expr));
-    return true;
+    *out = ir_new_value(ir, IR_VALUE_ARGS_LEN, IR_TYPE_USIZE, ir_graph_line(expr), ir_graph_column(expr)); return true;
   }
   if (ir_text_eq(callee_name, "std.args.get") && arg_count == 1) {
     IrValue *index = NULL;
@@ -3203,6 +3211,7 @@ static bool ir_graph_lower_std_byte_call(const ZProgramGraph *graph, IrProgram *
     *out = value;
     return true;
   }
+  if (ir_text_eq(callee_name, "std.env.get") && arg_count == 1) return ir_graph_lower_std_env_get_call(graph, ir, fun, expr, out);
   if (ir_text_eq(callee_name, "std.args.find") && arg_count == 1) {
     IrValue *name = NULL;
     if (!ir_graph_lower_byte_view(graph, ir, fun, ir_graph_ordered_node(graph, expr->id, "arg", 0), &name)) return false;
