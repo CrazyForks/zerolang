@@ -98,6 +98,7 @@ const REMOTE_WORKSPACE_ROOT = `${REMOTE_EVAL_ROOT}/workspaces`;
 const DEFAULT_SANDBOX_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_COMMAND_TIMEOUT_MS = 20 * 60 * 1000;
 const DEFAULT_SANDBOX_SETUP_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_MAX_TURNS = 30;
 const DEFAULT_MODELS = [
   "anthropic/claude-opus-4.7",
   "anthropic/claude-sonnet-4.6",
@@ -115,6 +116,8 @@ const systemPrompt = [
   "Use the local ./bin/zero compiler as your source of Zero-specific guidance and verification.",
   "First run ./bin/zero skills get zero --full.",
   "Load any additional skills recommended by that skill before writing code.",
+  "Use the prepared repository root as the candidate package root unless the task explicitly asks for a subdirectory.",
+  "Do not inspect examples unless the skills and compiler diagnostics are insufficient.",
   "Use the graph-first workflow from the loaded skills. If you write a source projection for the final answer, import it to a graph before check/run.",
   "Use ./bin/zero check --json to inspect diagnostics, then ./bin/zero run to verify stdout and stderr.",
   "For the final answer, output code only: exactly the verified source bytes.",
@@ -897,6 +900,30 @@ function ensureSandboxAuthEnv() {
   );
 }
 
+function describeError(error: unknown) {
+  if (!(error instanceof Error)) return String(error);
+  const parts = [error.message];
+  if ("json" in error && error.json) {
+    parts.push(sanitizeErrorDetail(JSON.stringify(error.json)));
+  }
+  if ("text" in error && error.text) {
+    parts.push(sanitizeErrorDetail(String(error.text)));
+  }
+  return parts.filter(Boolean).join("\n");
+}
+
+function sanitizeErrorDetail(value: string) {
+  let sanitized = value;
+  for (const secret of [
+    process.env.AI_GATEWAY_API_KEY,
+    process.env.VERCEL_OIDC_TOKEN,
+    process.env.VERCEL_TOKEN,
+  ]) {
+    if (secret) sanitized = sanitized.replaceAll(secret, "<redacted>");
+  }
+  return sanitized;
+}
+
 function loadDotEnvFiles(paths: string[]) {
   for (const path of paths) {
     const fullPath = join(repoRoot, path);
@@ -947,7 +974,7 @@ function parseArgs(args: string[]): RunOptions {
   let fixture = false;
   let json = false;
   let keepAlive = false;
-  let maxTurns = 10;
+  let maxTurns = DEFAULT_MAX_TURNS;
   let models = defaultModels();
   const requestedModels: string[] = [];
   let outDir = join(repoRoot, ".zero", "evals", "runs", timestamp());
@@ -1193,8 +1220,17 @@ function measureAgent(steps: AgentStep[]): AgentMetrics {
     .map((call) => toolCommand(call))
     .filter((command): command is string => Boolean(command));
   const zeroCommands = commands.filter(isZeroCliCommand);
+  const assistantTurnIds = new Set(
+    steps
+      .filter(
+        (step) =>
+          step.type === "assistant" &&
+          (step.text.trim() !== "" || step.toolCalls.length > 0),
+      )
+      .map((step) => step.id || `assistant-step-${step.turn}`),
+  );
   return {
-    turnCount: steps.length,
+    turnCount: assistantTurnIds.size,
     toolCallCount: toolCalls.length,
     zeroCliCallCount: zeroCommands.length,
     zeroSkillLoadCount: zeroCommands.filter(isZeroSkillLoadCommand).length,
@@ -1311,7 +1347,7 @@ Options:
   --case <id>              Run one case, e.g. hello-world
   --model <id>             AI Gateway model id. May be repeated; overrides defaults
   --models <ids>           Comma-separated AI Gateway model ids; overrides defaults
-  --max-turns <n>          Maximum Claude turns before failing scoring (default: 10)
+  --max-turns <n>          Maximum Claude turns before failing scoring (default: ${DEFAULT_MAX_TURNS})
   --out <dir>              Output directory (default: .zero/evals/runs/<timestamp>)
   --sandbox-runtime <id>   Vercel Sandbox runtime (default: ZERO_EVAL_SANDBOX_RUNTIME or node24)
   --sandbox-timeout-ms <n> Sandbox timeout (default: ZERO_EVAL_SANDBOX_TIMEOUT_MS or enough for selected runs)
@@ -1335,7 +1371,7 @@ Model environment:
 `);
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
+main().catch((error: unknown) => {
+  console.error(describeError(error));
   process.exit(1);
 });
