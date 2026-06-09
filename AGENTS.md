@@ -63,12 +63,17 @@ pnpm run command-contracts
 again after it passes unless you need to recheck later changes.
 
 Shard native tests locally with `ZERO_NATIVE_TEST_SHARD=1/4 pnpm run
-native:test:local`. CI currently runs four native shards.
+native:test:local`. PR CI runs representative native runtime cases in two
+fast shards. Scheduled and manual deep CI runs the full native runtime matrix
+in six shards, plus full conformance and full graph performance fixtures.
 
 `pnpm run conformance:local` and `pnpm run command-contracts:local` use the
 aggregate validation runner. Add `-- --shard 1/4` to run one conformance phase
-shard, `-- --list` to see phases, and `-- --fail-fast` only when a narrow loop
-should stop at the first failing phase.
+shard, `-- --phases name,name` to match a focused CI phase set, `-- --list` to
+see phases, and `-- --fail-fast` only when a narrow loop should stop at the
+first failing phase.
+Use `ZERO_NATIVE_TEST_SCOPE=fast` only when reproducing PR CI coverage. Leave it
+unset for the exhaustive native runtime matrix.
 `pnpm run conformance` runs the sandbox suite with four isolated conformance
 check workers. Local validation stays serial by default; set
 `ZERO_CONFORMANCE_CHECK_JOBS=<n>` only when measuring that path on the current

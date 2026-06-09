@@ -35,3 +35,27 @@ fn __zero_std_cli_success_exit_code() -> i32 {
 fn __zero_std_cli_usage_exit_code() -> i32 {
     return 2
 }
+
+fn __zero_std_cli_command() -> Maybe<String> {
+    return std.args.get(1)
+}
+
+fn __zero_std_cli_command_or(fallback: String) -> String {
+    return std.args.getOr(1, fallback)
+}
+
+fn __zero_std_cli_command_equals(expected: String) -> Bool {
+    return __zero_std_cli_arg_equals(1, expected)
+}
+
+fn __zero_std_cli_arg_or(index: usize, fallback: String) -> String {
+    return std.args.getOr(index, fallback)
+}
+
+fn __zero_std_cli_arg_u32_or(index: usize, fallback: u32) -> u32 {
+    let value: Maybe<u32> = std.args.parseU32(index)
+    if value.has {
+        return value.value
+    }
+    return fallback
+}

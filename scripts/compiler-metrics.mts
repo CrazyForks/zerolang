@@ -3,10 +3,14 @@ import { readdir, readFile } from "node:fs/promises";
 const LARGE_FUNCTION_REPORT_THRESHOLD = 80;
 const NEW_LARGE_FUNCTION_LIMIT = 120;
 const STRCMP_CALL_PATTERN = /\bstrcmp\s*\(/g;
+const SHELL_CALL_PATTERN = /\b(?:system|popen)\s*\(/g;
 
 const sourceFileDirs = [
   "native/zero-c/include",
   "native/zero-c/src",
+];
+const auditFiles = [
+  "scripts/test-native.sh",
 ];
 
 type CScanState = {
@@ -14,26 +18,34 @@ type CScanState = {
   quote: "\"" | "'" | null;
 };
 
-const fileBudgets = {
-  "native/zero-c/include/zero.h": { maxLines: 1171, maxStrcmpCalls: 0 },
+type FileBudget = {
+  maxLines: number;
+  maxStrcmpCalls: number;
+  maxShellCalls?: number;
+};
+
+const fileBudgets: Record<string, FileBudget> = {
+  "native/zero-c/include/zero.h": { maxLines: 1178, maxStrcmpCalls: 0 },
   "native/zero-c/include/zero_contracts.h": { maxLines: 20, maxStrcmpCalls: 0 },
-  "native/zero-c/include/zero_runtime.h": { maxLines: 226, maxStrcmpCalls: 0 },
+  "native/zero-c/include/zero_runtime.h": { maxLines: 230, maxStrcmpCalls: 0 },
   "native/zero-c/src/abi_report.c": { maxLines: 360, maxStrcmpCalls: 2 },
   "native/zero-c/src/abi_report.h": { maxLines: 18, maxStrcmpCalls: 0 },
   "native/zero-c/src/checker.c": { maxLines: 11789, maxStrcmpCalls: 287 },
   "native/zero-c/src/cli_help.c": { maxLines: 125, maxStrcmpCalls: 1 },
   "native/zero-c/src/cli_help.h": { maxLines: 8, maxStrcmpCalls: 0 },
-  "native/zero-c/src/http_listen_runner.c": { maxLines: 399, maxStrcmpCalls: 0 },
+  "native/zero-c/src/http_listen_runner.c": { maxLines: 575, maxStrcmpCalls: 0 },
   "native/zero-c/src/http_listen_runner.h": { maxLines: 22, maxStrcmpCalls: 0 },
+  "native/zero-c/src/http_listen_temp.c": { maxLines: 120, maxStrcmpCalls: 0 },
+  "native/zero-c/src/http_listen_temp.h": { maxLines: 15, maxStrcmpCalls: 0 },
   "native/zero-c/src/init_template.c": { maxLines: 310, maxStrcmpCalls: 13 },
   "native/zero-c/src/init_template.h": { maxLines: 15, maxStrcmpCalls: 0 },
-  "native/zero-c/src/main.c": { maxLines: 14896, maxStrcmpCalls: 440 },
+  "native/zero-c/src/main.c": { maxLines: 14896, maxStrcmpCalls: 440, maxShellCalls: 0 },
   "native/zero-c/src/ir.c": { maxLines: 5508, maxStrcmpCalls: 272 },
   "native/zero-c/src/llvm_backend_metadata.c": { maxLines: 80, maxStrcmpCalls: 0 },
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
   "native/zero-c/src/manifest_toml.c": { maxLines: 430, maxStrcmpCalls: 4 },
   "native/zero-c/src/manifest_toml.h": { maxLines: 8, maxStrcmpCalls: 0 },
-  "native/zero-c/src/mir_binary.c": { maxLines: 1285, maxStrcmpCalls: 1 },
+  "native/zero-c/src/mir_binary.c": { maxLines: 1400, maxStrcmpCalls: 1 },
   "native/zero-c/src/mir_binary.h": { maxLines: 37, maxStrcmpCalls: 0 },
   "native/zero-c/src/ast.c": { maxLines: 250, maxStrcmpCalls: 0 },
   "native/zero-c/src/backend_family.c": { maxLines: 75, maxStrcmpCalls: 5 },
@@ -41,9 +53,9 @@ const fileBudgets = {
   "native/zero-c/src/buildability_value_support.c": { maxLines: 210, maxStrcmpCalls: 0 },
   "native/zero-c/src/buildability.h": { maxLines: 20, maxStrcmpCalls: 0 },
   "native/zero-c/src/buildability_internal.h": { maxLines: 40, maxStrcmpCalls: 0 },
-  "native/zero-c/src/buildability_context.c": { maxLines: 215, maxStrcmpCalls: 1 },
+  "native/zero-c/src/buildability_context.c": { maxLines: 217, maxStrcmpCalls: 1 },
   "native/zero-c/src/buildability_targets.c": { maxLines: 180, maxStrcmpCalls: 0 },
-  "native/zero-c/src/buildability_value_targets.c": { maxLines: 560, maxStrcmpCalls: 0 },
+  "native/zero-c/src/buildability_value_targets.c": { maxLines: 567, maxStrcmpCalls: 0 },
   "native/zero-c/src/c_import.c": { maxLines: 750, maxStrcmpCalls: 51 },
   "native/zero-c/src/c_import.h": { maxLines: 40, maxStrcmpCalls: 0 },
   "native/zero-c/src/call_resolve.c": { maxLines: 200, maxStrcmpCalls: 2 },
@@ -65,27 +77,32 @@ const fileBudgets = {
   "native/zero-c/src/direct_metrics.c": { maxLines: 35, maxStrcmpCalls: 0 },
   "native/zero-c/src/elf_format.c": { maxLines: 220, maxStrcmpCalls: 0 },
   "native/zero-c/src/elf_format.h": { maxLines: 60, maxStrcmpCalls: 0 },
-  "native/zero-c/src/elf_emit_state.c": { maxLines: 176, maxStrcmpCalls: 0 },
-  "native/zero-c/src/elf_emit_state.h": { maxLines: 106, maxStrcmpCalls: 0 },
+  "native/zero-c/src/elf_emit_state.c": { maxLines: 178, maxStrcmpCalls: 0 },
+  "native/zero-c/src/elf_emit_state.h": { maxLines: 108, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_format.c": { maxLines: 470, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_format.h": { maxLines: 90, maxStrcmpCalls: 0 },
   "native/zero-c/src/aarch64_direct.c": { maxLines: 1653, maxStrcmpCalls: 1 },
   "native/zero-c/src/aarch64_direct.h": { maxLines: 64, maxStrcmpCalls: 0 },
   "native/zero-c/src/aarch64_emit.c": { maxLines: 445, maxStrcmpCalls: 0 },
   "native/zero-c/src/aarch64_emit.h": { maxLines: 87, maxStrcmpCalls: 0 },
-  "native/zero-c/src/emit_macho64.c": { maxLines: 2737, maxStrcmpCalls: 2 },
+  "native/zero-c/src/emit_macho64.c": { maxLines: 2879, maxStrcmpCalls: 2 },
   "native/zero-c/src/emit_macho_x64.c": { maxLines: 2090, maxStrcmpCalls: 1 },
-  "native/zero-c/src/macho_emit_state.c": { maxLines: 227, maxStrcmpCalls: 0 },
-  "native/zero-c/src/macho_emit_state.h": { maxLines: 110, maxStrcmpCalls: 0 },
-  "native/zero-c/src/emit_elf64.c": { maxLines: 3256, maxStrcmpCalls: 3 },
+  "native/zero-c/src/macho_emit_state.c": { maxLines: 230, maxStrcmpCalls: 0 },
+  "native/zero-c/src/macho_emit_state.h": { maxLines: 113, maxStrcmpCalls: 0 },
+  "native/zero-c/src/emit_elf64.c": { maxLines: 3313, maxStrcmpCalls: 3 },
   "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 458, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_llvm_ir.c": { maxLines: 944, maxStrcmpCalls: 9 },
   "native/zero-c/src/emit_coff.c": { maxLines: 1974, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff_aarch64.c": { maxLines: 490, maxStrcmpCalls: 0 },
-  "native/zero-c/src/fs.c": { maxLines: 1364, maxStrcmpCalls: 36 },
-  "native/zero-c/src/mir_verify.c": { maxLines: 2306, maxStrcmpCalls: 0 },
+  "native/zero-c/src/fs.c": { maxLines: 1525, maxStrcmpCalls: 36, maxShellCalls: 0 },
+  "native/zero-c/src/process_exec.c": { maxLines: 225, maxStrcmpCalls: 1, maxShellCalls: 0 },
+  "native/zero-c/src/process_exec.h": { maxLines: 25, maxStrcmpCalls: 0, maxShellCalls: 0 },
+  "native/zero-c/src/process_path.c": { maxLines: 110, maxStrcmpCalls: 0, maxShellCalls: 0 },
+  "native/zero-c/src/process_path.h": { maxLines: 10, maxStrcmpCalls: 0, maxShellCalls: 0 },
+  "native/zero-c/src/mir_verify.c": { maxLines: 2331, maxStrcmpCalls: 0 },
   "native/zero-c/src/mir_verify.h": { maxLines: 50, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph.c": { maxLines: 40, maxStrcmpCalls: 0 },
+  "native/zero-c/src/program_graph_clone.c": { maxLines: 70, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_build.c": { maxLines: 60, maxStrcmpCalls: 8 },
   "native/zero-c/src/program_graph_build.h": { maxLines: 25, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_c_import.c": { maxLines: 96, maxStrcmpCalls: 1 },
@@ -106,7 +123,7 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_format.h": { maxLines: 21, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_std_deps.c": { maxLines: 90, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_std_deps.h": { maxLines: 10, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_std_merge.c": { maxLines: 380, maxStrcmpCalls: 1 },
+  "native/zero-c/src/program_graph_std_merge.c": { maxLines: 490, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph.h": { maxLines: 135, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_identity.c": { maxLines: 500, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_import.c": { maxLines: 496, maxStrcmpCalls: 4 },
@@ -116,7 +133,7 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_manifest.c": { maxLines: 240, maxStrcmpCalls: 8 },
   "native/zero-c/src/program_graph_manifest.h": { maxLines: 15, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_manifest_identity.c": { maxLines: 92, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_mir.c": { maxLines: 4631, maxStrcmpCalls: 5 },
+  "native/zero-c/src/program_graph_mir.c": { maxLines: 4839, maxStrcmpCalls: 5 },
   "native/zero-c/src/program_graph_query.c": { maxLines: 350, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_query.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_query_internal.h": { maxLines: 20, maxStrcmpCalls: 0 },
@@ -130,13 +147,13 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_validate.c": { maxLines: 537, maxStrcmpCalls: 5 },
   "native/zero-c/src/program_graph_patch_builders.c": { maxLines: 375, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_patch_builders.h": { maxLines: 15, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_patch_body.c": { maxLines: 660, maxStrcmpCalls: 20 },
+  "native/zero-c/src/program_graph_patch_body.c": { maxLines: 800, maxStrcmpCalls: 20 },
   "native/zero-c/src/program_graph_patch_body.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_patch_examples.c": { maxLines: 35, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_patch_ops.c": { maxLines: 1740, maxStrcmpCalls: 13 },
   "native/zero-c/src/program_graph_patch.c": { maxLines: 860, maxStrcmpCalls: 46 },
   "native/zero-c/src/program_graph_patch.h": { maxLines: 69, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_projection.c": { maxLines: 465, maxStrcmpCalls: 1 },
+  "native/zero-c/src/program_graph_projection.c": { maxLines: 585, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_projection.h": { maxLines: 25, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_projection_validate.c": { maxLines: 465, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_reconcile.c": { maxLines: 400, maxStrcmpCalls: 1 },
@@ -151,14 +168,14 @@ const fileBudgets = {
   "native/zero-c/src/program_graph_repository_merge.h": { maxLines: 35, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_repository_repair.c": { maxLines: 75, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_repository_repair.h": { maxLines: 20, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_store_binary.c": { maxLines: 706, maxStrcmpCalls: 3 },
+  "native/zero-c/src/program_graph_store_binary.c": { maxLines: 730, maxStrcmpCalls: 3 },
   "native/zero-c/src/program_graph_store_binary.h": { maxLines: 10, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_store.c": { maxLines: 1282, maxStrcmpCalls: 6 },
+  "native/zero-c/src/program_graph_store.c": { maxLines: 1300, maxStrcmpCalls: 6 },
   "native/zero-c/src/program_graph_store_prune.c": { maxLines: 168, maxStrcmpCalls: 1 },
   "native/zero-c/src/program_graph_store_prune.h": { maxLines: 10, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_store_tables.c": { maxLines: 220, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_store_tables.h": { maxLines: 40, maxStrcmpCalls: 0 },
-  "native/zero-c/src/program_graph_store.h": { maxLines: 49, maxStrcmpCalls: 0 },
+  "native/zero-c/src/program_graph_store.h": { maxLines: 50, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_test.c": { maxLines: 700, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_test_caps.c": { maxLines: 230, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph_test_caps.h": { maxLines: 10, maxStrcmpCalls: 0 },
@@ -179,9 +196,9 @@ const fileBudgets = {
   "native/zero-c/src/safety_contract.h": { maxLines: 30, maxStrcmpCalls: 0 },
   "native/zero-c/src/specialize.c": { maxLines: 150, maxStrcmpCalls: 2 },
   "native/zero-c/src/specialize.h": { maxLines: 50, maxStrcmpCalls: 0 },
-  "native/zero-c/src/std_sig.c": { maxLines: 451, maxStrcmpCalls: 2 },
+  "native/zero-c/src/std_sig.c": { maxLines: 489, maxStrcmpCalls: 2 },
   "native/zero-c/src/std_sig.h": { maxLines: 61, maxStrcmpCalls: 0 },
-  "native/zero-c/src/std_source.c": { maxLines: 344, maxStrcmpCalls: 2 },
+  "native/zero-c/src/std_source.c": { maxLines: 422, maxStrcmpCalls: 2 },
   "native/zero-c/src/std_source.h": { maxLines: 30, maxStrcmpCalls: 0 },
   "native/zero-c/src/target_backend.c": { maxLines: 392, maxStrcmpCalls: 1 },
   "native/zero-c/src/target.c": { maxLines: 517, maxStrcmpCalls: 1 },
@@ -777,6 +794,15 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
         limit: budget.maxStrcmpCalls,
       });
     }
+    const maxShellCalls = budget.maxShellCalls ?? 0;
+    if (metrics.shellCalls > maxShellCalls) {
+      violations.push({
+        kind: "shell-call-budget",
+        path,
+        actual: metrics.shellCalls,
+        limit: maxShellCalls,
+      });
+    }
   }
   for (const item of allLargeFunctions) {
     const key = largeFunctionKey(item);
@@ -976,6 +1002,9 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
   if (!programGraph.repositoryStoreCompilerTables ||
       !programGraph.repositoryStoreMetadataSerialized ||
       !programGraph.repositoryStoreMetadataValidated ||
+      !programGraph.repositoryStoreReadHardening ||
+      !programGraph.repositoryBinaryStoreReadHardening ||
+      !programGraph.graphPatchFileReadHardening ||
       !programGraph.repositoryStatusCompilerStoreFacts ||
       !programGraph.repositoryStatusProjectionValidity) {
     violations.push({
@@ -1007,6 +1036,7 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
       !programGraph.repositoryGraphMirPrepImmediateCacheHit ||
       !programGraph.artifactGraphMirPrepMappedFinalMir ||
       !programGraph.artifactGraphMirPrepImmediateCacheHit ||
+      !programGraph.mappedMirCacheReadHardening ||
       !programGraph.repositoryGraphMirCacheFacts ||
       !programGraph.repositoryGraphMirPrepSourceFreeFirst ||
       !programGraph.repositoryGraphMirPrepNoStdHelperBridge ||
@@ -1034,6 +1064,7 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
       !programGraph.repositoryCompilerInputProjectionStatus ||
       !programGraph.repositoryGraphSourceLocationsNotSemanticMatch ||
       !programGraph.repositoryProjectionValidationIgnoresSourceLocation ||
+      !programGraph.repositoryProjectionTempExclusiveWrite ||
       !programGraph.repositoryArtifactProjectionState) {
     violations.push({
       kind: "program-graph-repository-source-free-input",
@@ -1067,6 +1098,33 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
     violations.push({
       kind: "direct-target-backend-matrix",
       directTarget: backendFormats.directTarget,
+    });
+  }
+  if (!backendFormats.fileIo.parentCreationChecked ||
+      !backendFormats.fileIo.readSeekChecked ||
+      !backendFormats.fileIo.readSizeChecked ||
+      !backendFormats.fileIo.readShortReadChecked ||
+      !backendFormats.fileIo.optionalReadChecked ||
+      !backendFormats.fileIo.inputProbeReadChecked ||
+      !backendFormats.fileIo.atomicWriteHelperUsed ||
+      !backendFormats.fileIo.atomicWriteTempFile ||
+      !backendFormats.fileIo.atomicWriteRenameChecked ||
+      !backendFormats.fileIo.atomicWriteCleanup ||
+      !backendFormats.fileIo.noDirectWriteFopenOutsideFs ||
+      !backendFormats.fileIo.textWriteChecked ||
+      !backendFormats.fileIo.binaryWriteChecked ||
+      !backendFormats.fileIo.closeChecked ||
+      !backendFormats.fileIo.bufferFormatChecked ||
+      !backendFormats.fileIo.diagnosticsNullSafe) {
+    violations.push({
+      kind: "file-io-hardening",
+      fileIo: backendFormats.fileIo,
+    });
+  }
+  if (!backendFormats.processExec.childSetupChecked) {
+    violations.push({
+      kind: "process-exec-hardening",
+      processExec: backendFormats.processExec,
     });
   }
   if (!backendFormats.targetManifest.exactKeyMatcher ||
@@ -1273,10 +1331,15 @@ const texts = new Map();
 for (const path of sourceFiles) {
   texts.set(path, await readFile(path, "utf8"));
 }
+const auditTexts = new Map();
+for (const path of auditFiles) {
+  auditTexts.set(path, await readFile(path, "utf8"));
+}
 
 const files = Object.fromEntries([...texts.entries()].map(([path, text]) => [path, {
   lines: lineCount(text),
   strcmpCalls: countMatches(cCodeText(text), STRCMP_CALL_PATTERN),
+  shellCalls: countMatches(cCodeText(text), SHELL_CALL_PATTERN),
   unsupportedMarkers: countMatches(text, /Unknown|unsupported|currently|MVP|direct backend/g),
 }]));
 
@@ -1402,6 +1465,17 @@ const coffX64Source = cCodeText(texts.get("native/zero-c/src/emit_coff.c") ?? ""
 const coffAarch64Source = cCodeText(texts.get("native/zero-c/src/emit_coff_aarch64.c") ?? "");
 const machoArm64Source = cCodeText(texts.get("native/zero-c/src/emit_macho64.c") ?? "");
 const machoX64Source = cCodeText(texts.get("native/zero-c/src/emit_macho_x64.c") ?? "");
+const fsRaw = texts.get("native/zero-c/src/fs.c") ?? "";
+const fsSource = cCodeText(fsRaw);
+const directWriteFopenFiles = [...texts.entries()]
+  .filter(([path]) => path.startsWith("native/zero-c/src/") && path !== "native/zero-c/src/fs.c")
+  .filter(([, text]) => /\bfopen\s*\([^,\n]+,\s*"w[ab]?"/.test(cCodeText(text)))
+  .map(([path]) => path)
+  .sort((a, b) => a.localeCompare(b));
+const processExecRaw = texts.get("native/zero-c/src/process_exec.c") ?? "";
+const nativeTestRaw = auditTexts.get("scripts/test-native.sh") ?? "";
+const mirBinaryRaw = texts.get("native/zero-c/src/mir_binary.c") ?? "";
+const mirBinarySource = cCodeText(mirBinaryRaw);
 const programGraphCompileSource = cCodeText(texts.get("native/zero-c/src/program_graph_compile.c") ?? "");
 const programGraphMirRaw = texts.get("native/zero-c/src/program_graph_mir.c") ?? "";
 const programGraphBuildRaw = texts.get("native/zero-c/src/program_graph_build.c") ?? "";
@@ -1409,17 +1483,25 @@ const programGraphBuildHeaderRaw = texts.get("native/zero-c/src/program_graph_bu
 const programGraphCommandRaw = texts.get("native/zero-c/src/program_graph_command.c") ?? "";
 const programGraphCommandHeaderRaw = texts.get("native/zero-c/src/program_graph_command.h") ?? "";
 const programGraphStoreRaw = texts.get("native/zero-c/src/program_graph_store.c") ?? "";
+const programGraphStoreHeaderRaw = texts.get("native/zero-c/src/program_graph_store.h") ?? "";
+const programGraphStoreBinaryRaw = texts.get("native/zero-c/src/program_graph_store_binary.c") ?? "";
 const programGraphStoreTablesRaw = texts.get("native/zero-c/src/program_graph_store_tables.c") ?? "";
+const programGraphStoreReadBody = cCodeText(cBlock(programGraphStoreRaw, "static bool store_read_file_bytes"));
+const programGraphPatchRaw = texts.get("native/zero-c/src/program_graph_patch.c") ?? "";
+const programGraphPatchReadBody = cCodeText(cBlock(programGraphPatchRaw, "static char *patch_read_file"));
 const programGraphRepositoryRaw = texts.get("native/zero-c/src/program_graph_repository.c") ?? "";
 const programGraphRepositoryInputRaw = texts.get("native/zero-c/src/program_graph_repository_input.c") ?? "";
+const programGraphProjectionRaw = texts.get("native/zero-c/src/program_graph_projection.c") ?? "";
 const programGraphProjectionValidateRaw = texts.get("native/zero-c/src/program_graph_projection_validate.c") ?? "";
 const programGraphTestRaw = texts.get("native/zero-c/src/program_graph_test.c") ?? "";
 const programGraphCommandSource = cCodeText(programGraphCommandRaw);
 const programGraphTestSource = cCodeText(programGraphTestRaw);
 const programGraphStoreSource = cCodeText(programGraphStoreRaw);
+const programGraphStoreBinarySource = cCodeText(programGraphStoreBinaryRaw);
 const programGraphStoreTablesSource = cCodeText(programGraphStoreTablesRaw);
 const programGraphRepositorySource = cCodeText(programGraphRepositoryRaw);
 const programGraphRepositoryInputSource = cCodeText(programGraphRepositoryInputRaw);
+const programGraphProjectionSource = cCodeText(programGraphProjectionRaw);
 const programGraphProjectionValidateSource = cCodeText(programGraphProjectionValidateRaw);
 const artifactGraphCheckBody = cCodeText(cBlock(main, "static int run_graph_check_command"));
 const artifactGraphCheckJsonRawBody = cBlock(main, "static void append_graph_check_json");
@@ -1432,6 +1514,47 @@ const repositoryGraphCheckJsonRawBody = cBlock(main, "static void append_reposit
 const repositoryGraphCheckJsonBody = cCodeText(cBlock(main, "static void append_repository_graph_compiler_path_json"));
 const repositoryGraphDefaultReadinessRawBody = cBlock(main, "static void append_repository_graph_default_readiness_json");
 const directManifestGraphInputBody = cCodeText(cBlock(main, "static int resolve_direct_command_manifest_graph_input"));
+const readOptionalFileBody = cCodeText(cBlock(main, "static char *read_optional_file"));
+const readFilePrefixBody = cCodeText(cBlock(main, "static bool read_file_prefix"));
+const programGraphStorageHeaderBody = cCodeText(cBlock(main, "static bool path_has_program_graph_storage_header"));
+const programGraphPatchHeaderBody = cCodeText(cBlock(main, "static bool path_has_program_graph_patch_header"));
+const directFileExistsBody = cCodeText(cBlock(main, "static bool direct_file_exists"));
+const zbufAppendfBody = cCodeText(cBlock(fsRaw, "void zbuf_appendf"));
+const processExistingDirBody = cCodeText(cBlock(processExecRaw, "static bool z_process_existing_dir"));
+const processEnsureDirBody = cCodeText(cBlock(processExecRaw, "bool z_process_ensure_dir"));
+const processSuppressStreamBody = cCodeText(cBlock(processExecRaw, "static bool z_process_suppress_stream"));
+const processWaitSuccessBody = cCodeText(cBlock(processExecRaw, "static bool z_process_wait_success"));
+const processRunArgvBody = cCodeText(cBlock(processExecRaw, "bool z_process_run_argv"));
+const processFirstStdoutLineBody = cCodeText(cBlock(processExecRaw, "char *z_process_first_stdout_line"));
+const checkedChildSetenvCount = (processRunArgvBody.match(/setenv\s*\([^;]*\)\s*!=\s*0\)\s*_exit\s*\(\s*127\s*\)/g) ?? []).length;
+const checkedChildSuppressCount = ((processRunArgvBody + processFirstStdoutLineBody).match(/!\s*z_process_suppress_stream\s*\([^)]*\)\)\s*_exit\s*\(\s*127\s*\)/g) ?? []).length;
+const processExecHardening = {
+  directoryRejectsNonDirectory: /errno\s*!=\s*EEXIST/.test(processEnsureDirBody) &&
+    /return\s+z_process_existing_dir\s*\(\s*path\s*\)\s*;/.test(processEnsureDirBody) &&
+    /_stat\s*\(\s*path\s*,\s*&st\s*\)\s*==\s*0\s*&&\s*\(\s*st\.st_mode\s*&\s*_S_IFDIR\s*\)\s*!=\s*0/.test(processExistingDirBody) &&
+    /stat\s*\(\s*path\s*,\s*&st\s*\)\s*==\s*0\s*&&\s*S_ISDIR\s*\(\s*st\.st_mode\s*\)/.test(processExistingDirBody),
+  streamSuppressionChecked: /freopen\s*\(\s*[^,]+,\s*[^,]+,\s*stream\s*\)\s*!=\s*NULL/.test(processSuppressStreamBody),
+  childWaitChecked: /waitpid\s*\(\s*pid\s*,\s*&status\s*,\s*0\s*\)/.test(processWaitSuccessBody) &&
+    /errno\s*!=\s*EINTR/.test(processWaitSuccessBody) &&
+    /WIFEXITED\s*\(\s*status\s*\)\s*&&\s*WEXITSTATUS\s*\(\s*status\s*\)\s*==\s*0/.test(processWaitSuccessBody),
+  childEnvChecked: checkedChildSetenvCount >= 2,
+  childSuppressChecked: checkedChildSuppressCount >= 3,
+  runUsesWaitHelper: /return\s+z_process_wait_success\s*\(\s*pid\s*\)\s*;/.test(processRunArgvBody),
+  stdoutCaptureFailsClosed: /bool\s+read_ok\s*=\s*true\s*;/.test(processFirstStdoutLineBody) &&
+    /read_ok\s*=\s*false\s*;/.test(processFirstStdoutLineBody) &&
+    /bool\s+child_ok\s*=\s*z_process_wait_success\s*\(\s*pid\s*\)\s*;/.test(processFirstStdoutLineBody) &&
+    /read_ok\s*&&\s*child_ok\s*&&\s*line\.data/.test(processFirstStdoutLineBody),
+  nativeSmokeWired: /process_exec_smoke\.c/.test(nativeTestRaw) && /process-exec-smoke/.test(nativeTestRaw),
+  noIgnoredNullStreams: !/FILE\s+\*null_/.test(processRunArgvBody) && !/FILE\s+\*null_/.test(processFirstStdoutLineBody),
+};
+const processExecChildSetupChecked = Object.values(processExecHardening).every(Boolean);
+const readFileBody = cCodeText(cBlock(fsRaw, "char *z_read_file"));
+const atomicWriteBytesBody = cCodeText(cBlock(fsRaw, "static bool write_atomic_bytes"));
+const atomicOpenTempBody = cCodeText(cBlock(fsRaw, "static FILE *open_atomic_write_temp"));
+const atomicCloseBody = cCodeText(cBlock(fsRaw, "static bool close_atomic_write"));
+const writeFileBody = cCodeText(cBlock(fsRaw, "bool z_write_file"));
+const writeBinaryFileBody = cCodeText(cBlock(fsRaw, "bool z_write_binary_file"));
+const mirMapFileBody = cCodeText(cBlock(mirBinaryRaw, "static bool mir_map_file"));
 const artifactGraphMirPrepRawBody = cTextWithoutComments(cBlock(programGraphMirRaw, "bool z_program_graph_prepare_artifact_mir_input"));
 const artifactGraphMirPrepBody = cCodeText(cBlock(programGraphMirRaw, "bool z_program_graph_prepare_artifact_mir_input"));
 const repositoryGraphMirPrepRawBody = cTextWithoutComments(cBlock(programGraphMirRaw, "bool z_program_graph_prepare_repository_store_mir_input"));
@@ -1483,6 +1606,57 @@ const hasRawX64PointerMemoryBytes = (text: string) =>
   rawX64PointerMemoryReg.test(text) ||
   rawX64PointerMemoryMovzx.test(text);
 const backendFormats = {
+  fileIo: {
+    parentCreationChecked: /\bstatic\s+bool\s+mkdir_parents\s*\(\s*const\s+char\s+\*path\s*,\s*ZDiag\s+\*diag\s*\)/.test(fsSource) &&
+      /if\s*\(\s*!mkdir_parents\s*\(\s*path\s*,\s*diag\s*\)\s*\)\s*return\s+false/.test(atomicWriteBytesBody) &&
+      !/\bzero_mkdir\s*\(\s*copy\s*\)\s*;/.test(fsSource),
+    readSeekChecked: /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(readFileBody) &&
+      /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(readFileBody) &&
+      !/\brewind\s*\(\s*file\s*\)\s*;/.test(readFileBody),
+    readSizeChecked: /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readFileBody),
+    readShortReadChecked: /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readFileBody) &&
+      /free\s*\(\s*data\s*\)/.test(readFileBody),
+    optionalReadChecked: /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
+      /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
+      /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readOptionalFileBody) &&
+      /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readOptionalFileBody) &&
+      /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
+      !/\brewind\s*\(\s*file\s*\)\s*;/.test(readOptionalFileBody),
+    inputProbeReadChecked: /fread\s*\(\s*bytes\s*,\s*1\s*,\s*len\s*,\s*file\s*\)/.test(readFilePrefixBody) &&
+      /ferror\s*\(\s*file\s*\)/.test(readFilePrefixBody) &&
+      /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(readFilePrefixBody) &&
+      /read_file_prefix\s*\(\s*path\s*,\s*bytes\s*,\s*sizeof\s*\(\s*bytes\s*\)\s*,\s*&read\s*\)/.test(programGraphStorageHeaderBody) &&
+      /read_file_prefix\s*\(\s*path\s*,\s*bytes\s*,\s*sizeof\s*\(\s*bytes\s*\)\s*,\s*&read\s*\)/.test(programGraphPatchHeaderBody) &&
+      !/\bfopen\s*\(/.test(programGraphStorageHeaderBody) &&
+      !/\bfopen\s*\(/.test(programGraphPatchHeaderBody) &&
+      /stat\s*\(\s*path\s*,\s*&st\s*\)\s*==\s*0/.test(directFileExistsBody) &&
+      !/\bfopen\s*\(/.test(directFileExistsBody),
+    atomicWriteHelperUsed: /write_atomic_bytes/.test(writeFileBody) &&
+      /strlen\s*\(\s*data\s*\)/.test(writeFileBody) &&
+      /return\s+write_atomic_bytes\s*\(\s*path\s*,\s*data\s*,\s*len\s*,\s*diag\s*\)/.test(writeBinaryFileBody),
+    atomicWriteTempFile: /open_atomic_write_temp\s*\(\s*path\s*,\s*&temp_path\s*,\s*diag\s*\)/.test(atomicWriteBytesBody) &&
+      /atomic_write_temp_path\s*\(\s*path\s*,\s*attempt\s*\)/.test(atomicOpenTempBody) &&
+      /O_WRONLY\s*\|\s*O_CREAT\s*\|\s*O_EXCL/.test(atomicOpenTempBody),
+    atomicWriteRenameChecked: /rename\s*\(\s*temp_path\s*,\s*path\s*\)\s*!=\s*0/.test(atomicCloseBody),
+    atomicWriteCleanup: countMatches(atomicWriteBytesBody + atomicOpenTempBody + atomicCloseBody, /remove\s*\(\s*temp_path\s*\)/g) >= 4 &&
+      countMatches(atomicWriteBytesBody + atomicOpenTempBody + atomicCloseBody, /free\s*\(\s*temp_path\s*\)/g) >= 5,
+    noDirectWriteFopenOutsideFs: directWriteFopenFiles.length === 0,
+    directWriteFopenFiles,
+    textWriteChecked: /fwrite\s*\(\s*data\s*,\s*1\s*,\s*len\s*,\s*file\s*\)\s*!=\s*len/.test(atomicWriteBytesBody) &&
+      !/\bfputs\s*\(\s*text\s*,\s*file\s*\)\s*;/.test(writeFileBody),
+    binaryWriteChecked: /fwrite\s*\(\s*data\s*,\s*1\s*,\s*len\s*,\s*file\s*\)\s*!=\s*len/.test(atomicWriteBytesBody) &&
+      /write_atomic_bytes/.test(writeBinaryFileBody),
+    closeChecked: /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(atomicCloseBody),
+    bufferFormatChecked: /if\s*\(\s*!fmt\s*\)\s*return\s*;/.test(zbufAppendfBody) &&
+      /int\s+written\s*=\s*vsnprintf\s*\(\s*tmp\s*,\s*\(size_t\)\s*needed\s*\+\s*1\s*,\s*fmt\s*,\s*args\s*\)/.test(zbufAppendfBody) &&
+      /written\s*<\s*0\s*\|\|\s*written\s*>\s*needed/.test(zbufAppendfBody) &&
+      /free\s*\(\s*tmp\s*\)/.test(zbufAppendfBody),
+    diagnosticsNullSafe: /if\s*\(\s*!diag\s*\)\s*return\s*;/.test(cBlock(fsRaw, "static void diag_io_at")),
+  },
+  processExec: {
+    ...processExecHardening,
+    childSetupChecked: processExecChildSetupChecked,
+  },
   targetManifest: {
     exactKeyMatcher: /\bmanifest_key_equals\s*\(/.test(targetSource),
     exactListMatcher: /\bmanifest_list_contains_token\s*\(/.test(targetSource),
@@ -1891,6 +2065,32 @@ const programGraph = {
     /compilerTables schema:/.test(programGraphStoreTablesRaw) &&
     /compilerHashInputs graphHashExcludes:/.test(programGraphStoreTablesRaw),
   repositoryStoreMetadataValidated: /z_program_graph_store_compiler_metadata_matches\s*\(/.test(programGraphStoreSource),
+  repositoryStoreReadHardening: /#include\s+<errno\.h>/.test(programGraphStoreRaw) &&
+    /z_program_graph_store_path_exists\s*\(/.test(programGraphStoreHeaderRaw) &&
+    /z_program_graph_store_path_exists\s*\(/.test(programGraphRepositoryRaw) &&
+    /z_program_graph_store_path_exists\s*\(/.test(programGraphRepositoryInputRaw) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(programGraphStoreReadBody) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(programGraphStoreReadBody) &&
+    /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(programGraphStoreReadBody) &&
+    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(programGraphStoreReadBody) &&
+    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(programGraphStoreReadBody) &&
+    !/\brewind\s*\(\s*file\s*\)\s*;/.test(programGraphStoreReadBody),
+  repositoryBinaryStoreReadHardening: /STORE_BINARY_MAX_SOURCE_COUNT/.test(programGraphStoreBinaryRaw) &&
+    /STORE_BINARY_MAX_PROJECTION_COUNT/.test(programGraphStoreBinaryRaw) &&
+    /STORE_BINARY_MAX_NODE_COUNT/.test(programGraphStoreBinaryRaw) &&
+    /STORE_BINARY_MAX_EDGE_COUNT/.test(programGraphStoreBinaryRaw) &&
+    /STORE_BINARY_MAX_STRING_BYTES/.test(programGraphStoreBinaryRaw) &&
+    /memchr\s*\(\s*start\s*,\s*0\s*,\s*len\s*\)\s*!=\s*NULL/.test(programGraphStoreBinarySource) &&
+    /binary_header_counts_are_reasonable\s*\(/.test(programGraphStoreBinarySource) &&
+    /binary_header_counts_are_reasonable\s*\(\s*header\s*\)\s*&&\s*binary_header_records_fit/.test(programGraphStoreBinarySource),
+  graphPatchFileReadHardening: /#include\s+<errno\.h>/.test(programGraphPatchRaw) &&
+    /#include\s+<stdint\.h>/.test(programGraphPatchRaw) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(programGraphPatchReadBody) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(programGraphPatchReadBody) &&
+    /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(programGraphPatchReadBody) &&
+    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(programGraphPatchReadBody) &&
+    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(programGraphPatchReadBody) &&
+    !/\brewind\s*\(\s*file\s*\)\s*;/.test(programGraphPatchReadBody),
   repositoryStatusCompilerStoreFacts: /compilerStore/.test(programGraphRepositoryRaw) &&
     /sourceFreeInspection/.test(programGraphRepositoryRaw) &&
     /z_program_graph_store_append_table_counts_json\s*\(/.test(programGraphRepositorySource),
@@ -1975,7 +2175,7 @@ const programGraph = {
     /source\s*->\s*lowering\s*=\s*"mapped-final-mir"/.test(repositoryGraphMirPrepRawBody) &&
     /ir_graph_set_mapped_mir_cache_facts\s*\(/.test(repositoryGraphMirPrepRawBody),
   repositoryGraphMirPrepImmediateCacheHit: /require_checked_program/.test(repositoryGraphMirPrepRawBody) &&
-    /require_checked_program\s*&&\s*!ir_graph_lower_checked_program\s*\(/.test(repositoryGraphMirPrepRawBody) &&
+    /bool\s+checked\s*=\s*ir_graph_lower_checked_program\s*\(/.test(repositoryGraphMirPrepRawBody) &&
     /ir_graph_set_mapped_mir_cache_facts\s*\(\s*input,\s*&mir_cache,\s*true,\s*false,\s*!require_checked_program,\s*require_checked_program\s*\)/.test(repositoryGraphMirPrepRawBody),
   artifactGraphMirPrepMappedFinalMir: /z_mir_binary_load_path\s*\(/.test(artifactGraphMirPrepBody) &&
     /z_mir_binary_write_path\s*\(/.test(artifactGraphMirPrepBody) &&
@@ -1985,6 +2185,23 @@ const programGraph = {
   artifactGraphMirPrepImmediateCacheHit: !/require_checked_program/.test(artifactGraphMirPrepRawBody) &&
     !/ir_graph_lower_checked_program\s*\(/.test(artifactGraphMirPrepRawBody) &&
     /ir_graph_set_mapped_mir_cache_facts\s*\(\s*input,\s*&mir_cache,\s*true,\s*false,\s*true,\s*false\s*\)/.test(artifactGraphMirPrepRawBody),
+  mappedMirCacheReadHardening: /fstat\s*\(\s*fd\s*,\s*&st\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /st\.st_size\s*<=\s*0\s*\|\|\s*\(uintmax_t\)\s*st\.st_size\s*>\s*\(uintmax_t\)\s*SIZE_MAX/.test(mirMapFileBody) &&
+    /mmap\s*\(\s*NULL\s*,\s*\(size_t\)\s*st\.st_size/.test(mirMapFileBody) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /size\s*<=\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX/.test(mirMapFileBody) &&
+    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(mirMapFileBody) &&
+    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /MIR_BINARY_MAX_FUNCTION_COUNT/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_VALUE_COUNT/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_REF_COUNT/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_DATA_BYTES/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_STRING_BYTES/.test(mirBinaryRaw) &&
+    /memchr\s*\(\s*start\s*,\s*0\s*,\s*len\s*\)\s*!=\s*NULL/.test(mirBinarySource) &&
+    /mir_header_counts_are_reasonable\s*\(\s*header\s*\)/.test(mirBinarySource) &&
+    /mir_header_records_fit\s*\(\s*header\s*,\s*reader\s*\)/.test(mirBinarySource) &&
+    !/\brewind\s*\(\s*file\s*\)\s*;/.test(mirMapFileBody),
   repositoryGraphMirCacheFacts: /mappedFinalMir/.test(main) &&
     /borrowedStorage/.test(main) &&
     /memoryMapped/.test(main) &&
@@ -2029,6 +2246,13 @@ const programGraph = {
   repositoryGraphSourceLocationsNotSemanticMatch: !/store_source_locations_match_graph\s*\(/.test(programGraphStoreSource) &&
     /store_source_paths_match_graph\s*\(/.test(programGraphStoreSource),
   repositoryProjectionValidationIgnoresSourceLocation: !/expected->line\s*!=\s*actual->line|expected->column\s*!=\s*actual->column|actual->line\s*==\s*expected->line|actual->column\s*==\s*expected->column/.test(programGraphProjectionValidateSource),
+  repositoryProjectionTempExclusiveWrite: /projection_write_temp_exclusive\s*\(/.test(programGraphProjectionSource) &&
+    /projection_ensure_parent_dirs\s*\(\s*path/.test(programGraphProjectionSource) &&
+    /O_WRONLY\s*\|\s*O_CREAT\s*\|\s*O_EXCL/.test(programGraphProjectionRaw) &&
+    /O_NOFOLLOW/.test(programGraphProjectionRaw) &&
+    /PROJECTION_TEMP_WRITE_EXISTS/.test(programGraphProjectionRaw) &&
+    !/projection_assign_temp_path\s*\(/.test(programGraphProjectionSource) &&
+    !/z_write_file\s*\(\s*write->temp_path/.test(programGraphProjectionSource),
   repositoryArtifactProjectionState: /sourceProjectionState/.test(main) &&
     /source_projection_state/.test(programGraphMirRaw),
 };

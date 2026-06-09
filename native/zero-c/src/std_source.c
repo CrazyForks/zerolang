@@ -20,6 +20,7 @@ static const ZStdSourceModule std_source_modules[] = {
   {"std.cli", "std/cli.0", zero_embedded_stdlib_graph_std_cli_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_cli_graph_bytes)},
   {"std.codec", "std/codec.0", zero_embedded_stdlib_graph_std_codec_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_codec_graph_bytes)},
   {"std.collections", "std/collections.0", zero_embedded_stdlib_graph_std_collections_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_collections_graph_bytes)},
+  {"std.crypto", "std/crypto.0", zero_embedded_stdlib_graph_std_crypto_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_crypto_graph_bytes)},
   {"std.env", "std/env.0", zero_embedded_stdlib_graph_std_env_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_env_graph_bytes)},
   {"std.fmt", "std/fmt.0", zero_embedded_stdlib_graph_std_fmt_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_fmt_graph_bytes)},
   {"std.fs", "std/fs.0", zero_embedded_stdlib_graph_std_fs_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_fs_graph_bytes)},
@@ -33,6 +34,7 @@ static const ZStdSourceModule std_source_modules[] = {
   {"std.parse", "std/parse.0", zero_embedded_stdlib_graph_std_parse_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_parse_graph_bytes)},
   {"std.path", "std/path.0", zero_embedded_stdlib_graph_std_path_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_path_graph_bytes)},
   {"std.proc", "std/proc.0", zero_embedded_stdlib_graph_std_proc_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_proc_graph_bytes)},
+  {"std.rand", "std/rand.0", zero_embedded_stdlib_graph_std_rand_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_rand_graph_bytes)},
   {"std.search", "std/search.0", zero_embedded_stdlib_graph_std_search_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_search_graph_bytes)},
   {"std.sort", "std/sort.0", zero_embedded_stdlib_graph_std_sort_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_sort_graph_bytes)},
   {"std.str", "std/str.0", zero_embedded_stdlib_graph_std_str_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_str_graph_bytes)},
@@ -42,6 +44,24 @@ static const ZStdSourceModule std_source_modules[] = {
   {"std.toml", "std/toml.0", zero_embedded_stdlib_graph_std_toml_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_toml_graph_bytes)},
   {"std.url", "std/url.0", zero_embedded_stdlib_graph_std_url_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_url_graph_bytes)},
 };
+
+typedef struct {
+  const ZStdSourceModule *module;
+  bool present;
+  ZProgramGraph graph;
+} ZStdSourceGraphCacheEntry;
+
+static ZStdSourceGraphCacheEntry std_source_graph_cache[sizeof(std_source_modules) / sizeof(std_source_modules[0])];
+
+static ZStdSourceGraphCacheEntry *std_source_graph_cache_entry(const ZStdSourceModule *module) {
+  for (size_t i = 0; module && i < sizeof(std_source_graph_cache) / sizeof(std_source_graph_cache[0]); i++) {
+    if (!std_source_graph_cache[i].module || std_source_graph_cache[i].module == module) {
+      std_source_graph_cache[i].module = module;
+      return &std_source_graph_cache[i];
+    }
+  }
+  return NULL;
+}
 
 static const ZStdSourceCall std_source_calls[] = {
   {"std.codec.base64EncodedLen", "__zero_std_codec_base64_encoded_len", "std.codec"},
@@ -63,6 +83,11 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.codec.writeU32Be", "__zero_std_codec_write_u32_be", "std.codec"},
   {"std.codec.writeU32Le", "__zero_std_codec_write_u32_le", "std.codec"},
   {"std.codec.urlEncode", "__zero_std_codec_url_encode", "std.codec"},
+  {"std.cli.argOr", "__zero_std_cli_arg_or", "std.cli"},
+  {"std.cli.argU32Or", "__zero_std_cli_arg_u32_or", "std.cli"},
+  {"std.cli.command", "__zero_std_cli_command", "std.cli"},
+  {"std.cli.commandEquals", "__zero_std_cli_command_equals", "std.cli"},
+  {"std.cli.commandOr", "__zero_std_cli_command_or", "std.cli"},
   {"std.collections.append", "__zero_std_collections_append", "std.collections"},
   {"std.collections.contains", "__zero_std_collections_contains", "std.collections"},
   {"std.collections.count", "__zero_std_collections_count", "std.collections"},
@@ -70,11 +95,21 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.collections.push", "__zero_std_collections_push", "std.collections"},
   {"std.collections.removeSwap", "__zero_std_collections_remove_swap", "std.collections"},
   {"std.collections.view", "__zero_std_collections_view", "std.collections"},
+  {"std.crypto.fixedHex32", "crypto_fixed_hex32", "std.crypto"},
+  {"std.crypto.hashHex32", "crypto_hash_hex32", "std.crypto"},
+  {"std.crypto.hmacHex32", "crypto_hmac_hex32", "std.crypto"},
+  {"std.crypto.randomId32", "crypto_random_id32", "std.crypto"},
+  {"std.crypto.stableId32", "crypto_stable_id32", "std.crypto"},
+  {"std.env.equals", "__zero_std_env_equals", "std.env"},
   {"std.env.getOr", "__zero_std_env_get_or", "std.env"},
   {"std.env.has", "__zero_std_env_has", "std.env"},
   {"std.env.parseBool", "__zero_std_env_parse_bool", "std.env"},
+  {"std.env.parseBoolOr", "__zero_std_env_parse_bool_or", "std.env"},
   {"std.env.parseU32", "__zero_std_env_parse_u32", "std.env"},
+  {"std.env.parseU32Or", "__zero_std_env_parse_u32_or", "std.env"},
   {"std.fs.copyFile", "__zero_std_fs_copy_file", "std.fs"},
+  {"std.fs.readFileBytes", "__zero_std_fs_read_file_bytes", "std.fs"},
+  {"std.fs.readFileEquals", "__zero_std_fs_read_file_equals", "std.fs"},
   {"std.fs.readFile", "__zero_std_fs_read_file", "std.fs"},
   {"std.fs.writeFile", "__zero_std_fs_write_file", "std.fs"},
   {"std.http.headerBytes", "__zero_std_http_header_bytes", "std.http"},
@@ -89,6 +124,8 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.http.requestJsonBodyWithin", "__zero_std_http_request_json_body_within", "std.http"},
   {"std.http.requestMatches", "__zero_std_http_request_matches", "std.http"},
   {"std.http.requestMethodIs", "__zero_std_http_request_method_is", "std.http"},
+  {"std.http.requestMethodName", "__zero_std_http_request_method_name", "std.http"},
+  {"std.http.requestPath", "__zero_std_http_request_path", "std.http"},
   {"std.http.requestQuery", "__zero_std_http_request_query", "std.http"},
   {"std.http.requestQueryValue", "__zero_std_http_request_query_value", "std.http"},
   {"std.http.requestIsDelete", "__zero_std_http_request_is_delete", "std.http"},
@@ -108,9 +145,13 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.http.statusReason", "__zero_std_http_status_reason", "std.http"},
   {"std.http.writeCorsJsonResponse", "__zero_std_http_write_cors_json_response", "std.http"},
   {"std.http.writeCorsPreflight", "__zero_std_http_write_cors_preflight", "std.http"},
+  {"std.http.writeFound", "__zero_std_http_write_found", "std.http"},
+  {"std.http.writeHtmlOk", "__zero_std_http_write_html_ok", "std.http"},
+  {"std.http.writeHtmlResponse", "__zero_std_http_write_html_response", "std.http"},
   {"std.http.writeJsonBadRequest", "__zero_std_http_write_json_bad_request", "std.http"},
   {"std.http.writeJsonConflict", "__zero_std_http_write_json_conflict", "std.http"},
   {"std.http.writeJsonCreated", "__zero_std_http_write_json_created", "std.http"},
+  {"std.http.writeJsonError", "__zero_std_http_write_json_error", "std.http"},
   {"std.http.writeJsonForbidden", "__zero_std_http_write_json_forbidden", "std.http"},
   {"std.http.writeJsonInternalServerError", "__zero_std_http_write_json_internal_server_error", "std.http"},
   {"std.http.writeJsonMethodNotAllowed", "__zero_std_http_write_json_method_not_allowed", "std.http"},
@@ -120,9 +161,15 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.http.writeJsonTooManyRequests", "__zero_std_http_write_json_too_many_requests", "std.http"},
   {"std.http.writeJsonUnauthorized", "__zero_std_http_write_json_unauthorized", "std.http"},
   {"std.http.writeJsonUnprocessable", "__zero_std_http_write_json_unprocessable", "std.http"},
+  {"std.http.writeMovedPermanently", "__zero_std_http_write_moved_permanently", "std.http"},
   {"std.http.writeNoContent", "__zero_std_http_write_no_content", "std.http"},
+  {"std.http.writePermanentRedirect", "__zero_std_http_write_permanent_redirect", "std.http"},
+  {"std.http.writeRedirect", "__zero_std_http_write_redirect", "std.http"},
   {"std.http.writeRequest", "__zero_std_http_write_request", "std.http"},
   {"std.http.writeResponse", "__zero_std_http_write_response", "std.http"},
+  {"std.http.writeSeeOther", "__zero_std_http_write_see_other", "std.http"},
+  {"std.http.writeTextOk", "__zero_std_http_write_text_ok", "std.http"},
+  {"std.http.writeTextResponse", "__zero_std_http_write_text_response", "std.http"},
   {"std.io.countLines", "__zero_std_io_count_lines", "std.io"},
   {"std.io.nextLine", "__zero_std_io_next_line", "std.io"},
   {"std.io.nextLineStart", "__zero_std_io_next_line_start", "std.io"},
@@ -142,6 +189,17 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.json.writeObject1Bool", "__zero_std_json_write_object1_bool", "std.json"},
   {"std.json.writeObject1String", "__zero_std_json_write_object1_string", "std.json"},
   {"std.json.writeObject1U32", "__zero_std_json_write_object1_u32", "std.json"},
+  {"std.json.writeFieldBool", "__zero_std_json_write_field_bool", "std.json"},
+  {"std.json.writeFieldRaw", "__zero_std_json_write_field_raw", "std.json"},
+  {"std.json.writeFieldString", "__zero_std_json_write_field_string", "std.json"},
+  {"std.json.writeFieldU32", "__zero_std_json_write_field_u32", "std.json"},
+  {"std.json.writeObject2Fields", "__zero_std_json_write_object2_fields", "std.json"},
+  {"std.json.writeObject2StringField", "__zero_std_json_write_object2_string_field", "std.json"},
+  {"std.json.writeObject2U32Field", "__zero_std_json_write_object2_u32_field", "std.json"},
+  {"std.json.writeObject2BoolField", "__zero_std_json_write_object2_bool_field", "std.json"},
+  {"std.json.writeArray2Strings", "__zero_std_json_write_array2_strings", "std.json"},
+  {"std.json.writeArray2U32", "__zero_std_json_write_array2_u32", "std.json"},
+  {"std.json.writeArray2Bools", "__zero_std_json_write_array2_bools", "std.json"},
   {"std.json.writeString", "__zero_std_json_write_string", "std.json"},
   {"std.json.writeStringBytes", "__zero_std_json_write_string_bytes", "std.json"},
   {"std.log.keyValue", "__zero_std_log_key_value", "std.log"},
@@ -156,8 +214,14 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.path.join", "__zero_std_path_join", "std.path"},
   {"std.path.normalize", "__zero_std_path_normalize", "std.path"},
   {"std.path.relative", "__zero_std_path_relative", "std.path"},
+  {"std.proc.runCode", "__zero_std_proc_run_code", "std.proc"},
+  {"std.proc.runOk", "__zero_std_proc_run_ok", "std.proc"},
+  {"std.rand.entropyHex32", "rand_entropy_hex32", "std.rand"},
   {"std.search.indexOf", "__zero_std_search_index_of", "std.search"},
   {"std.search.lastIndexOf", "__zero_std_search_last_index_of", "std.search"},
+  {"std.time.abs", "__zero_std_time_abs", "std.time"},
+  {"std.time.between", "__zero_std_time_between", "std.time"},
+  {"std.time.hasElapsed", "__zero_std_time_has_elapsed", "std.time"},
   {"std.toml.bool", "__zero_std_toml_bool", "std.toml"},
   {"std.toml.field", "__zero_std_toml_field", "std.toml"},
   {"std.toml.string", "__zero_std_toml_string", "std.toml"},
@@ -166,7 +230,9 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.toml.validate", "__zero_std_toml_validate", "std.toml"},
   {"std.toml.validateBytes", "__zero_std_toml_validate_bytes", "std.toml"},
   {"std.url.appendQuery", "__zero_std_url_append_query", "std.url"},
+  {"std.url.appendFormField", "__zero_std_url_append_form_field", "std.url"},
   {"std.url.authority", "__zero_std_url_authority", "std.url"},
+  {"std.url.formValue", "__zero_std_url_form_value", "std.url"},
   {"std.url.host", "__zero_std_url_host", "std.url"},
   {"std.url.path", "__zero_std_url_path", "std.url"},
   {"std.url.percentDecode", "__zero_std_url_percent_decode", "std.url"},
@@ -175,7 +241,9 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.url.queryEscape", "__zero_std_url_query_escape", "std.url"},
   {"std.url.queryUnescape", "__zero_std_url_query_unescape", "std.url"},
   {"std.url.queryValue", "__zero_std_url_query_value", "std.url"},
+  {"std.url.queryValueDecoded", "__zero_std_url_query_value_decoded", "std.url"},
   {"std.url.scheme", "__zero_std_url_scheme", "std.url"},
+  {"std.url.writeFormField", "__zero_std_url_write_form_field", "std.url"},
   {"std.url.writeQueryParam", "__zero_std_url_write_query_param", "std.url"},
 };
 
@@ -302,6 +370,8 @@ bool z_std_source_module_load_graph(const ZStdSourceModule *module, ZProgramGrap
     }
     return false;
   }
+  ZStdSourceGraphCacheEntry *cache = std_source_graph_cache_entry(module);
+  if (cache && cache->present) return out ? z_program_graph_clone(&cache->graph, out) : true;
   if (!z_program_graph_store_bytes_are_binary(module->graph_bytes, module->graph_len)) {
     char *text = z_checked_malloc(module->graph_len + 1);
     memcpy(text, module->graph_bytes, module->graph_len);
@@ -327,6 +397,10 @@ bool z_std_source_module_load_graph(const ZStdSourceModule *module, ZProgramGrap
     if (!ok) {
       if (diag && !diag->path) diag->path = module->path;
       if (out) z_program_graph_free(out);
+    } else if (cache && out) {
+      z_program_graph_free(&cache->graph);
+      z_program_graph_clone(out, &cache->graph);
+      cache->present = true;
     }
     return ok;
   }
@@ -339,5 +413,10 @@ bool z_std_source_module_load_graph(const ZStdSourceModule *module, ZProgramGrap
   }
   z_program_graph_store_free(&store);
   if (!ok && diag && !diag->path) diag->path = module->path;
+  if (ok && cache && out) {
+    z_program_graph_free(&cache->graph);
+    z_program_graph_clone(out, &cache->graph);
+    cache->present = true;
+  }
   return ok;
 }

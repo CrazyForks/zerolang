@@ -218,6 +218,24 @@ typedef struct {
 static const unsigned char MIR_BINARY_MAGIC[8] = {'Z', 'M', 'I', 'R', 'B', 'I', 'N', '1'};
 enum { MIR_BINARY_SCHEMA_VERSION = 3 };
 static const uint64_t MIR_NULL_LEN = UINT64_MAX;
+static const uint64_t MIR_BINARY_MAX_FUNCTION_COUNT = 100000;
+static const uint64_t MIR_BINARY_MAX_LOCAL_COUNT = 1000000;
+static const uint64_t MIR_BINARY_MAX_INSTR_COUNT = 4000000;
+static const uint64_t MIR_BINARY_MAX_VALUE_COUNT = 4000000;
+static const uint64_t MIR_BINARY_MAX_REF_COUNT = 8000000;
+static const uint64_t MIR_BINARY_MAX_EXTERNAL_COUNT = 100000;
+static const uint64_t MIR_BINARY_MAX_EXTERNAL_PARAM_TYPE_COUNT = 1000000;
+static const uint64_t MIR_BINARY_MAX_DATA_SEGMENT_COUNT = 1000000;
+static const uint64_t MIR_BINARY_MAX_DATA_BYTES = 256u * 1024u * 1024u;
+static const uint64_t MIR_BINARY_MAX_STRING_BYTES = 256u * 1024u * 1024u;
+enum {
+  MIR_FUNCTION_RECORD_BYTES = 120,
+  MIR_LOCAL_RECORD_BYTES = 76,
+  MIR_INSTR_RECORD_BYTES = 80,
+  MIR_VALUE_RECORD_BYTES = 112,
+  MIR_EXTERNAL_RECORD_BYTES = 72,
+  MIR_DATA_SEGMENT_RECORD_BYTES = 16,
+};
 
 static void mir_diag(ZDiag *diag, const char *path, const char *message, const char *actual) {
   if (!diag) return;
@@ -675,13 +693,30 @@ static bool mir_get_count(MirReader *reader, uint64_t *out) {
   return mir_get_u64(reader, out) && *out <= (uint64_t)SIZE_MAX;
 }
 
+static bool mir_string_ref_bounds(const MirHeader *header, MirStringRef ref, const unsigned char **start_out, size_t *len_out) {
+  if (!header || ref.len == MIR_NULL_LEN) return false;
+  if (ref.offset > (uint64_t)header->strings_len_size ||
+      ref.len > (uint64_t)header->strings_len_size - ref.offset ||
+      ref.len >= (uint64_t)header->strings_len_size - ref.offset ||
+      ref.len > (uint64_t)SIZE_MAX) return false;
+  const unsigned char *start = header->strings + (size_t)ref.offset;
+  size_t len = (size_t)ref.len;
+  if (start[len] != '\0') return false;
+  if (memchr(start, 0, len) != NULL) return false;
+  if (start_out) *start_out = start;
+  if (len_out) *len_out = len;
+  return true;
+}
+
 static bool mir_ref_string(const MirHeader *header, MirStringRef ref, char **out) {
   if (ref.len == MIR_NULL_LEN) {
     *out = NULL;
     return true;
   }
-  if (ref.offset > (uint64_t)header->strings_len_size || ref.len > (uint64_t)header->strings_len_size - ref.offset || ref.len > (uint64_t)SIZE_MAX) return false;
-  *out = z_strndup((const char *)header->strings + (size_t)ref.offset, (size_t)ref.len);
+  const unsigned char *start = NULL;
+  size_t len = 0;
+  if (!mir_string_ref_bounds(header, ref, &start, &len)) return false;
+  *out = z_strndup((const char *)start, len);
   return true;
 }
 
@@ -690,14 +725,48 @@ static bool mir_ref_borrow_string(const MirHeader *header, MirStringRef ref, con
     *out = NULL;
     return true;
   }
-  if (ref.offset > (uint64_t)header->strings_len_size ||
-      ref.len > (uint64_t)header->strings_len_size - ref.offset ||
-      ref.len >= (uint64_t)header->strings_len_size - ref.offset ||
-      ref.len > (uint64_t)SIZE_MAX) return false;
-  const char *text = (const char *)header->strings + (size_t)ref.offset;
-  if (text[(size_t)ref.len] != '\0') return false;
-  *out = text;
+  const unsigned char *start = NULL;
+  if (!mir_string_ref_bounds(header, ref, &start, NULL)) return false;
+  *out = (const char *)start;
   return true;
+}
+
+static bool mir_header_counts_are_reasonable(const MirHeader *header) {
+  return header->function_count <= MIR_BINARY_MAX_FUNCTION_COUNT &&
+         header->local_count <= MIR_BINARY_MAX_LOCAL_COUNT &&
+         header->instr_count <= MIR_BINARY_MAX_INSTR_COUNT &&
+         header->value_count <= MIR_BINARY_MAX_VALUE_COUNT &&
+         header->value_ref_count <= MIR_BINARY_MAX_REF_COUNT &&
+         header->instr_ref_count <= MIR_BINARY_MAX_REF_COUNT &&
+         header->external_count <= MIR_BINARY_MAX_EXTERNAL_COUNT &&
+         header->external_param_type_count <= MIR_BINARY_MAX_EXTERNAL_PARAM_TYPE_COUNT &&
+         header->data_segment_count <= MIR_BINARY_MAX_DATA_SEGMENT_COUNT &&
+         header->data_bytes_len <= MIR_BINARY_MAX_DATA_BYTES &&
+         header->strings_len <= MIR_BINARY_MAX_STRING_BYTES;
+}
+
+static bool mir_add_record_bytes(uint64_t *total, uint64_t count, uint64_t record_size) {
+  if (count > 0 && record_size > UINT64_MAX / count) return false;
+  uint64_t bytes = count * record_size;
+  if (*total > UINT64_MAX - bytes) return false;
+  *total += bytes;
+  return true;
+}
+
+static bool mir_header_records_fit(const MirHeader *header, const MirReader *reader) {
+  uint64_t record_bytes = 0;
+  return mir_add_record_bytes(&record_bytes, header->function_count, MIR_FUNCTION_RECORD_BYTES) &&
+         mir_add_record_bytes(&record_bytes, header->local_count, MIR_LOCAL_RECORD_BYTES) &&
+         mir_add_record_bytes(&record_bytes, header->instr_count, MIR_INSTR_RECORD_BYTES) &&
+         mir_add_record_bytes(&record_bytes, header->value_count, MIR_VALUE_RECORD_BYTES) &&
+         mir_add_record_bytes(&record_bytes, header->value_ref_count, 8) &&
+         mir_add_record_bytes(&record_bytes, header->instr_ref_count, 8) &&
+         mir_add_record_bytes(&record_bytes, header->external_count, MIR_EXTERNAL_RECORD_BYTES) &&
+         mir_add_record_bytes(&record_bytes, header->external_param_type_count, 4) &&
+         mir_add_record_bytes(&record_bytes, header->data_segment_count, MIR_DATA_SEGMENT_RECORD_BYTES) &&
+         mir_add_record_bytes(&record_bytes, header->data_bytes_len, 1) &&
+         reader->cursor <= header->strings_offset &&
+         record_bytes == (uint64_t)(header->strings_offset - reader->cursor);
 }
 
 static bool mir_read_header(MirReader *reader, MirHeader *header, size_t file_len) {
@@ -742,7 +811,9 @@ static bool mir_read_header(MirReader *reader, MirHeader *header, size_t file_le
   header->strings = reader->data + header->strings_offset;
   header->strings_len_size = (size_t)header->strings_len;
   reader->len = header->strings_offset;
-  return header->strings_offset >= reader->cursor;
+  return header->strings_offset >= reader->cursor &&
+         mir_header_counts_are_reasonable(header) &&
+         mir_header_records_fit(header, reader);
 }
 
 static bool mir_refs_fit(uint64_t start, uint64_t len, uint64_t count) {
@@ -1126,14 +1197,23 @@ static bool mir_map_file(const char *path, MirMappedFile *mapped, ZDiag *diag) {
     return false;
   }
   struct stat st;
-  if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+  if (fstat(fd, &st) != 0) {
+    int saved_errno = errno;
     close(fd);
+    errno = saved_errno;
     mir_diag(diag, path, "failed to stat mapped MIR cache", strerror(errno));
+    return false;
+  }
+  if (st.st_size <= 0 || (uintmax_t)st.st_size > (uintmax_t)SIZE_MAX) {
+    close(fd);
+    mir_diag(diag, path, "failed to stat mapped MIR cache", st.st_size <= 0 ? "empty MIR cache" : "MIR cache is too large");
     return false;
   }
   void *data = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
   if (data == MAP_FAILED) {
+    int saved_errno = errno;
     close(fd);
+    errno = saved_errno;
     mir_diag(diag, path, "failed to mmap MIR cache", strerror(errno));
     return false;
   }
@@ -1148,22 +1228,42 @@ static bool mir_map_file(const char *path, MirMappedFile *mapped, ZDiag *diag) {
     mir_diag(diag, path, "failed to open mapped MIR cache", strerror(errno));
     return false;
   }
-  fseek(file, 0, SEEK_END);
-  long size = ftell(file);
-  if (size <= 0) {
-    fclose(file);
+  if (fseek(file, 0, SEEK_END) != 0) {
     mir_diag(diag, path, "failed to stat mapped MIR cache", strerror(errno));
+    fclose(file);
     return false;
   }
-  rewind(file);
+  long size = ftell(file);
+  if (size <= 0 || (size_t)size > SIZE_MAX) {
+    if (size < 0 && errno == 0) errno = EIO;
+    if (size > 0) errno = EFBIG;
+    int saved_errno = errno;
+    const char *actual = size == 0 ? "empty MIR cache" : strerror(errno);
+    fclose(file);
+    errno = saved_errno;
+    mir_diag(diag, path, "failed to stat mapped MIR cache", actual);
+    return false;
+  }
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    mir_diag(diag, path, "failed to stat mapped MIR cache", strerror(errno));
+    fclose(file);
+    return false;
+  }
   unsigned char *data = z_checked_malloc((size_t)size);
   if (fread(data, 1, (size_t)size, file) != (size_t)size) {
+    if (errno == 0) errno = EIO;
+    int saved_errno = errno;
     free(data);
     fclose(file);
+    errno = saved_errno;
     mir_diag(diag, path, "failed to read mapped MIR cache", strerror(errno));
     return false;
   }
-  fclose(file);
+  if (fclose(file) != 0) {
+    free(data);
+    mir_diag(diag, path, "failed to read mapped MIR cache", strerror(errno));
+    return false;
+  }
   mapped->data = data;
   mapped->len = (size_t)size;
   mapped->mapped = false;

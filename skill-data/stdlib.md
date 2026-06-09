@@ -37,12 +37,12 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.path`: target-neutral lexical path basename, dirname, extension, join, normalize, and relative helpers.
 - `std.codec`: byte reads, endian reads/writes, varint sizing/encode/decode, base64/hex encode/decode, CRC helpers, and byte checksums.
 - `std.parse`: byte scanners and integer/bool parsers returning `Maybe<T>`.
-- `std.time`: duration construction, conversion, comparison, clamp, and target-gated clock helpers.
-- `std.rand`: explicit deterministic random sources, random bits, and target entropy helpers.
-- `std.crypto`: small hash and byte-oriented crypto helpers.
+- `std.time`: duration construction, conversion, comparison, elapsed-window helpers, and target-gated clock helpers.
+- `std.rand`: explicit deterministic random sources, random bits, target entropy helpers, and caller-buffer entropy IDs.
+- `std.crypto`: small hash, fixed-width hash text, byte-oriented crypto helpers, and caller-buffer IDs.
 - `std.json`: explicit-buffer JSON validation, structured status codes, shallow field lookup, typed scalar decode, parsing, and string/object writing helpers.
 - `std.toml`: no-allocation TOML validation, shallow/dotted field lookup, and typed scalar decode helpers.
-- `std.url`: target-neutral URL splitting, percent/query encoding and decoding, query lookup, and query append helpers.
+- `std.url`: target-neutral URL splitting, percent/query/form encoding and decoding, query/form lookup, and query append helpers.
 - `std.str`: byte-span string helpers, including non-overlapping reverse, prefix/suffix, substring, trim, and word counts.
 - `std.io`: buffered reader/writer surfaces, cursor writes, line scanning, and byte copy over caller-owned storage.
 - `std.testing`: Bool-returning helpers for test blocks and byte-output checks.
@@ -56,11 +56,11 @@ These modules depend on host or runtime capabilities:
 
 - `std.args`: process arguments
 - `std.cli`: command-line flag and option helpers over process arguments
-- `std.env`: process environment
-- `std.fs`: hosted filesystem and explicit `Fs` or `owned<File>` handles
+- `std.env`: process environment lookup, comparisons, and typed fallback parsing
+- `std.fs`: hosted filesystem, explicit `Fs` or `owned<File>` handles, and file-level byte helpers
 - `std.net`: bootstrap network handles
 - `std.http`: HTTP request/response helpers and loopback listeners
-- `std.proc`: process execution helpers
+- `std.proc`: process execution and exit-status helpers
 - `World.out` and `World.err`: program output capabilities
 
 Non-host targets may reject these APIs with target diagnostics. Inspect target facts before cross-building:
@@ -269,6 +269,11 @@ toUpper(arg0: u8) -> u8
 
 ```text
 argEquals(arg0: usize, arg1: String) -> Bool
+command() -> Maybe<String>
+commandOr(arg0: String) -> String
+commandEquals(arg0: String) -> Bool
+argOr(arg0: usize, arg1: String) -> String
+argU32Or(arg0: usize, arg1: u32) -> u32
 hasFlag(arg0: String) -> Bool
 optionValue(arg0: String) -> Maybe<String>
 optionValueOr(arg0: String, arg1: String) -> String
@@ -328,6 +333,11 @@ hash32(arg0: Span<u8>) -> u32
 hmac32(arg0: Span<u8>, arg1: Span<u8>) -> u32
 constantTimeEql(arg0: Span<u8>, arg1: Span<u8>) -> Bool
 secureRandomU32() -> u32
+fixedHex32(arg0: MutSpan<u8>, arg1: u32) -> Maybe<Span<u8>>
+hashHex32(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+hmacHex32(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+stableId32(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+randomId32(arg0: MutSpan<u8>) -> Maybe<Span<u8>>
 ```
 
 ### std.env
@@ -336,8 +346,11 @@ secureRandomU32() -> u32
 get(arg0: String) -> Maybe<String>
 has(arg0: String) -> Bool
 getOr(arg0: String, arg1: String) -> String
+equals(arg0: String, arg1: String) -> Bool
 parseBool(arg0: String) -> Maybe<Bool>
+parseBoolOr(arg0: String, arg1: Bool) -> Bool
 parseU32(arg0: String) -> Maybe<u32>
+parseU32Or(arg0: String, arg1: u32) -> u32
 ```
 
 ### std.fmt
@@ -381,6 +394,8 @@ fileLen(arg0: mutref<File>) -> Maybe<usize>
 close(arg0: mutref<File>) -> Void
 readFile(arg0: Fs, arg1: String, arg2: MutSpan<u8>) -> Maybe<usize>
 writeFile(arg0: Fs, arg1: String, arg2: Span<u8>) -> Bool
+readFileBytes(arg0: Fs, arg1: String, arg2: MutSpan<u8>) -> Maybe<Span<u8>>
+readFileEquals(arg0: Fs, arg1: String, arg2: MutSpan<u8>, arg3: Span<u8>) -> Bool
 copyFile(arg0: String, arg1: String, arg2: MutSpan<u8>) -> Bool
 ```
 
@@ -425,8 +440,18 @@ writeRequest(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8
 writeJsonRequest(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeJsonResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeJsonError(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeCorsPreflight(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
 writeCorsJsonResponse(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeTextResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeTextOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeHtmlResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeHtmlOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeRedirect(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeFound(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeSeeOther(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeMovedPermanently(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writePermanentRedirect(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonCreated(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonBadRequest(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
@@ -512,6 +537,17 @@ writeStringBytes(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeObject1String(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeObject1U32(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: u32) -> Maybe<Span<u8>>
 writeObject1Bool(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Bool) -> Maybe<Span<u8>>
+writeFieldRaw(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeFieldString(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeFieldU32(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: u32) -> Maybe<Span<u8>>
+writeFieldBool(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Bool) -> Maybe<Span<u8>>
+writeObject2Fields(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeObject2StringField(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeObject2U32Field(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: u32, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeObject2BoolField(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Bool, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeArray2Strings(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeArray2U32(arg0: MutSpan<u8>, arg1: u32, arg2: u32) -> Maybe<Span<u8>>
+writeArray2Bools(arg0: MutSpan<u8>, arg1: Bool, arg2: Bool) -> Maybe<Span<u8>>
 ```
 
 ### std.toml
@@ -671,6 +707,8 @@ spawn(arg0: String) -> ProcStatus
 exitCode(arg0: ProcStatus) -> i32
 succeeded(arg0: ProcStatus) -> Bool
 failed(arg0: ProcStatus) -> Bool
+runOk(arg0: String) -> Bool
+runCode(arg0: String) -> i32
 ```
 
 ### std.rand
@@ -681,6 +719,7 @@ nextU32(arg0: mutref<RandSource>) -> u32
 nextBool(arg0: mutref<RandSource>) -> Bool
 entropyU32() -> u32
 entropySeed() -> RandSource
+entropyHex32(arg0: MutSpan<u8>) -> Maybe<Span<u8>>
 ```
 
 ### std.search
@@ -776,6 +815,9 @@ max(arg0: Duration, arg1: Duration) -> Duration
 clamp(arg0: Duration, arg1: Duration, arg2: Duration) -> Duration
 lessThan(arg0: Duration, arg1: Duration) -> Bool
 isZero(arg0: Duration) -> Bool
+abs(arg0: Duration) -> Duration
+between(arg0: Duration, arg1: Duration) -> Duration
+hasElapsed(arg0: Duration, arg1: Duration, arg2: Duration) -> Bool
 ```
 
 ### std.url
@@ -791,7 +833,11 @@ host(arg0: Span<u8>) -> Maybe<Span<u8>>
 path(arg0: Span<u8>) -> Span<u8>
 query(arg0: Span<u8>) -> Maybe<Span<u8>>
 queryValue(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+queryValueDecoded(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeQueryParam(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeFormField(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+appendFormField(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+formValue(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 appendQuery(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 ```
 
@@ -806,15 +852,17 @@ pub fn main(world: World) -> Void raises {
 }
 ```
 
-Use the CLI helpers for exact flag and option conventions before writing a
-custom argument loop:
+Use the CLI helpers for command, fallback, exact flag, and option conventions
+before writing a custom argument loop:
 
 ```zero
 pub fn main(world: World) -> Void raises {
-    let name: String = std.cli.optionValueOr("--name", "zero")
-    let count: Maybe<u32> = std.cli.optionU32("--count")
-    if std.cli.hasFlag("--json") && count.has {
+    let command: String = std.cli.commandOr("help")
+    let name: String = std.cli.argOr(2, "world")
+    if std.mem.eql(command, "hello") {
+        check world.out.write("hello ")
         check world.out.write(name)
+        check world.out.write("\n")
     }
 }
 ```
@@ -848,7 +896,11 @@ For API-style handlers, parse the request envelope with route helpers such as
 `std.http.requestHasJsonContentType`, and `std.http.requestJsonBodyWithin`.
 Use path segment helpers for resource routes such as `/users/7`; they borrow
 zero-based, non-empty segments and ignore leading, trailing, or repeated `/`.
-Prefer the status-specific JSON writers for common responses:
+Prefer the status-specific JSON writers for common success responses and
+`std.http.writeJsonError(response, status, code)` for conventional
+`{"error":"code"}` failures. `writeJsonError` validates the code before writing
+JSON, so agents do not need to hand-build simple error bodies. The full custom
+body writers remain available:
 `std.http.writeJsonOk`, `std.http.writeJsonCreated`,
 `std.http.writeJsonBadRequest`, `std.http.writeJsonUnauthorized`,
 `std.http.writeJsonForbidden`, `std.http.writeJsonNotFound`,
@@ -859,8 +911,15 @@ Prefer the status-specific JSON writers for common responses:
 and `std.http.writeCorsJsonResponse` when a JSON response also needs
 `access-control-allow-origin`. `writeCorsJsonResponse` takes a status-line
 fragment such as `"200 OK"` or `"422 Unprocessable Entity"`. Use
+`std.http.writeTextOk` or `std.http.writeHtmlOk` for simple non-JSON responses
+such as health text, `robots.txt`, or a small HTML page. Use redirect helpers
+such as `std.http.writeFound`, `std.http.writeSeeOther`,
+`std.http.writeMovedPermanently`, or `std.http.writePermanentRedirect` instead
+of hand-writing `Location` headers; they reject empty or control-character
+location values before writing. Use
 `std.http.responseBodyBytes` to read the body from a response envelope produced
-locally by `writeResponse` or a JSON writer.
+locally by `writeResponse`, a JSON writer, a redirect writer, or a text/html
+writer.
 
 For a runnable local API server, define a same-module handler and call
 `std.http.listen(world)` from `main`. The handler signature is
@@ -882,7 +941,7 @@ fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
     if std.http.requestIsGet(request, "/ping") {
         return std.http.writeJsonOk(response, "{\"message\":\"pong\"}")
     }
-    return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\"}")
+    return std.http.writeJsonError(response, 404, "not_found")
 }
 ```
 
@@ -937,7 +996,8 @@ Hosted file APIs can use explicit handles:
 ```zero
 pub fn main(world: World) -> Void raises {
     let fs: Fs = std.fs.host()
-    if std.fs.writeFile(fs, ".zero/out/log.txt", "hello\n") {
+    var read_buf: [32]u8 = [0_u8; 32]
+    if std.fs.writeFile(fs, ".zero/out/log.txt", "hello\n") && std.fs.readFileEquals(fs, ".zero/out/log.txt", read_buf, "hello\n") {
         check world.out.write("wrote\n")
     }
 }

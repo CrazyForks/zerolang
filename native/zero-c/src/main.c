@@ -37,6 +37,7 @@
 #include "program_graph_store_tables.h"
 #include "program_graph_test.h"
 #include "program_graph_view.h"
+#include "process_exec.h"
 #include "safety_contract.h"
 #include "std_sig.h"
 #include "std_source.h"
@@ -628,9 +629,7 @@ static const char *zero_commit(void) {
 }
 
 static bool command_available(const char *name) {
-  char command[128];
-  snprintf(command, sizeof(command), "command -v %s >/dev/null 2>&1", name);
-  return system(command) == 0;
+  return z_process_command_available(name);
 }
 
 typedef struct {
@@ -726,18 +725,27 @@ static bool write_runtime_compile_inputs(
   return true;
 }
 
+static const char *unsafe_cc_override_for_command(const Command *command) {
+  const char *cli = command && command->cc && command->cc[0] ? command->cc : NULL;
+  if (cli && !z_toolchain_compiler_override_safe(cli)) return cli;
+  const char *env = getenv("ZERO_CC");
+  if (env && env[0] && !z_toolchain_compiler_override_safe(env)) return env;
+  return NULL;
+}
+
 static bool compile_zero_runtime_object(const char *runtime_object_file, const ZToolchainPlan *plan, const Command *command, const ZTargetInfo *target, bool llvm_backend, ZDiag *diag) {
   RuntimeCompileInputs inputs = {0};
   if (!write_runtime_compile_inputs(runtime_object_file, ".zero_runtime.c", zero_embedded_zero_runtime_c, &inputs, diag)) return false;
   bool ok = z_toolchain_compile_c_object(plan, command ? command->profile : NULL, target, inputs.source_file, runtime_object_file, inputs.include_dir, "-std=c11 -Wall -Wextra -Wpedantic");
   runtime_compile_inputs_free(&inputs);
   if (!ok && diag) {
+    const char *unsafe_cc = unsafe_cc_override_for_command(command);
     diag->code = llvm_backend ? 2004 : 2003;
     diag->line = diag->column = diag->length = 1;
     snprintf(diag->message, sizeof(diag->message), "%s runtime object build failed", llvm_backend ? "LLVM" : "host");
     snprintf(diag->expected, sizeof(diag->expected), "%s", llvm_backend ? "clang can compile the embedded Zero runtime source for the LLVM executable link" : "C compiler can compile the embedded Zero runtime source");
-    snprintf(diag->actual, sizeof(diag->actual), "%s", llvm_backend ? "clang runtime object compile command failed" : "runtime object compile command failed");
-    snprintf(diag->help, sizeof(diag->help), "%s", llvm_backend ? "inspect the emitted LLVM IR, runtime object, and clang installation; use --emit llvm-ir to write the IR only" : "install a host C compiler or pass --cc for the runtime link plan");
+    snprintf(diag->actual, sizeof(diag->actual), "%s", unsafe_cc ? "compiler override contains unsafe shell characters" : (llvm_backend ? "clang runtime object compile command failed" : "runtime object compile command failed"));
+    snprintf(diag->help, sizeof(diag->help), "%s", unsafe_cc ? "pass a compiler path or command name without flags, whitespace, or shell syntax" : (llvm_backend ? "inspect the emitted LLVM IR, runtime object, and clang installation; use --emit llvm-ir to write the IR only" : "install a host C compiler or pass --cc for the runtime link plan"));
     if (llvm_backend) z_backend_blocker_set(&diag->backend_blocker, target && target->name ? target->name : "unknown", target && target->object_format ? target->object_format : "unknown", "llvm", "toolchain", "clang");
   }
   return ok;
@@ -749,14 +757,15 @@ static bool compile_zero_http_curl_object(const char *runtime_object_file, const
   bool ok = z_toolchain_compile_c_object(plan, command ? command->profile : NULL, target, inputs.source_file, runtime_object_file, inputs.include_dir, "-std=c11 -Wall -Wextra -Wpedantic");
   runtime_compile_inputs_free(&inputs);
   if (!ok && diag) {
+    const char *unsafe_cc = unsafe_cc_override_for_command(command);
     diag->code = 2003;
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
     snprintf(diag->message, sizeof(diag->message), "HTTP runtime provider build failed");
     snprintf(diag->expected, sizeof(diag->expected), "C compiler can compile the embedded HTTP provider source");
-    snprintf(diag->actual, sizeof(diag->actual), "HTTP provider compile command failed");
-    snprintf(diag->help, sizeof(diag->help), "install libcurl headers or pass --cc for the runtime link plan");
+    snprintf(diag->actual, sizeof(diag->actual), "%s", unsafe_cc ? "compiler override contains unsafe shell characters" : "HTTP provider compile command failed");
+    snprintf(diag->help, sizeof(diag->help), "%s", unsafe_cc ? "pass a compiler path or command name without flags, whitespace, or shell syntax" : "install libcurl headers or pass --cc for the runtime link plan");
   }
   return ok;
 }
@@ -973,17 +982,6 @@ static bool link_direct_object_executable(const char *object_file, const char *r
     snprintf(diag->help, sizeof(diag->help), http_object_file && http_object_file[0] ? "install libcurl or inspect the direct object, runtime objects, and host C linker diagnostics" : "inspect the direct object, optional runtime object, extern C link inputs, and host C linker diagnostics");
   }
   return ok;
-}
-
-static char *command_first_line(const char *command) {
-  FILE *pipe = popen(command, "r");
-  if (!pipe) return z_strdup("");
-  char line[256];
-  if (!fgets(line, sizeof(line), pipe)) line[0] = 0;
-  pclose(pipe);
-  size_t len = strlen(line);
-  while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = 0;
-  return z_strdup(line);
 }
 
 static bool path_exists(const char *path) {
@@ -1903,18 +1901,24 @@ static char *read_optional_file(const char *path) {
     return NULL;
   }
   long size = ftell(file);
-  if (size < 0) {
+  if (size < 0 || (size_t)size > SIZE_MAX - 1) {
     fclose(file);
     return NULL;
   }
-  rewind(file);
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    fclose(file);
+    return NULL;
+  }
   char *data = z_checked_calloc((size_t)size + 1, 1);
   if (size > 0 && fread(data, 1, (size_t)size, file) != (size_t)size) {
     free(data);
     fclose(file);
     return NULL;
   }
-  fclose(file);
+  if (fclose(file) != 0) {
+    free(data);
+    return NULL;
+  }
   return data;
 }
 
@@ -2170,17 +2174,22 @@ static bool json_array_nonempty_literal(const char *json) {
 }
 
 static bool compiler_cache_touch(const char *kind, uint64_t key) {
+  if (!kind || !kind[0]) return false;
   const char *cache_dir = getenv("ZERO_CACHE_DIR");
-  if (cache_dir && cache_dir[0]) zero_mkdir(cache_dir);
-  else { cache_dir = ".zero/cache/native"; zero_mkdir(".zero"); zero_mkdir(".zero/cache"); zero_mkdir(cache_dir); }
-  char path[1024];
-  snprintf(path, sizeof(path), "%s/%s-%016llx.cache", cache_dir, kind, (unsigned long long)key);
-  bool hit = path_exists(path);
-  FILE *file = fopen(path, "wb");
-  if (file) {
-    fprintf(file, "%s %016llx\n", kind, (unsigned long long)key);
-    fclose(file);
-  }
+  if (!cache_dir || !cache_dir[0]) cache_dir = ".zero/cache/native";
+  ZBuf path;
+  zbuf_init(&path);
+  zbuf_append(&path, cache_dir);
+  if (path.len > 0 && path.data[path.len - 1] != '/' && path.data[path.len - 1] != '\\') zbuf_append_char(&path, '/');
+  zbuf_appendf(&path, "%s-%016llx.cache", kind, (unsigned long long)key);
+  ZBuf text;
+  zbuf_init(&text);
+  zbuf_appendf(&text, "%s %016llx\n", kind, (unsigned long long)key);
+  bool hit = path.data && path_exists(path.data);
+  ZDiag ignored = {0};
+  if (path.data && text.data) z_write_file(path.data, text.data, &ignored);
+  zbuf_free(&text);
+  zbuf_free(&path);
   return hit;
 }
 
@@ -2210,6 +2219,57 @@ static void append_compiler_phases_json(ZBuf *buf, const SourceInput *input) {
   APPEND_PHASE("link", link_ms, false);
 #undef APPEND_PHASE
   zbuf_append(buf, "]");
+}
+
+static void append_graph_build_timing_facts_json(ZBuf *buf, const SourceInput *input) {
+  long long mir_load_or_lower_ms = 0;
+  if (input) {
+    mir_load_or_lower_ms =
+      input->graph_mir_cache_load_ms +
+      input->graph_mir_lower_ms +
+      input->graph_mir_cache_write_ms +
+      input->graph_mir_cache_reload_ms;
+  }
+  zbuf_append(buf, "{\"schemaVersion\":1,\"sourceKind\":\"program-graph\",\"unit\":\"ms\",\"phaseTiming\":true");
+  zbuf_append(buf, ",\"timings\":{");
+  zbuf_appendf(buf, "\"graphLoadMs\":%lld", input ? input->graph_load_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibMergeMs\":%lld", input ? input->graph_stdlib_merge_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibReferenceScanMs\":%lld", input ? input->graph_stdlib_reference_scan_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibCleanupMs\":%lld", input ? input->graph_stdlib_cleanup_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibModuleLoadMs\":%lld", input ? input->graph_stdlib_module_load_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibNodeMergeMs\":%lld", input ? input->graph_stdlib_node_merge_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibEdgeMergeMs\":%lld", input ? input->graph_stdlib_edge_merge_ms : 0);
+  zbuf_appendf(buf, ",\"stdlibFinalizeMs\":%lld", input ? input->graph_stdlib_finalize_ms : 0);
+  zbuf_appendf(buf, ",\"readinessCheckMs\":%lld", input ? input->graph_readiness_check_ms : 0);
+  zbuf_appendf(buf, ",\"mirCacheLoadMs\":%lld", input ? input->graph_mir_cache_load_ms : 0);
+  zbuf_appendf(buf, ",\"mirLowerMs\":%lld", input ? input->graph_mir_lower_ms : 0);
+  zbuf_appendf(buf, ",\"mirCacheWriteMs\":%lld", input ? input->graph_mir_cache_write_ms : 0);
+  zbuf_appendf(buf, ",\"mirCacheReloadMs\":%lld", input ? input->graph_mir_cache_reload_ms : 0);
+  zbuf_appendf(buf, ",\"mirLoadOrLowerMs\":%lld", mir_load_or_lower_ms);
+  zbuf_appendf(buf, ",\"lowerPhaseMs\":%lld", input ? input->lower_ms : 0);
+  zbuf_appendf(buf, ",\"codegenMs\":%lld", input ? input->codegen_ms : 0);
+  zbuf_appendf(buf, ",\"objectMs\":%lld", input ? input->object_ms : 0);
+  zbuf_appendf(buf, ",\"linkMs\":%lld", input ? input->link_ms : 0);
+  zbuf_append(buf, "}");
+  zbuf_appendf(buf, ",\"stdlibMerge\":{\"modulesMerged\":%zu,\"nodesMerged\":%zu,\"edgesMerged\":%zu,\"cacheHit\":%s,\"cacheStored\":%s}",
+               input ? input->graph_stdlib_modules_merged : 0,
+               input ? input->graph_stdlib_nodes_merged : 0,
+               input ? input->graph_stdlib_edges_merged : 0,
+               input && input->graph_stdlib_merge_cache_hit ? "true" : "false",
+               input && input->graph_stdlib_merge_cache_stored ? "true" : "false");
+  if (input && input->mapped_mir_cache_path) {
+    zbuf_append(buf, ",\"mappedFinalMir\":{\"path\":");
+    append_json_string(buf, input->mapped_mir_cache_path);
+    zbuf_appendf(buf, ",\"byteLength\":%zu,\"hit\":%s,\"written\":%s,\"memoryMapped\":%s,\"borrowedStorage\":%s,\"codegenImmediate\":%s,\"programReconstructed\":%s}",
+                 input->mapped_mir_cache_bytes,
+                 input->mapped_mir_cache_hit ? "true" : "false",
+                 input->mapped_mir_cache_written ? "true" : "false",
+                 input->mapped_mir_memory_mapped ? "true" : "false",
+                 input->mapped_mir_borrowed_storage ? "true" : "false",
+                 input->mapped_mir_codegen_immediate ? "true" : "false",
+                 input->mapped_mir_program_reconstructed ? "true" : "false");
+  }
+  zbuf_append(buf, "}");
 }
 
 static const char *GRAPH_CACHE_INPUTS_PARSE = "[\"graphHash\",\"stdlibGraph\",\"moduleHash\",\"nodeHashes\",\"typeFacts\",\"symbolFacts\",\"importGraph\",\"importPaths\",\"compilerVersion\",\"packageDependencies\"]";
@@ -4335,15 +4395,27 @@ static bool is_existing_directory_path(const char *path) {
   return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
+static bool read_file_prefix(const char *path, void *bytes, size_t len, size_t *out_read) {
+  if (out_read) *out_read = 0;
+  if (!path || !path[0] || !bytes || len == 0) return false;
+  FILE *file = fopen(path, "rb");
+  if (!file) return false;
+  size_t read = fread(bytes, 1, len, file);
+  if (out_read) *out_read = read;
+  if (ferror(file)) {
+    fclose(file);
+    return false;
+  }
+  if (fclose(file) != 0) return false;
+  return true;
+}
+
 static bool path_has_program_graph_storage_header(const char *path) {
   static const char graph_header[] = "zero-graph v";
   static const char repository_header[] = "zero-repository-graph v";
-  if (!path || !path[0]) return false;
-  FILE *file = fopen(path, "rb");
-  if (!file) return false;
   unsigned char bytes[32];
-  size_t read = fread(bytes, 1, sizeof(bytes), file);
-  fclose(file);
+  size_t read = 0;
+  if (!read_file_prefix(path, bytes, sizeof(bytes), &read)) return false;
   return (read >= sizeof(graph_header) - 1 && memcmp(bytes, graph_header, sizeof(graph_header) - 1) == 0) ||
          (read >= sizeof(repository_header) - 1 && memcmp(bytes, repository_header, sizeof(repository_header) - 1) == 0) ||
          z_program_graph_store_bytes_are_binary(bytes, read);
@@ -4387,12 +4459,9 @@ static void set_graph_patch_projection_input_diag(const char *input_path, const 
 
 static bool path_has_program_graph_patch_header(const char *path) {
   static const char header[] = "zero-program-graph-patch v1";
-  if (!path || !path[0]) return false;
-  FILE *file = fopen(path, "rb");
-  if (!file) return false;
   char bytes[sizeof(header) - 1];
-  size_t read = fread(bytes, 1, sizeof(bytes), file);
-  fclose(file);
+  size_t read = 0;
+  if (!read_file_prefix(path, bytes, sizeof(bytes), &read)) return false;
   return read == sizeof(bytes) && memcmp(bytes, header, sizeof(bytes)) == 0;
 }
 
@@ -4433,10 +4502,8 @@ static char *direct_join_path(const char *left, const char *right) {
 }
 
 static bool direct_file_exists(const char *path) {
-  FILE *file = fopen(path, "rb");
-  if (!file) return false;
-  fclose(file);
-  return true;
+  struct stat st;
+  return path && stat(path, &st) == 0;
 }
 
 static bool direct_input_has_file(const SourceInput *input, const char *path) {
@@ -5789,6 +5856,8 @@ typedef struct {
   bool zero_http_write_json_response;
   bool zero_http_request_method_name;
   bool zero_http_request_path;
+  bool zero_http_request_matches;
+  bool zero_http_request_body_within;
 } RuntimeImportAudit;
 
 static void runtime_import_audit_mark_fs_base(RuntimeImportAudit *audit) {
@@ -5988,12 +6057,10 @@ static void runtime_import_audit_value(const IrValue *value, RuntimeImportAudit 
     case IR_VALUE_HTTP_WRITE_JSON_RESPONSE:
       audit->zero_http_write_json_response = true;
       break;
-    case IR_VALUE_HTTP_REQUEST_METHOD_NAME:
-      audit->zero_http_request_method_name = true;
-      break;
-    case IR_VALUE_HTTP_REQUEST_PATH:
-      audit->zero_http_request_path = true;
-      break;
+    case IR_VALUE_HTTP_REQUEST_METHOD_NAME: audit->zero_http_request_method_name = true; break;
+    case IR_VALUE_HTTP_REQUEST_PATH: audit->zero_http_request_path = true; break;
+    case IR_VALUE_HTTP_REQUEST_MATCHES: audit->zero_http_request_matches = true; break;
+    case IR_VALUE_HTTP_REQUEST_BODY_WITHIN: audit->zero_http_request_body_within = true; break;
     default:
       break;
   }
@@ -6061,6 +6128,7 @@ static bool ir_value_needs_zero_runtime_object(const IrValue *value) {
       value->kind == IR_VALUE_FMT_I32 ||
       value->kind == IR_VALUE_FMT_U32 ||
       value->kind == IR_VALUE_FMT_USIZE ||
+      value->kind == IR_VALUE_FS_READ_BYTES_PATH ||
       value->kind == IR_VALUE_HTTP_FETCH ||
       value->kind == IR_VALUE_HTTP_RESULT_OK ||
       value->kind == IR_VALUE_HTTP_RESULT_STATUS ||
@@ -6075,6 +6143,8 @@ static bool ir_value_needs_zero_runtime_object(const IrValue *value) {
       value->kind == IR_VALUE_HTTP_HEADER_LEN ||
       value->kind == IR_VALUE_HTTP_WRITE_JSON_RESPONSE ||
       value->kind == IR_VALUE_HTTP_REQUEST_METHOD_NAME ||
+      value->kind == IR_VALUE_HTTP_REQUEST_MATCHES ||
+      value->kind == IR_VALUE_HTTP_REQUEST_BODY_WITHIN ||
       value->kind == IR_VALUE_HTTP_REQUEST_PATH) return true;
   if (ir_value_needs_zero_runtime_object(value->index) ||
       ir_value_needs_zero_runtime_object(value->left) ||
@@ -6155,6 +6225,8 @@ static size_t native_zero_runtime_import_count(const RuntimeImportAudit *audit) 
   if (audit->zero_http_write_json_response) count++;
   if (audit->zero_http_request_method_name) count++;
   if (audit->zero_http_request_path) count++;
+  if (audit->zero_http_request_matches) count++;
+  if (audit->zero_http_request_body_within) count++;
   return count;
 }
 
@@ -6220,6 +6292,8 @@ static bool append_runtime_import_functions_json(ZBuf *buf, const RuntimeImportA
   if (audit && audit->zero_http_write_json_response) append_json_string_array_item(buf, &first, "zero_http_write_json_response");
   if (audit && audit->zero_http_request_method_name) append_json_string_array_item(buf, &first, "zero_http_request_method_name");
   if (audit && audit->zero_http_request_path) append_json_string_array_item(buf, &first, "zero_http_request_path");
+  if (audit && audit->zero_http_request_matches) append_json_string_array_item(buf, &first, "zero_http_request_matches");
+  if (audit && audit->zero_http_request_body_within) append_json_string_array_item(buf, &first, "zero_http_request_body_within");
   zbuf_append(buf, "]");
   return !first;
 }
@@ -6884,6 +6958,10 @@ static void print_build_json(const Command *command, const SourceInput *input, c
   zbuf_init(&extra);
   zbuf_append(&extra, ",\n  \"compilerPhases\": ");
   append_compiler_phases_json(&extra, input);
+  if (command && z_program_graph_artifact_source_present(&command->graph_source)) {
+    zbuf_append(&extra, ",\n  \"graphBuild\": ");
+    append_graph_build_timing_facts_json(&extra, input);
+  }
   zbuf_append(&extra, ",\n  \"compilerCaches\": ");
   if (command && z_program_graph_artifact_source_present(&command->graph_source)) append_compiler_caches_json_ex(&extra, input, target, command->profile, "program-graph", command->graph_source.graph_hash);
   else append_compiler_caches_json(&extra, input, target, command->profile);
@@ -6970,7 +7048,8 @@ static int print_version_command(bool json) {
   bool target_cc_override = zero_cc && zero_cc[0];
   bool bundled_target_cc_available = command_available("zig");
   bool target_cc_available = target_cc_override || bundled_target_cc_available;
-  char *target_cc_version = target_cc_override ? z_strdup("configured via ZERO_CC") : (bundled_target_cc_available ? command_first_line("zig version 2>/dev/null") : z_strdup(""));
+  const char *const zig_version_argv[] = {"zig", "version", NULL};
+  char *target_cc_version = target_cc_override ? z_strdup("configured via ZERO_CC") : (bundled_target_cc_available ? z_process_first_stdout_line(zig_version_argv, true) : z_strdup(""));
 
   ZBuf buf;
   zbuf_init(&buf);
@@ -7471,8 +7550,10 @@ static int doctor_command(bool json) {
   overall = worse_status(overall, (zero_dir_ok && write_ok) ? "ok" : "error");
   overall = worse_status(overall, docs_ok ? "ok" : "warning");
 
-  char *cc_message = cc_ok ? command_first_line("cc --version 2>/dev/null") : z_strdup("no native C compiler found on PATH");
-  char *target_cc_message = target_cc_override ? z_strdup("configured via ZERO_CC") : (bundled_target_cc_ok ? command_first_line("zig version 2>/dev/null") : z_strdup("target-capable C compiler not found; cross-target executable builds may be unavailable"));
+  const char *const cc_version_argv[] = {"cc", "--version", NULL};
+  const char *const zig_version_argv[] = {"zig", "version", NULL};
+  char *cc_message = cc_ok ? z_process_first_stdout_line(cc_version_argv, true) : z_strdup("no native C compiler found on PATH");
+  char *target_cc_message = target_cc_override ? z_strdup("configured via ZERO_CC") : (bundled_target_cc_ok ? z_process_first_stdout_line(zig_version_argv, true) : z_strdup("target-capable C compiler not found; cross-target executable builds may be unavailable"));
 
   if (json) {
     ZBuf buf;
@@ -10451,7 +10532,7 @@ static bool validate_package_dependencies_for_target(const SourceInput *input, c
 
 static bool self_host_caps_allowed(const CapabilitySummary *caps) {
   if (!caps) return true;
-  return !caps->fs && !caps->time && !caps->rand && !caps->net && !caps->proc && !caps->web;
+  return !caps->web;
 }
 
 static bool self_host_subset_compatible(const Program *program, const CapabilitySummary *caps) {
@@ -10469,7 +10550,7 @@ static void append_self_host_subset_json(ZBuf *buf, const Program *program, cons
   zbuf_append(buf, ",\"backend\":\"native-direct\"");
   zbuf_append(buf, ",\"selectedTarget\":");
   append_json_string(buf, target && target->name ? target->name : "host");
-  zbuf_append(buf, ",\"allowedCapabilities\":[\"memory\",\"alloc\",\"path\",\"codec\",\"parse\",\"args\",\"env\",\"World.stdout\",\"World.stderr\"]");
+  zbuf_append(buf, ",\"allowedCapabilities\":[\"memory\",\"alloc\",\"path\",\"codec\",\"parse\",\"args\",\"env\",\"fs\",\"time\",\"rand\",\"net\",\"proc\",\"World.stdout\",\"World.stderr\"]");
   zbuf_appendf(buf, ",\"cInterop\":{\"headerImports\":%s,\"typedBindings\":%s,\"generatedCRequired\":false,\"externalCallBoundary\":\"direct-abi-audit\"}", program && program->c_imports.len > 0 ? "true" : "false", program && program->c_imports.len > 0 ? "true" : "false");
   zbuf_append(buf, ",\"blockedReasons\":[");
   bool wrote = false;
@@ -10480,11 +10561,6 @@ static void append_self_host_subset_json(ZBuf *buf, const Program *program, cons
       wrote = true; \
     } \
   } while (0)
-  APPEND_BLOCKED_CAP(fs, "fs");
-  APPEND_BLOCKED_CAP(time, "time");
-  APPEND_BLOCKED_CAP(rand, "rand");
-  APPEND_BLOCKED_CAP(net, "net");
-  APPEND_BLOCKED_CAP(proc, "proc");
   APPEND_BLOCKED_CAP(web, "web");
 #undef APPEND_BLOCKED_CAP
   zbuf_append(buf, "],\"sourceForms\":[\"package-local-modules\",\"functions\",\"while\",\"if\",\"return\",\"fixed-arrays\",\"primitive-locals\",\"shape\",\"enum\",\"minimal-choice\",\"strings\",\"byte-spans\",\"fallibility\",\"explicit-alloc\"]");
@@ -10495,7 +10571,7 @@ static void append_self_host_subset_json(ZBuf *buf, const Program *program, cons
   zbuf_append(buf, ",\"fallibility\":{\"status\":\"staged\",\"directLowering\":false}");
   zbuf_append(buf, ",\"containers\":{\"status\":\"staged-explicit-storage\",\"directLowering\":false}");
   zbuf_append(buf, ",\"generics\":{\"status\":\"staged-concrete-specializations-only\",\"runtimeMetadata\":false}");
-  zbuf_append(buf, "},\"targetLimitations\":[\"no-host-fs\",\"no-subprocesses\",\"hosted-runtime-limited-to-world-stdio\",\"external-c-calls-require-target-library-audit\"]}");
+  zbuf_append(buf, "},\"targetLimitations\":[\"hosted-runtime-checked-per-mir\",\"external-c-calls-require-target-library-audit\"]}");
 }
 
 static void append_self_host_routing_json(ZBuf *buf, const char *command_name, const char *emit_kind, const Program *program, const CapabilitySummary *caps, const ZTargetInfo *target) {

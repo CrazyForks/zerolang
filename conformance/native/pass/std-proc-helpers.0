@@ -1,0 +1,6 @@
+pub fn main(world: World) -> Void raises {
+    let code: i32 = std.proc.runCode("zero-noop")
+    if std.proc.runOk("zero-noop") && code == 0 {
+        check world.out.write("std proc helpers ok\n")
+    }
+}

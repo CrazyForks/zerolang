@@ -272,6 +272,39 @@ fn __zero_std_url_query_value(query: Span<u8>, key: Span<u8>) -> Maybe<Span<u8>>
     return null
 }
 
+fn __zero_std_url_query_value_decoded(buffer: MutSpan<u8>, query: Span<u8>, key: Span<u8>) -> Maybe<Span<u8>> {
+    var start: usize = 0
+    while start <= std.mem.len(query) {
+        var end: usize = start
+        while end < std.mem.len(query) && query[end] != 38_u8 {
+            end = end + 1
+        }
+        var eq: usize = start
+        while eq < end && query[eq] != 61_u8 {
+            eq = eq + 1
+        }
+        let name: Span<u8> = query[start..eq]
+        var matched: Bool = std.mem.eql(name, key)
+        if !matched {
+            let decoded_name: Maybe<Span<u8>> = __zero_std_url_query_unescape(buffer, name)
+            if decoded_name.has {
+                matched = std.mem.eql(decoded_name.value, key)
+            }
+        }
+        if matched {
+            if eq < end {
+                return __zero_std_url_query_unescape(buffer, query[eq + 1..end])
+            }
+            return buffer[..0]
+        }
+        if end == std.mem.len(query) {
+            return null
+        }
+        start = end + 1
+    }
+    return null
+}
+
 fn __zero_std_url_write_query_param(buffer: MutSpan<u8>, key: Span<u8>, value: Span<u8>) -> Maybe<Span<u8>> {
     var output: usize = 0
     let encoded_key: Maybe<Span<u8>> = __zero_std_url_query_escape(buffer, key)
@@ -290,6 +323,50 @@ fn __zero_std_url_write_query_param(buffer: MutSpan<u8>, key: Span<u8>, value: S
     }
     output = output + std.mem.len(encoded_value.value)
     return buffer[..output]
+}
+
+fn __zero_std_url_write_form_field(buffer: MutSpan<u8>, key: Span<u8>, value: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_url_write_query_param(buffer, key, value)
+}
+
+fn __zero_std_url_append_form_field(buffer: MutSpan<u8>, form: Span<u8>, field: Span<u8>) -> Maybe<Span<u8>> {
+    let form_len: usize = std.mem.len(form)
+    let field_len: usize = std.mem.len(field)
+    if form_len == 0_usize {
+        if field_len > std.mem.len(buffer) {
+            return null
+        }
+        var field_index: usize = 0
+        while field_index < field_len {
+            buffer[field_index] = field[field_index]
+            field_index = field_index + 1
+        }
+        return buffer[..field_len]
+    }
+    if form_len >= std.mem.len(buffer) {
+        return null
+    }
+    if field_len > std.mem.len(buffer) - form_len - 1_usize {
+        return null
+    }
+    var output: usize = 0
+    while output < form_len {
+        buffer[output] = form[output]
+        output = output + 1
+    }
+    buffer[output] = 38_u8
+    output = output + 1
+    var field_index: usize = 0
+    while field_index < field_len {
+        buffer[output] = field[field_index]
+        output = output + 1
+        field_index = field_index + 1
+    }
+    return buffer[..output]
+}
+
+fn __zero_std_url_form_value(buffer: MutSpan<u8>, form: Span<u8>, key: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_url_query_value_decoded(buffer, form, key)
 }
 
 fn __zero_std_url_append_query(buffer: MutSpan<u8>, base: Span<u8>, query: Span<u8>) -> Maybe<Span<u8>> {

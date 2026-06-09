@@ -2300,6 +2300,8 @@ const graphDumpJsonPath = join(outDir, "hello.dump-json.program-graph");
 const graphStableSiblingSourcePath = join(outDir, "hello-stable-sibling.0");
 const graphImportPath = join(outDir, "hello.imported.program-graph");
 const graphImportJsonPath = join(outDir, "hello.imported-json.program-graph");
+const graphImportDirectorySourcePath = join(outDir, "hello-source-directory.0");
+const graphImportDirectoryOutPath = join(outDir, "hello-source-directory.program-graph");
 const graphInspectOutPath = join(outDir, "hello.inspect.json");
 const graphSourceMapOutPath = join(outDir, "hello.source-map.json");
 const graphReconcileBasePath = join(outDir, "hello.reconcile-base.program-graph");
@@ -2319,6 +2321,8 @@ const graphRecordDirectLlvmIrPath = join(outDir, "repository-graph-record-direct
 const graphRecordLlvmIrPath = join(outDir, "repository-graph-record.ll");
 const graphViewPath = join(outDir, "hello.graph-view.0");
 const graphViewWrongOutPath = join(outDir, "hello.program-graph.txt");
+const graphViewParentFilePath = join(outDir, "hello.graph-view-parent-file");
+const graphViewParentFileOutPath = join(graphViewParentFilePath, "out.0");
 const graphCheckViewPath = join(outDir, "hello.checked.graph-view.0");
 const graphSizePath = join(outDir, "hello.program-graph.size.json");
 const graphBuildPath = join(outDir, "hello.program-graph-build");
@@ -2350,6 +2354,8 @@ const graphSourceRoundtripSourceTextPath = join(outDir, "hello.source-roundtrip.
 const graphArtifactRoundtripPath = join(outDir, "hello.roundtrip.program-graph");
 const graphArtifactRoundtripSourceTextPath = join(outDir, "hello.roundtrip.0");
 const graphPatchPath = join(outDir, "hello.program-graph.patch");
+const graphPatchDirectoryPath = join(outDir, "hello.program-graph.patch-directory");
+const graphPatchDirectoryOutPath = join(outDir, "hello.directory-patch.program-graph");
 const graphPatchedPath = join(outDir, "hello.patched.program-graph");
 const graphInlinePatchedPath = join(outDir, "hello.inline-patched.program-graph");
 const graphPatchInsertPath = join(outDir, "hello.insert.program-graph.patch");
@@ -2363,6 +2369,10 @@ const graphDeletedNodeFactPath = join(outDir, "hello.delete-node-fact.program-gr
 const graphRepositoryPatchPackageDir = join(outDir, "repository-graph-patch-package");
 const graphRepositoryBodyPatchPath = join(outDir, "repository-graph.replace-body.patch");
 const graphRepositoryBlockPatchPath = join(outDir, "repository-graph.replace-block.patch");
+const graphRepositoryInvalidBlockRowsPatchPath = join(outDir, "repository-graph.invalid-block-rows.patch");
+const graphRepositoryCheckExprPatchPath = join(outDir, "repository-graph.check-expr.patch");
+const graphRepositoryRowErgonomicsPatchPath = join(outDir, "repository-graph.row-ergonomics.patch");
+const graphRepositoryInvalidRowsPatchPath = join(outDir, "repository-graph.invalid-rows.patch");
 const graphRepositoryInvalidBodyPatchPath = join(outDir, "repository-graph.invalid-body.patch");
 const graphPatchDeleteExternalRootRefPath = join(outDir, "hello.delete-external-root-ref.program-graph.patch");
 const graphPatchDeleteExtraOwnerPath = join(outDir, "hello.delete-extra-owner.program-graph.patch");
@@ -2413,6 +2423,8 @@ rmSync(graphDumpJsonPath, { force: true });
 rmSync(graphStableSiblingSourcePath, { force: true });
 rmSync(graphImportPath, { force: true });
 rmSync(graphImportJsonPath, { force: true });
+rmSync(graphImportDirectorySourcePath, { recursive: true, force: true });
+rmSync(graphImportDirectoryOutPath, { force: true });
 rmSync(graphCanonicalPath, { force: true });
 rmSync(graphSourceTextOutPath, { force: true });
 rmSync(graphValidateSourceTextOutPath, { force: true });
@@ -2426,6 +2438,7 @@ rmSync(graphRecordDirectLlvmIrPath, { force: true });
 rmSync(graphRecordLlvmIrPath, { force: true });
 rmSync(graphViewPath, { force: true });
 rmSync(graphViewWrongOutPath, { force: true });
+rmSync(graphViewParentFilePath, { force: true, recursive: true });
 rmSync(graphCheckViewPath, { force: true });
 rmSync(graphSizePath, { force: true });
 rmSync(graphBuildPath, { force: true });
@@ -2450,6 +2463,8 @@ rmSync(graphSourceRoundtripSourceTextPath, { force: true });
 rmSync(graphArtifactRoundtripPath, { force: true });
 rmSync(graphArtifactRoundtripSourceTextPath, { force: true });
 rmSync(graphPatchPath, { force: true });
+rmSync(graphPatchDirectoryPath, { recursive: true, force: true });
+rmSync(graphPatchDirectoryOutPath, { force: true });
 rmSync(graphPatchedPath, { force: true });
 rmSync(graphInlinePatchedPath, { force: true });
 rmSync(graphPatchInsertPath, { force: true });
@@ -2544,6 +2559,12 @@ assert.equal(graphImportOutJson.validation.ok, true);
 assert.equal(graphImportOutJson.saved.path, graphImportJsonPath);
 assert.equal(readFileSync(graphImportJsonPath, "utf8"), graphImportText);
 assert.equal(zero(["validate", graphImportJsonPath]).stdout, "program graph ok\n");
+mkdirSync(graphImportDirectorySourcePath, { recursive: true });
+const graphImportDirectoryJson = json(["import", "--json", "--out", graphImportDirectoryOutPath, graphImportDirectorySourcePath], { allowFailure: true });
+assert.notEqual(graphImportDirectoryJson.code, 0);
+assert.equal(graphImportDirectoryJson.body.diagnostics[0].path, graphImportDirectorySourcePath);
+assert.match(graphImportDirectoryJson.body.diagnostics[0].message, /^failed to read '.+hello-source-directory\.0': /);
+assert.equal(existsSync(graphImportDirectoryOutPath), false);
 const graphInspectJson = json(["inspect", "--json", "examples/hello.0"]).body;
 assert.equal(graphInspectJson.schemaVersion, 1);
 assert.match(graphInspectJson.programGraph.graphHash, /^graph:[0-9a-f]{16}$/);
@@ -2668,6 +2689,19 @@ assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, 
 const repositoryBlockQueryJson = json(["query", "--json", "--find", "Block", graphRepositoryPatchPackageDir]).body;
 const repositoryThenBlock = repositoryBlockQueryJson.matches.find((node) => node.kind === "Block" && node.name === "then");
 assert(repositoryThenBlock, "expected replaceFunctionBody patch to expose a then block handle");
+writeFileSync(graphRepositoryInvalidBlockRowsPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryBlockQueryJson.graphHash}"`,
+  `replaceBlockBody ${repositoryThenBlock.id}`,
+  "  check world.out.write \"name: \"",
+  "  let same Bool = std.mem.eql (std.mem.span name \"Ada\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryInvalidBlockRowsDryRun = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryInvalidBlockRowsPatchPath], { allowFailure: true });
+assert.notEqual(repositoryInvalidBlockRowsDryRun.code, 0);
+assert.equal(repositoryInvalidBlockRowsDryRun.body.diagnostic.code, "GPH001");
+assert.match(repositoryInvalidBlockRowsDryRun.body.diagnostic.actual, /row 2: let same Bool = std\.mem\.eql/);
 writeFileSync(graphRepositoryBlockPatchPath, [
   "zero-program-graph-patch v1",
   `expect graphHash "${repositoryBlockQueryJson.graphHash}"`,
@@ -2694,7 +2728,75 @@ assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, 
 assert.match(zero(["status", graphRepositoryPatchPackageDir]).stdout, /source-stale/);
 assert.match(zero(["export", graphRepositoryPatchPackageDir]).stdout, /repository graph export ok/);
 assert.equal(zero(["verify-projection", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-projection ok\n");
+const repositoryRowQueryJson = json(["query", "--json", graphRepositoryPatchPackageDir]).body;
+writeFileSync(graphRepositoryCheckExprPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryRowQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  var path_storage [32]u8 = repeat 0_u8 32",
+  "  let name String = check std.path.join path_storage \".zero\" \"row-ergonomics\"",
+  "  if !std.mem.eql name \".zero/row-ergonomics\"",
+  "    check world.err.write \"wrong name\\n\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryCheckExprDryRunJson = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryCheckExprPatchPath]).body;
+assert.equal(repositoryCheckExprDryRunJson.ok, true);
+assert.equal(repositoryCheckExprDryRunJson.checkOnly, true);
+assert.equal(repositoryCheckExprDryRunJson.saved, null);
+assert.equal(repositoryCheckExprDryRunJson.operations[0].op, "replaceFunctionBody");
+writeFileSync(graphRepositoryRowErgonomicsPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryRowQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  let name String = \".zero/row-ergonomics\"",
+  "  let same Bool = std.mem.eql (std.mem.span name) \".zero/row-ergonomics\"",
+  "  let status i32 = 200_u16 as i32",
+  "  let count i32 = 2",
+  "  let math Bool = count + 1 > 2",
+  "  if !same || status != 200",
+  "    check world.err.write \"wrong name\\n\"",
+  "  else if math || status == 200",
+  "    check world.out.write \"row ergonomics ok\\n\"",
+  "    return",
+  "  else",
+  "    return",
+  "end",
+  "",
+].join("\n"));
+const repositoryRowErgonomicsDryRunJson = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryRowErgonomicsPatchPath]).body;
+assert.equal(repositoryRowErgonomicsDryRunJson.ok, true);
+assert.equal(repositoryRowErgonomicsDryRunJson.checkOnly, true);
+assert.equal(repositoryRowErgonomicsDryRunJson.saved, null);
+const repositoryRowErgonomicsPatchJson = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryRowErgonomicsPatchPath]).body;
+assert.equal(repositoryRowErgonomicsPatchJson.ok, true);
+assert.equal(repositoryRowErgonomicsPatchJson.operations[0].op, "replaceFunctionBody");
+const repositoryRowErgonomicsView = zero(["view", graphRepositoryPatchPackageDir]).stdout;
+assert.match(repositoryRowErgonomicsView, /let name: String = "\.zero\/row-ergonomics"/);
+assert.match(repositoryRowErgonomicsView, /let same: Bool = std\.mem\.eql\(std\.mem\.span\(name\), "\.zero\/row-ergonomics"\)/);
+assert.match(repositoryRowErgonomicsView, /let status: i32 = 200_u16 as i32/);
+assert.match(repositoryRowErgonomicsView, /let math: Bool = count \+ 1 > 2/);
+assert.match(repositoryRowErgonomicsView, /if !same \|\| status != 200/);
+assert.match(repositoryRowErgonomicsView, /else if math \|\| status == 200/);
+assert.match(repositoryRowErgonomicsView, /return/);
+assert.equal(zero(["check", graphRepositoryPatchPackageDir]).stdout, "ok\n");
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, "row ergonomics ok\n");
+assert.match(zero(["export", graphRepositoryPatchPackageDir]).stdout, /repository graph export ok/);
+assert.equal(zero(["verify-projection", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-projection ok\n");
 const repositorySyncedQueryJson = json(["query", "--json", graphRepositoryPatchPackageDir]).body;
+writeFileSync(graphRepositoryInvalidRowsPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositorySyncedQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  let name String = \"Ada\"",
+  "  let same Bool = std.mem.eql (std.mem.span name \"Ada\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryInvalidRowsDryRun = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryInvalidRowsPatchPath], { allowFailure: true });
+assert.notEqual(repositoryInvalidRowsDryRun.code, 0);
+assert.equal(repositoryInvalidRowsDryRun.body.diagnostic.code, "GPH001");
+assert.match(repositoryInvalidRowsDryRun.body.diagnostic.actual, /row 2: let same Bool = std\.mem\.eql/);
 writeFileSync(graphRepositoryInvalidBodyPatchPath, [
   "zero-program-graph-patch v1",
   `expect graphHash "${repositorySyncedQueryJson.graphHash}"`,
@@ -2902,6 +3004,21 @@ assert.equal(invalidRepoGraphStoreCheck.body.repositoryGraph.storeValid, false);
 assert.equal(invalidRepoGraphStoreCheck.body.diagnostics[0].code, "RGP003");
 assert.equal(invalidRepoGraphStoreCheck.body.diagnostics[0].path, invalidRepoGraphStoreRoot);
 assert.match(invalidRepoGraphStoreCheck.body.repairCommands.join("\n"), /zero import/);
+const directoryRepoGraphStoreRoot = join(outDir, "repository-graph-directory-store");
+rmSync(directoryRepoGraphStoreRoot, { recursive: true, force: true });
+mkdirSync(join(directoryRepoGraphStoreRoot, "zero.graph"), { recursive: true });
+writeZeroTomlSync(directoryRepoGraphStoreRoot, {
+  package: { name: "repository-graph-directory-store", version: "0.1.0" },
+  targets: { cli: { kind: "exe", main: "main.0" } },
+});
+writeFileSync(join(directoryRepoGraphStoreRoot, "main.0"), "pub fn main() -> i32 { return 0 }\n");
+const directoryRepoGraphStoreCheck = json(["check", "--json", directoryRepoGraphStoreRoot], { allowFailure: true });
+assert.notEqual(directoryRepoGraphStoreCheck.code, 0);
+assert.equal(directoryRepoGraphStoreCheck.body.ok, false);
+assert.equal(directoryRepoGraphStoreCheck.body.repositoryGraph.storePresent, true);
+assert.equal(directoryRepoGraphStoreCheck.body.repositoryGraph.projectionState, "store-invalid");
+assert.equal(directoryRepoGraphStoreCheck.body.diagnostics[0].code, "RGP003");
+assert.equal(directoryRepoGraphStoreCheck.body.diagnostics[0].actual, "failed to read repository graph store");
 const sourceFreeGraphPackageRoot = join(outDir, "source-free-graph-package");
 rmSync(sourceFreeGraphPackageRoot, { recursive: true, force: true });
 mkdirSync(join(sourceFreeGraphPackageRoot, "src"), { recursive: true });
@@ -3179,6 +3296,12 @@ assert.notEqual(graphViewWrongOutJson.code, 0);
 assert.equal(graphViewWrongOutJson.body.diagnostics[0].message, "graph view output must use .0 extension");
 assert.equal(graphViewWrongOutJson.body.diagnostics[0].expected, "zero view --out <file.0> [graph-input]");
 assert.equal(existsSync(graphViewWrongOutPath), false);
+writeFileSync(graphViewParentFilePath, "");
+const graphViewParentFileJson = json(["view", "--json", "--out", graphViewParentFileOutPath, graphDumpPath], { allowFailure: true });
+assert.notEqual(graphViewParentFileJson.code, 0);
+assert.equal(graphViewParentFileJson.body.diagnostics[0].path, graphViewParentFileOutPath);
+assert.equal(graphViewParentFileJson.body.diagnostics[0].message, `path component is not a directory: '${graphViewParentFilePath}'`);
+assert.equal(existsSync(graphViewParentFileOutPath), false);
 const graphDiffOutJson = json(["diff", "--json", "--out", graphViewPath, graphDumpPath], { allowFailure: true });
 assert.notEqual(graphDiffOutJson.code, 0);
 assert.equal(graphDiffOutJson.body.diagnostics[0].message, "diff textconv output does not support --out");
@@ -3501,6 +3624,12 @@ assert.equal(graphPatchJson.operations[0].actual, "hello from zero\n");
 assert.equal(graphPatchJson.operations[0].value, "hello patched\n");
 assert.equal(graphPatchJson.diagnostic, null);
 assert.equal(graphPatchJson.saved.path, graphPatchedPath);
+mkdirSync(graphPatchDirectoryPath, { recursive: true });
+const graphPatchDirectoryJson = json(["patch", "--json", "--out", graphPatchDirectoryOutPath, graphDumpPath, graphPatchDirectoryPath], { allowFailure: true });
+assert.notEqual(graphPatchDirectoryJson.code, 0);
+assert.equal(graphPatchDirectoryJson.body.diagnostics[0].path, graphPatchDirectoryPath);
+assert.match(graphPatchDirectoryJson.body.diagnostics[0].message, /^failed to read '.+hello\.program-graph\.patch-directory': /);
+assert.equal(existsSync(graphPatchDirectoryOutPath), false);
 assert.equal(zero(["validate", graphPatchedPath]).stdout, "program graph ok\n");
 assert.match(zero(["view", graphPatchedPath]).stdout, /check world\.out\.write\("hello patched\\n"\)/);
 assert.equal(zero(["check", graphPatchedPath]).stdout, "ok\n");

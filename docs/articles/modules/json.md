@@ -35,6 +35,17 @@ Runnable today:
 | `std.json.writeObject1String(buffer, key, value)` | `Maybe<Span<u8>>` | Writes a one-field object with a string value. |
 | `std.json.writeObject1U32(buffer, key, value)` | `Maybe<Span<u8>>` | Writes a one-field object with a `u32` value. |
 | `std.json.writeObject1Bool(buffer, key, value)` | `Maybe<Span<u8>>` | Writes a one-field object with a bool value. |
+| `std.json.writeFieldRaw(buffer, key, value)` | `Maybe<Span<u8>>` | Writes one object field from a key and validated raw JSON value. |
+| `std.json.writeFieldString(buffer, key, value)` | `Maybe<Span<u8>>` | Writes one object field with an escaped string value. |
+| `std.json.writeFieldU32(buffer, key, value)` | `Maybe<Span<u8>>` | Writes one object field with a `u32` value. |
+| `std.json.writeFieldBool(buffer, key, value)` | `Maybe<Span<u8>>` | Writes one object field with a bool value. |
+| `std.json.writeObject2Fields(buffer, field0, field1)` | `Maybe<Span<u8>>` | Writes a two-field object from field fragments and validates the final object. |
+| `std.json.writeObject2StringField(buffer, key, value, field1)` | `Maybe<Span<u8>>` | Writes a two-field object from a string field and a prebuilt field fragment. |
+| `std.json.writeObject2U32Field(buffer, key, value, field1)` | `Maybe<Span<u8>>` | Writes a two-field object from a `u32` field and a prebuilt field fragment. |
+| `std.json.writeObject2BoolField(buffer, key, value, field1)` | `Maybe<Span<u8>>` | Writes a two-field object from a bool field and a prebuilt field fragment. |
+| `std.json.writeArray2Strings(buffer, value0, value1)` | `Maybe<Span<u8>>` | Writes a two-item array with escaped string values. |
+| `std.json.writeArray2U32(buffer, value0, value1)` | `Maybe<Span<u8>>` | Writes a two-item array with `u32` values. |
+| `std.json.writeArray2Bools(buffer, value0, value1)` | `Maybe<Span<u8>>` | Writes a two-item array with bool values. |
 
 Metadata labels:
 
@@ -84,10 +95,27 @@ pub fn main(world: World) -> Void raises {
     var name_buf: [8]u8 = [0_u8; 8]
     let name: Maybe<Span<u8>> = std.json.string(name_buf, input, "name")
     let count: Maybe<u32> = std.json.u32(input, "count")
-    var out: [24]u8 = [0_u8; 24]
-    let written: Maybe<Span<u8>> = std.json.writeObject1U32(out, "count", 42_u32)
+    var count_field_buf: [24]u8 = [0_u8; 24]
+    let count_field: Maybe<Span<u8>> = std.json.writeFieldU32(count_field_buf, "count", 42_u32)
+    var out: [48]u8 = [0_u8; 48]
+    var written: Maybe<Span<u8>> = null
+    if count_field.has {
+        written = std.json.writeObject2StringField(out, "name", "zero", count_field.value)
+    }
     if name.has && count.has && written.has && std.json.validateError(written.value) == std.json.errorNone() {
         check world.out.write("json lookup ok\n")
+    }
+}
+```
+
+Small array responses use the same caller-buffer pattern:
+
+```zero
+pub fn main(world: World) -> Void raises {
+    var out: [32]u8 = [0_u8; 32]
+    let tags: Maybe<Span<u8>> = std.json.writeArray2Strings(out, "api", "agent")
+    if tags.has {
+        check world.out.write(tags.value)
     }
 }
 ```

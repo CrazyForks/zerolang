@@ -81,3 +81,19 @@ fn __zero_std_fs_copy_file(from_path: String, to_path: String, buffer: MutSpan<u
     std.fs.close(&mut dst)
     return ok
 }
+
+fn __zero_std_fs_read_file_bytes(fs: Fs, path: String, buffer: MutSpan<u8>) -> Maybe<Span<u8>> {
+    let count: Maybe<usize> = std.fs.readBytes(path, buffer)
+    if count.has {
+        return buffer[..count.value]
+    }
+    return null
+}
+
+fn __zero_std_fs_read_file_equals(fs: Fs, path: String, buffer: MutSpan<u8>, expected: Span<u8>) -> Bool {
+    let bytes: Maybe<Span<u8>> = std.fs.readFileBytes(fs, path, buffer)
+    if bytes.has {
+        return std.mem.eqlBytes(bytes.value, expected)
+    }
+    return false
+}

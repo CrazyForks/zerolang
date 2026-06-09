@@ -15,6 +15,11 @@ Runnable today:
 | API | Return | Notes |
 | --- | --- | --- |
 | `std.cli.argEquals(index, expected)` | `Bool` | Checks one argument against an exact string. |
+| `std.cli.command()` | `Maybe<String>` | Returns argument 1 as the command name. |
+| `std.cli.commandOr(fallback)` | `String` | Returns the command name or a fallback. |
+| `std.cli.commandEquals(expected)` | `Bool` | Checks argument 1 against an exact command string. |
+| `std.cli.argOr(index, fallback)` | `String` | Returns an argument or a fallback. |
+| `std.cli.argU32Or(index, fallback)` | `u32` | Parses an argument as `u32` or returns a fallback. |
 | `std.cli.hasFlag(name)` | `Bool` | Reports whether an exact flag is present. |
 | `std.cli.optionValue(name)` | `Maybe<String>` | Returns the value immediately after an option name. |
 | `std.cli.optionValueOr(name, fallback)` | `String` | Returns the option value or a fallback. |
@@ -32,16 +37,19 @@ Current limits:
 
 ```zero
 pub fn main(world: World) -> Void raises {
-    let name: String = std.cli.optionValueOr("--name", "zero")
-    let count: Maybe<u32> = std.cli.optionU32("--count")
-    if std.cli.hasFlag("--json") && count.has {
+    if std.cli.commandEquals("hello") {
+        let name: String = std.cli.argOr(2, "world")
+        check world.out.write("hello ")
         check world.out.write(name)
         check world.out.write("\n")
+        return
     }
+    check world.err.write("usage: zero run -- hello [name]\n")
 }
 ```
 
 ## Design Notes
 
-`std.cli` is a thin, hosted layer over `std.args`. It does not hide process
-arguments behind a global parser, and it does not allocate.
+`std.cli` is a thin, hosted layer over `std.args`. It keeps subcommand, fallback,
+and typed argument patterns regular without hiding process arguments behind a
+global parser.

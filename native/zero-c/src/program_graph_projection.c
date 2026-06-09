@@ -10,6 +10,9 @@
 #include "zero.h"
 
 #include <errno.h>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -34,6 +37,12 @@ typedef struct {
   size_t len;
   size_t cap;
 } ProjectionWritePlan;
+
+typedef enum {
+  PROJECTION_TEMP_WRITE_OK,
+  PROJECTION_TEMP_WRITE_EXISTS,
+  PROJECTION_TEMP_WRITE_ERROR
+} ProjectionTempWriteResult;
 
 static bool projection_add_changed_path(ZProgramGraphProjection *projection, const char *path);
 
@@ -104,6 +113,52 @@ static bool projection_path_exists(const char *path) {
 #else
   return path && lstat(path, &st) == 0;
 #endif
+}
+
+static bool projection_existing_path_is_dir(const char *path, ZDiag *diag) {
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    projection_set_io_diag(diag, path, "inspect");
+    return false;
+  }
+  if (!S_ISDIR(st.st_mode)) {
+    if (diag) {
+      diag->code = 1;
+      diag->path = path;
+      diag->line = 1;
+      diag->column = 1;
+      diag->length = 1;
+      snprintf(diag->message, sizeof(diag->message), "projection parent path is not a directory: '%s'", path ? path : "");
+    }
+    return false;
+  }
+  return true;
+}
+
+static bool projection_mkdir_one(const char *path, ZDiag *diag) {
+#if defined(_WIN32)
+  if (mkdir(path) == 0) return true;
+#else
+  if (mkdir(path, 0777) == 0) return true;
+#endif
+  if (errno == EEXIST) return projection_existing_path_is_dir(path, diag);
+  projection_set_io_diag(diag, path, "create");
+  return false;
+}
+
+static bool projection_ensure_parent_dirs(const char *path, ZDiag *diag) {
+  char *copy = z_strdup(path ? path : "");
+  for (char *cursor = copy + 1; *cursor; cursor++) {
+    if (*cursor != '/') continue;
+    *cursor = 0;
+    if (copy[0] && !projection_mkdir_one(copy, diag)) {
+      free(copy);
+      return false;
+    }
+    *cursor = '/';
+  }
+  free(copy);
+  return true;
 }
 
 static bool projection_real_path_inside_root(const char *root, const char *path) {
@@ -221,25 +276,67 @@ static bool projection_write_plan_add(ProjectionWritePlan *plan, ProjectionWrite
   return true;
 }
 
-static bool projection_assign_temp_path(ProjectionWrite *write, size_t index, ZDiag *diag) {
-  if (!write || !write->changed) return true;
-  for (size_t attempt = 0; attempt < 100; attempt++) {
-    char *candidate = projection_temp_path(write->path, index, attempt);
-    if (!projection_path_exists(candidate)) {
-      write->temp_path = candidate;
-      return true;
-    }
-    free(candidate);
-  }
+static bool projection_set_temp_path_diag(ZDiag *diag, const ProjectionWrite *write) {
   if (diag) {
     diag->code = 1;
-    diag->path = write->path;
+    diag->path = write ? write->path : NULL;
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
-    snprintf(diag->message, sizeof(diag->message), "failed to create temporary projection path for '%s'", write->path ? write->path : "");
+    snprintf(diag->message, sizeof(diag->message), "failed to create temporary projection path for '%s'", write && write->path ? write->path : "");
   }
   return false;
+}
+
+static ProjectionTempWriteResult projection_write_temp_exclusive(const char *path, const char *text, ZDiag *diag) {
+  if (!projection_ensure_parent_dirs(path, diag)) return PROJECTION_TEMP_WRITE_ERROR;
+#if defined(_WIN32)
+  if (projection_path_exists(path)) return PROJECTION_TEMP_WRITE_EXISTS;
+  return z_write_file(path, text ? text : "", diag) ? PROJECTION_TEMP_WRITE_OK : PROJECTION_TEMP_WRITE_ERROR;
+#else
+  int flags = O_WRONLY | O_CREAT | O_EXCL;
+#if defined(O_NOFOLLOW)
+  flags |= O_NOFOLLOW;
+#endif
+  int fd = open(path, flags, 0600);
+  if (fd < 0) {
+    if (errno == EEXIST || errno == ELOOP) return PROJECTION_TEMP_WRITE_EXISTS;
+    projection_set_io_diag(diag, path, "stage");
+    return PROJECTION_TEMP_WRITE_ERROR;
+  }
+
+  const char *data = text ? text : "";
+  size_t len = strlen(data);
+  size_t written = 0;
+  while (written < len) {
+    ssize_t n = write(fd, data + written, len - written);
+    if (n < 0) {
+      if (errno == EINTR) continue;
+      int saved_errno = errno;
+      close(fd);
+      unlink(path);
+      errno = saved_errno;
+      projection_set_io_diag(diag, path, "stage");
+      return PROJECTION_TEMP_WRITE_ERROR;
+    }
+    if (n == 0) {
+      close(fd);
+      unlink(path);
+      errno = EIO;
+      projection_set_io_diag(diag, path, "stage");
+      return PROJECTION_TEMP_WRITE_ERROR;
+    }
+    written += (size_t)n;
+  }
+  if (close(fd) != 0) {
+    int saved_errno = errno;
+    unlink(path);
+    errno = saved_errno;
+    projection_set_io_diag(diag, path, "stage");
+    return PROJECTION_TEMP_WRITE_ERROR;
+  }
+  return PROJECTION_TEMP_WRITE_OK;
+#endif
 }
 
 static void projection_write_plan_rollback(ProjectionWritePlan *plan) {
@@ -260,9 +357,18 @@ static bool projection_write_plan_stage(ProjectionWritePlan *plan, ZDiag *diag) 
   for (size_t i = 0; plan && i < plan->len; i++) {
     ProjectionWrite *write = &plan->items[i];
     if (!write->changed) continue;
-    if (!projection_assign_temp_path(write, i, diag)) return false;
-    if (!z_write_file(write->temp_path, write->text ? write->text : "", diag)) return false;
-    write->temp_written = true;
+    for (size_t attempt = 0; attempt < 100; attempt++) {
+      char *candidate = projection_temp_path(write->path, i, attempt);
+      ProjectionTempWriteResult result = projection_write_temp_exclusive(candidate, write->text, diag);
+      if (result == PROJECTION_TEMP_WRITE_OK) {
+        write->temp_path = candidate;
+        write->temp_written = true;
+        break;
+      }
+      free(candidate);
+      if (result == PROJECTION_TEMP_WRITE_ERROR) return false;
+    }
+    if (!write->temp_written) return projection_set_temp_path_diag(diag, write);
   }
   return true;
 }

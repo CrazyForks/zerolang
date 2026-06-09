@@ -12,6 +12,8 @@ typedef struct {
   char *to;
 } BodyIdMap;
 
+static char *body_expr_source(const char *expr);
+
 static bool body_text_eq(const char *left, const char *right) {
   return strcmp(left ? left : "", right ? right : "") == 0;
 }
@@ -54,6 +56,42 @@ static bool body_identifier(const char *text) {
   return true;
 }
 
+static char *body_diag_row_actual(const char *rows, const ZDiag *diag, const char *fallback) {
+  int wanted = diag && diag->line > 1 ? diag->line - 1 : 0;
+  char *copy = z_strdup(rows ? rows : "");
+  char *cursor = copy;
+  int emitted = 0;
+  int physical = 0;
+  char *last = NULL;
+  while (*cursor) {
+    char *line = cursor;
+    char *end = strchr(cursor, '\n');
+    if (end) {
+      *end = '\0';
+      cursor = end + 1;
+    } else {
+      cursor += strlen(cursor);
+    }
+    physical++;
+    char *trimmed = body_trim(line);
+    if (!trimmed[0] || trimmed[0] == '#') continue;
+    emitted++;
+    free(last);
+    ZBuf row;
+    zbuf_init(&row);
+    zbuf_appendf(&row, "row %d: ", physical);
+    zbuf_append(&row, trimmed);
+    last = row.data ? row.data : z_strdup("");
+    if (emitted == wanted) {
+      free(copy);
+      return last;
+    }
+  }
+  free(copy);
+  if (last) return last;
+  return z_strdup(fallback ? fallback : "");
+}
+
 static bool body_tokenize(const char *text, char ***out, size_t *out_len) {
   char **items = NULL;
   size_t len = 0, cap = 0;
@@ -75,6 +113,26 @@ static bool body_tokenize(const char *text, char ***out, size_t *out_len) {
           escaped = true;
         } else if (ch == '"') {
           break;
+        }
+      }
+    } else if (*cursor == '(') {
+      size_t depth = 0;
+      bool quoted = false;
+      bool escaped = false;
+      while (*cursor) {
+        char ch = *cursor++;
+        zbuf_append_char(&token, ch);
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (ch == '\\') escaped = true;
+          else if (ch == '"') quoted = false;
+        } else if (ch == '"') {
+          quoted = true;
+        } else if (ch == '(') {
+          depth++;
+        } else if (ch == ')') {
+          if (depth) depth--;
+          if (!depth) break;
         }
       }
     } else {
@@ -108,14 +166,15 @@ static char *body_call_source(char **tokens, size_t len) {
   zbuf_append_char(&out, '(');
   for (size_t i = 1; i < len; i++) {
     if (i > 1) zbuf_append(&out, ", ");
-    zbuf_append(&out, tokens[i]);
+    char *arg = body_expr_source(tokens[i]);
+    zbuf_append(&out, arg);
+    free(arg);
   }
   zbuf_append_char(&out, ')');
   return out.data ? out.data : z_strdup("");
 }
 
-static char *body_find_infix(char *expr, const char **out_op) {
-  const char *ops[] = {" == ", " != ", " <= ", " >= ", " < ", " > ", " + ", " - ", " * ", " / ", " % "};
+static char *body_find_operator(char *expr, const char *const *ops, size_t op_len, const char **out_op) {
   bool quoted = false;
   size_t depth = 0;
   for (char *cursor = expr; cursor && *cursor; cursor++) {
@@ -124,50 +183,101 @@ static char *body_find_infix(char *expr, const char **out_op) {
     if (*cursor == '(' || *cursor == '[') { depth++; continue; }
     if ((*cursor == ')' || *cursor == ']') && depth) { depth--; continue; }
     if (depth) continue;
-    for (size_t i = 0; i < sizeof(ops) / sizeof(ops[0]); i++) {
+    for (size_t i = 0; i < op_len; i++) {
       if (strncmp(cursor, ops[i], strlen(ops[i])) == 0) { *out_op = ops[i]; return cursor; }
     }
   }
   return NULL;
 }
 
+static char *body_infix_source(char *trimmed, const char *const *ops, size_t op_len) {
+  const char *op = NULL;
+  char *found = body_find_operator(trimmed, ops, op_len, &op);
+  if (!found) return NULL;
+  *found = '\0';
+  char *left = body_expr_source(trimmed);
+  char *right = body_expr_source(found + strlen(op));
+  ZBuf out;
+  zbuf_init(&out);
+  zbuf_append(&out, left);
+  zbuf_append_char(&out, ' ');
+  zbuf_appendf(&out, "%.*s", (int)(strlen(op) - 2), op + 1);
+  zbuf_append_char(&out, ' ');
+  zbuf_append(&out, right);
+  free(left);
+  free(right);
+  return out.data ? out.data : z_strdup("");
+}
+
+static bool body_outer_parens_wrap(const char *text) {
+  if (!text || text[0] != '(') return false;
+  size_t depth = 0;
+  bool quoted = false;
+  bool escaped = false;
+  for (size_t i = 0; text[i]; i++) {
+    char ch = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (ch == '\\') escaped = true;
+      else if (ch == '"') quoted = false;
+      continue;
+    }
+    if (ch == '"') { quoted = true; continue; }
+    if (ch == '(') depth++;
+    if (ch == ')' && depth) {
+      depth--;
+      if (depth == 0 && text[i + 1] != '\0') return false;
+    }
+  }
+  return depth == 0;
+}
+
 static char *body_expr_source(const char *expr) {
   char *copy = z_strdup(expr ? expr : "");
   char *trimmed = body_trim(copy);
-  char *and = strstr(trimmed, " && ");
-  if (and) {
-    *and = '\0';
-    char *left = body_expr_source(trimmed);
-    char *right = body_expr_source(and + 4);
+  if (body_outer_parens_wrap(trimmed)) {
+    trimmed[strlen(trimmed) - 1] = '\0';
+    char *out = body_expr_source(trimmed + 1);
+    free(copy);
+    return out;
+  }
+  if (strncmp(trimmed, "check ", 6) == 0 || strncmp(trimmed, "meta ", 5) == 0) {
+    const char *prefix = strncmp(trimmed, "check ", 6) == 0 ? "check" : "meta";
+    size_t prefix_len = strlen(prefix);
+    char *operand = body_expr_source(trimmed + prefix_len + 1);
     ZBuf out;
     zbuf_init(&out);
-    zbuf_append(&out, left);
-    zbuf_append(&out, " && ");
-    zbuf_append(&out, right);
-    free(left);
-    free(right);
+    zbuf_append(&out, prefix);
+    zbuf_append_char(&out, ' ');
+    zbuf_append(&out, operand);
+    free(operand);
     free(copy);
     return out.data ? out.data : z_strdup("");
   }
-  const char *op = NULL;
-  char *found = body_find_infix(trimmed, &op);
-  if (found) {
-    *found = '\0';
-    char *left = body_expr_source(trimmed);
-    char *right = body_expr_source(found + strlen(op));
+  if (trimmed[0] == '!' && trimmed[1] != '=') {
+    char *operand = body_expr_source(trimmed + 1);
     ZBuf out;
     zbuf_init(&out);
-    zbuf_append(&out, left);
-    zbuf_append_char(&out, ' ');
-    zbuf_appendf(&out, "%.*s", (int)(strlen(op) - 2), op + 1);
-    zbuf_append_char(&out, ' ');
-    zbuf_append(&out, right);
-    free(left);
-    free(right);
+    zbuf_append_char(&out, '!');
+    zbuf_append(&out, operand);
+    free(operand);
     free(copy);
     return out.data ? out.data : z_strdup("");
   }
-  if (strchr(trimmed, '(') || trimmed[0] == '"' || trimmed[0] == '[' || trimmed[0] == 0) {
+  const char *or_ops[] = {" || "};
+  const char *and_ops[] = {" && "};
+  const char *compare_ops[] = {" == ", " != ", " <= ", " >= ", " < ", " > "};
+  const char *cast_ops[] = {" as "};
+  const char *add_ops[] = {" + ", " - "};
+  const char *mul_ops[] = {" * ", " / ", " % "};
+  char *infix = body_infix_source(trimmed, or_ops, sizeof(or_ops) / sizeof(or_ops[0]));
+  if (!infix) infix = body_infix_source(trimmed, and_ops, sizeof(and_ops) / sizeof(and_ops[0]));
+  if (!infix) infix = body_infix_source(trimmed, compare_ops, sizeof(compare_ops) / sizeof(compare_ops[0]));
+  if (!infix) infix = body_infix_source(trimmed, cast_ops, sizeof(cast_ops) / sizeof(cast_ops[0]));
+  if (!infix) infix = body_infix_source(trimmed, add_ops, sizeof(add_ops) / sizeof(add_ops[0]));
+  if (!infix) infix = body_infix_source(trimmed, mul_ops, sizeof(mul_ops) / sizeof(mul_ops[0]));
+  if (infix) { free(copy); return infix; }
+  if (trimmed[0] == '"' || trimmed[0] == '[' || trimmed[0] == 0) {
     char *out = z_strdup(trimmed);
     free(copy);
     return out;
@@ -178,6 +288,8 @@ static char *body_expr_source(const char *expr) {
   char *out = NULL;
   if (len > 1 && (strchr(tokens[0], '.') || body_identifier(tokens[0]))) {
     out = body_call_source(tokens, len);
+  } else if (len == 1 && strchr(trimmed, '(')) {
+    out = z_strdup(trimmed);
   } else {
     out = z_strdup(trimmed);
   }
@@ -272,6 +384,11 @@ static bool body_translate_row(const char *row, ZBuf *source, ZProgramGraphPatch
     free(copy);
     return true;
   }
+  if (strcmp(line, "return") == 0) {
+    zbuf_append(source, "return");
+    free(copy);
+    return true;
+  }
   char *expr = body_expr_source(line);
   zbuf_append(source, expr);
   free(expr);
@@ -305,6 +422,21 @@ static bool body_append_source_rows(ZBuf *source, const char *rows, ZProgramGrap
       }
       body_append_indent(source, indent + 1);
       zbuf_append(source, "} else {\n");
+      open = indent + 1;
+      continue;
+    }
+    if (strncmp(trimmed, "else if ", 8) == 0) {
+      while (open > indent + 1) {
+        body_append_indent(source, open);
+        zbuf_append(source, "}\n");
+        open--;
+      }
+      char *expr = body_expr_source(trimmed + 8);
+      body_append_indent(source, indent + 1);
+      zbuf_append(source, "} else if ");
+      zbuf_append(source, expr);
+      zbuf_append(source, " {\n");
+      free(expr);
       open = indent + 1;
       continue;
     }
@@ -592,7 +724,9 @@ bool z_program_graph_patch_apply_replace_function_body(ZProgramGraph *graph, ZPr
   ZDiag diag = {0};
   bool ok = z_parse_canonical_text_program_source(source.data ? source.data : "", &program, &diag);
   if (!ok) {
-    body_fail(result, op, "GPH001", "replaceFunctionBody rows did not parse as a Zero function body", diag.expected[0] ? diag.expected : "valid body rows", diag.message[0] ? diag.message : (source.data ? source.data : ""));
+    char *actual = body_diag_row_actual(op ? op->value : "", &diag, diag.message[0] ? diag.message : (source.data ? source.data : ""));
+    body_fail(result, op, "GPH001", "replaceFunctionBody rows did not parse as a Zero function body", diag.expected[0] ? diag.expected : "valid body rows", actual);
+    free(actual);
     zbuf_free(&source);
     return false;
   }
@@ -629,7 +763,9 @@ bool z_program_graph_patch_apply_replace_block_body(ZProgramGraph *graph, ZProgr
   ZDiag diag = {0};
   bool ok = z_parse_canonical_text_program_source(source.data ? source.data : "", &program, &diag);
   if (!ok) {
-    body_fail(result, op, "GPH001", "replaceBlockBody rows did not parse as a Zero block body", diag.expected[0] ? diag.expected : "valid body rows", diag.message[0] ? diag.message : (source.data ? source.data : ""));
+    char *actual = body_diag_row_actual(op ? op->value : "", &diag, diag.message[0] ? diag.message : (source.data ? source.data : ""));
+    body_fail(result, op, "GPH001", "replaceBlockBody rows did not parse as a Zero block body", diag.expected[0] ? diag.expected : "valid body rows", actual);
+    free(actual);
     free(target_body_id); free(target_path); zbuf_free(&source);
     return false;
   }

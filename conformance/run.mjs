@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { access, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { createAggregateAssert, describeFailure, finishAggregateAssert } from "../scripts/aggregate-assert.mjs";
 
@@ -741,7 +741,10 @@ const passCheckFixtures = [
   "conformance/native/pass/std-http-fetch.0",
   "conformance/native/pass/std-http-errors.0",
   "conformance/native/pass/std-http-response-helpers.0",
+  "conformance/native/pass/std-http-text-html-response-helpers.0",
+  "conformance/native/pass/std-http-redirect-response-helpers.0",
   "conformance/native/pass/std-http-api-helpers.0",
+  "conformance/native/pass/std-http-cors-helpers.0",
   "conformance/native/pass/std-http-auth-helpers.0",
   "conformance/native/pass/std-data-formats.0",
   "conformance/native/pass/std-codec-json-url.0",
@@ -1017,6 +1020,23 @@ const compilerMetrics = await execFileAsync("node", ["--experimental-strip-types
 const compilerMetricsBody = JSON.parse(compilerMetrics.stdout);
 assert.equal(compilerMetricsBody.schema, 1);
 assert(compilerMetricsBody.files["native/zero-c/src/checker.c"].lines > 0);
+assert.equal(compilerMetricsBody.files["native/zero-c/src/fs.c"].shellCalls, 0);
+assert.equal(compilerMetricsBody.files["native/zero-c/src/main.c"].shellCalls, 0);
+for (const [path, metrics] of Object.entries(compilerMetricsBody.files)) {
+  assert.equal(metrics.shellCalls, 0, `${path} should not introduce shell execution calls`);
+}
+
+const relativeToolDir = `${outDir}/relative-tools`;
+await mkdir(relativeToolDir, { recursive: true });
+await writeFile(`${relativeToolDir}/cc`, "#!/bin/sh\nprintf 'fake relative cc\\n'\n");
+await chmod(`${relativeToolDir}/cc`, 0o755);
+const relativePathDoctor = await execFileAsync(zero, ["doctor", "--json"], { env: { ...process.env, PATH: relativeToolDir } }).catch((error) => error);
+assert.notEqual(relativePathDoctor.code, 0);
+const relativePathDoctorBody = JSON.parse(relativePathDoctor.stdout);
+const relativePathNativeCompiler = relativePathDoctorBody.checks.find((check) => check.name === "native-c-compiler");
+assert.equal(relativePathNativeCompiler.status, "error");
+assert.match(relativePathNativeCompiler.message, /no native C compiler found/);
+
 assert(Array.isArray(compilerMetricsBody.largeFunctions));
 assert(compilerMetricsBody.stdlib.mainHelperCount > 0);
 assert.equal(compilerMetricsBody.stdlib.mainHelperCount, compilerMetricsBody.stdlib.checkerReturnCount);
@@ -1071,6 +1091,21 @@ for (const item of compilerMetricsBody.largeFunctions) {
   assert.equal(typeof item.lines, "number");
   assert(item.lines >= compilerMetricsBody.budget.reportThreshold);
 }
+
+const unsafeCompilerOverrideBuild = await execFileAsync(zero, [
+  "build",
+  "--json",
+  "--out",
+  `${outDir}/unsafe-cc-override`,
+  "examples/json-api-client.graph",
+], { env: { ...process.env, ZERO_CC: "cc;touch" } }).catch((error) => error);
+assert.notEqual(unsafeCompilerOverrideBuild.code, 0);
+assert.match(unsafeCompilerOverrideBuild.stderr, /compiler override contains unsafe shell characters/);
+const unsafeCompilerOverrideBody = JSON.parse(unsafeCompilerOverrideBuild.stdout);
+assert.equal(unsafeCompilerOverrideBody.ok, false);
+assert.equal(unsafeCompilerOverrideBody.diagnostics[0].code, "BLD003");
+assert.equal(unsafeCompilerOverrideBody.diagnostics[0].actual, "compiler override contains unsafe shell characters");
+assert.match(unsafeCompilerOverrideBody.diagnostics[0].help, /without flags, whitespace, or shell syntax/);
 
 const agentSurfaceBorrowExplain = await execFileAsync(zero, ["explain", "--json", "BOR001"]);
 const agentSurfaceBorrowExplainBody = JSON.parse(agentSurfaceBorrowExplain.stdout);
@@ -3842,10 +3877,10 @@ assertSourceGraph(programGraphCrmApiBuildJson, "examples/crm-api/zero.graph", "p
 assert.equal(programGraphCrmApiBuildJson.generatedCBytes, 0);
 assert.equal(programGraphCrmApiBuildJson.incrementalInvalidation.sourceKind, "program-graph");
 assert.equal(programGraphCrmApiBuildJson.incrementalInvalidation.graphInput.parserArtifactsInKey, false);
-assert.equal(programGraphCrmApiHealth.stdout, "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 27\n\n{\"ok\":true,\"service\":\"crm\"}");
+assert.equal(programGraphCrmApiHealth.stdout, "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\nconnection: close\r\ncontent-length: 27\r\n\r\n{\"ok\":true,\"service\":\"crm\"}");
 assert.match(programGraphCrmApiAccounts.stdout, /"accounts":\[/);
 assert.match(programGraphCrmApiDealUpdate.stdout, /"updated":true/);
-assert.match(programGraphCrmApiMissing.stdout, /^HTTP\/1\.1 404 Not Found\n/);
+assert.match(programGraphCrmApiMissing.stdout, /^HTTP\/1\.1 404 Not Found\r\n/);
 assert.equal(programGraphAuthoringInit.ok, true);
 assert.equal(programGraphAuthoringInit.compilerInput, "repository-graph");
 assert.equal(programGraphAuthoringInit.sourceProjection.path, "src/main.0");
@@ -4783,7 +4818,7 @@ for (const runtimeFixture of [
   ["conformance/native/pass/std-fs.0", "std-fs", { stdout: "fs ok\n", file: { name: "std-fs-write.txt", text: "zero write\n" } }],
   ["conformance/native/pass/std-fs-bytes.0", "std-fs-bytes", { stdout: "fs bytes ok\n", stderr: "fs bytes err ok\n" }],
   ["conformance/native/pass/std-fs-resource.0", "std-fs-resource", { stdout: "fs resource ok\n", file: { name: "std-fs-resource.txt", text: "zero file\n" } }],
-  ["conformance/native/pass/std-fs-file-helpers.0", "std-fs-file-helpers", { stdout: "std fs file helpers ok\n", file: { name: "std-fs-file-helpers-copy.txt", text: "zero file helpers\n" } }],
+  ["conformance/native/pass/std-fs-file-helpers.0", "std-fs-file-helpers", { stdout: "std fs file helpers ok\n" }],
   ["conformance/native/pass/std-io-lines.0", "std-io-lines", { stdout: "std io lines ok\n" }],
   ["conformance/native/pass/integer-widths.0", "integer-widths", { stdout: "integer widths ok\n" }],
   ["conformance/native/pass/std-codec-widths.0", "std-codec-widths", { stdout: "codec widths ok\n" }],

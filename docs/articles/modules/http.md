@@ -53,8 +53,18 @@ Runnable today:
 | `std.http.writeJsonRequest(buffer, startLine, body)` | `Maybe<Span<u8>>` | Writes a JSON request envelope with `content-type` and `content-length`. |
 | `std.http.writeResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes an HTTP/1.1 response envelope into caller storage. |
 | `std.http.writeJsonResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a JSON HTTP/1.1 response envelope into caller storage. |
+| `std.http.writeJsonError(buffer, status, code)` | `Maybe<Span<u8>>` | Writes `{"error":"code"}` after validating the code is JSON-safe lower-case ASCII, digits, `_`, or `-`. |
 | `std.http.writeCorsPreflight(buffer, allowOrigin, allowMethods, allowHeaders)` | `Maybe<Span<u8>>` | Writes a 204 CORS preflight response with caller-provided allow headers. |
 | `std.http.writeCorsJsonResponse(buffer, statusLine, body, allowOrigin)` | `Maybe<Span<u8>>` | Writes a JSON response with `access-control-allow-origin`; `statusLine` is a fragment such as `"200 OK"`. |
+| `std.http.writeTextResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a `text/plain; charset=utf-8` response envelope into caller storage. |
+| `std.http.writeTextOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 plain-text response envelope into caller storage. |
+| `std.http.writeHtmlResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a `text/html; charset=utf-8` response envelope into caller storage. |
+| `std.http.writeHtmlOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 HTML response envelope into caller storage. |
+| `std.http.writeRedirect(buffer, status, location)` | `Maybe<Span<u8>>` | Writes a redirect response with a safe `Location` header; rejects non-3xx statuses and empty or control-character locations. |
+| `std.http.writeFound(buffer, location)` | `Maybe<Span<u8>>` | Writes a 302 redirect response. |
+| `std.http.writeSeeOther(buffer, location)` | `Maybe<Span<u8>>` | Writes a 303 redirect response. |
+| `std.http.writeMovedPermanently(buffer, location)` | `Maybe<Span<u8>>` | Writes a 301 redirect response. |
+| `std.http.writePermanentRedirect(buffer, location)` | `Maybe<Span<u8>>` | Writes a 308 redirect response. |
 | `std.http.writeJsonOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 JSON response envelope into caller storage. |
 | `std.http.writeJsonCreated(buffer, body)` | `Maybe<Span<u8>>` | Writes a 201 JSON response envelope into caller storage. |
 | `std.http.writeJsonBadRequest(buffer, body)` | `Maybe<Span<u8>>` | Writes a 400 JSON response envelope into caller storage. |
@@ -195,7 +205,7 @@ pub fn main(world: World) -> Void raises {
             return
         }
     }
-    let failed: Maybe<Span<u8>> = std.http.writeJsonBadRequest(response, "{\"error\":\"bad_request\"}")
+    let failed: Maybe<Span<u8>> = std.http.writeJsonError(response, 400, "bad_request")
     if failed.has {
         check world.err.write("http route failed\n")
     }
@@ -274,7 +284,13 @@ fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
     if std.http.requestIsGet(request, "/ping") {
         return std.http.writeJsonOk(response, "{\"message\":\"pong\"}")
     }
-    return std.http.writeJsonNotFound(response, "{\"error\":\"not_found\"}")
+    if std.http.requestIsGet(request, "/robots.txt") {
+        return std.http.writeTextOk(response, "user-agent: *\nallow: /\n")
+    }
+    if std.http.requestIsGet(request, "/old") {
+        return std.http.writeMovedPermanently(response, "/ping")
+    }
+    return std.http.writeJsonError(response, 404, "not_found")
 }
 ```
 

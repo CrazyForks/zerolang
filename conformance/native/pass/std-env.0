@@ -1,7 +1,9 @@
 pub fn main(world: World) -> Void raises {
     let value: Maybe<String> = std.env.get("ZERO_CONFORMANCE_ENV")
     let missing: Maybe<String> = std.env.get("ZERO_CONFORMANCE_ENV_MISSING")
-    if value.has && std.mem.eql(value.value, "agent-env") && !missing.has {
+    let verbose: Bool = std.env.parseBoolOr("ZERO_CONFORMANCE_ENV_VERBOSE", true)
+    let limit: u32 = std.env.parseU32Or("ZERO_CONFORMANCE_ENV_LIMIT", 7)
+    if value.has && std.mem.eql(value.value, "agent-env") && std.env.equals("ZERO_CONFORMANCE_ENV", "agent-env") && !missing.has && verbose && limit == 7_u32 {
         check world.out.write("env ok\n")
     }
 }

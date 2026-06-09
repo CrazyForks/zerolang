@@ -485,6 +485,8 @@ typedef enum {
   IR_VALUE_HTTP_WRITE_JSON_RESPONSE,
   IR_VALUE_HTTP_REQUEST_METHOD_NAME,
   IR_VALUE_HTTP_REQUEST_PATH,
+  IR_VALUE_HTTP_REQUEST_MATCHES,
+  IR_VALUE_HTTP_REQUEST_BODY_WITHIN,
   IR_VALUE_HTTP_STATUS_CLASS,
   IR_VALUE_FIELD_LOAD,
   IR_VALUE_CHECK,
@@ -863,14 +865,14 @@ typedef struct {
   size_t symbol_count;
   size_t source_line_count;
   size_t dependency_count;
-  long long resolve_ms;
-  long long parse_ms;
-  long long interface_ms;
-  long long check_ms;
-  long long lower_ms;
-  long long codegen_ms;
-  long long object_ms;
-  long long link_ms;
+  long long resolve_ms, parse_ms, interface_ms, check_ms;
+  long long lower_ms, codegen_ms, object_ms, link_ms;
+  long long graph_load_ms, graph_stdlib_merge_ms, graph_readiness_check_ms;
+  long long graph_stdlib_reference_scan_ms, graph_stdlib_cleanup_ms, graph_stdlib_module_load_ms;
+  long long graph_stdlib_node_merge_ms, graph_stdlib_edge_merge_ms, graph_stdlib_finalize_ms;
+  long long graph_mir_cache_load_ms, graph_mir_lower_ms, graph_mir_cache_write_ms, graph_mir_cache_reload_ms;
+  size_t graph_stdlib_modules_merged, graph_stdlib_nodes_merged, graph_stdlib_edges_merged;
+  bool graph_stdlib_merge_cache_hit, graph_stdlib_merge_cache_stored;
   size_t lowered_ir_bytes;
   char *mapped_mir_cache_path;
   size_t mapped_mir_cache_bytes;
@@ -1067,6 +1069,7 @@ ZToolchainPlan z_direct_backend_toolchain_plan(ZDirectBackend backend, Z_IN cons
 bool z_direct_backend_toolchain_plan_for_emit_kind(Z_IN const ZTargetInfo *target, Z_IN const char *emit_kind, Z_IN const char *requested_backend, Z_OUT ZToolchainPlan *out);
 size_t z_direct_target_stack_bytes(Z_IN const ZTargetInfo *target, Z_IN const IrProgram *program);
 size_t z_direct_target_max_frame_bytes(Z_IN const ZTargetInfo *target, Z_IN const IrProgram *program);
+bool z_toolchain_compiler_override_safe(Z_IN const char *compiler);
 bool z_toolchain_compile_c_object(Z_IN const ZToolchainPlan *plan, Z_IN const char *profile, Z_IN const ZTargetInfo *target, Z_IN const char *c_file, Z_IN const char *object_file, Z_IN const char *include_dir, Z_IN const char *extra_c_flags);
 bool z_toolchain_link_objects(Z_IN const ZToolchainPlan *plan, Z_IN const ZTargetInfo *target, Z_IN const char *const *object_files, size_t object_count, Z_IN const char *exe_file, Z_IN const char *pre_link_flags, Z_IN const char *post_object_flags);
 bool z_run_cc(Z_IN const char *c_file, Z_IN const char *exe_file, Z_IN const char *cc, Z_IN const char *profile, Z_IN const ZTargetInfo *target);

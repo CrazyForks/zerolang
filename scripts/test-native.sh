@@ -30,6 +30,15 @@ fi
 
 native_test_case_index=0
 native_test_phases=",${ZERO_NATIVE_TEST_PHASES:-all},"
+native_test_scope="${ZERO_NATIVE_TEST_SCOPE:-deep}"
+
+case "$native_test_scope" in
+  fast|deep) ;;
+  *)
+    echo "ZERO_NATIVE_TEST_SCOPE must be fast or deep" >&2
+    exit 1
+    ;;
+esac
 
 native_log_elapsed() {
   local label="$1"
@@ -85,6 +94,7 @@ native_case_selected() {
 
 echo "native test shard ${native_test_shard_index}/${native_test_shard_count}"
 echo "native test phases ${ZERO_NATIVE_TEST_PHASES:-all}"
+echo "native test scope ${native_test_scope}"
 
 native_build_started_at="$SECONDS"
 make -C native/zero-c
@@ -94,13 +104,19 @@ mkdir -p .zero/native-test .zero/conformance
 
 if native_phase_selected "preflight"; then
   native_phase_started_at="$SECONDS"
+  cc -std=c11 -Wall -Wextra -Wpedantic -I native/zero-c/include \
+    native/zero-c/tests/process_exec_smoke.c \
+    native/zero-c/src/process_exec.c \
+    native/zero-c/src/process_path.c \
+    -o .zero/native-test/process-exec-smoke
+  .zero/native-test/process-exec-smoke
   bin/zero check --json std/path.graph >/dev/null
   bin/zero check --json std/str.graph >/dev/null
   bin/zero check --json std/testing.graph >/dev/null
   bin/zero check --json std/log.graph >/dev/null
   bin/zero check --json std/math.graph >/dev/null
   bin/zero check --json std/time.graph >/dev/null
-  node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/stdlib-target-matrix.mts
+  ZERO_STDLIB_TARGET_MATRIX_SCOPE="$native_test_scope" node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/stdlib-target-matrix.mts
 
   host_runtime_target=""
   case "$(uname -s):$(uname -m)" in
@@ -233,11 +249,45 @@ examples=(
   conformance/native/pass/std-testing-log.graph
 )
 
+native_case_in_scope() {
+  if [[ "$native_test_scope" != "fast" ]]; then
+    return 0
+  fi
+
+  case "$1" in
+    examples/hello.graph | \
+    examples/add.graph | \
+    examples/generic-pair.graph | \
+    examples/fallibility.graph | \
+    examples/std-math.graph | \
+    examples/std-str.graph | \
+    examples/std-testing-log.graph | \
+    .zero/native-test/project | \
+    conformance/native/pass/world-stream-renamed-param.graph | \
+    conformance/native/pass/std-collections-u8.graph | \
+    conformance/native/pass/std-codec-json-url.graph | \
+    conformance/native/pass/std-json-allocator-capacity.graph | \
+    conformance/native/pass/std-fs-bytes.graph | \
+    conformance/native/pass/std-cli-helpers.graph | \
+    conformance/native/pass/generic-function-basic.graph | \
+    conformance/native/pass/match-fallback.graph)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 run_native_or_gap() {
   local input="$1"
   local out="$2"
   local expected="$3"
   shift 3
+
+  if ! native_case_in_scope "$input"; then
+    return 0
+  fi
 
   if ! native_case_selected; then
     return 0
@@ -375,6 +425,24 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
   test ! -f .zero/native-test/std-http-response-helpers-linux.zero.o
   test ! -f .zero/native-test/std-http-response-helpers-linux.zero-runtime.o
   node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-response-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
+  rm -f .zero/native-test/std-http-text-html-response-helpers-linux .zero/native-test/std-http-text-html-response-helpers-linux.json .zero/native-test/std-http-text-html-response-helpers-linux.zero.o .zero/native-test/std-http-text-html-response-helpers-linux.zero-runtime.o
+  if ! bin/zero build --json --emit exe --target linux-x64 conformance/native/pass/std-http-text-html-response-helpers.graph --out .zero/native-test/std-http-text-html-response-helpers-linux > .zero/native-test/std-http-text-html-response-helpers-linux.json; then
+    cat .zero/native-test/std-http-text-html-response-helpers-linux.json >&2
+    exit 1
+  fi
+  .zero/native-test/std-http-text-html-response-helpers-linux
+  test ! -f .zero/native-test/std-http-text-html-response-helpers-linux.zero.o
+  test ! -f .zero/native-test/std-http-text-html-response-helpers-linux.zero-runtime.o
+  node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-text-html-response-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
+  rm -f .zero/native-test/std-http-redirect-response-helpers-linux .zero/native-test/std-http-redirect-response-helpers-linux.json .zero/native-test/std-http-redirect-response-helpers-linux.zero.o .zero/native-test/std-http-redirect-response-helpers-linux.zero-runtime.o
+  if ! bin/zero build --json --emit exe --target linux-x64 conformance/native/pass/std-http-redirect-response-helpers.graph --out .zero/native-test/std-http-redirect-response-helpers-linux > .zero/native-test/std-http-redirect-response-helpers-linux.json; then
+    cat .zero/native-test/std-http-redirect-response-helpers-linux.json >&2
+    exit 1
+  fi
+  .zero/native-test/std-http-redirect-response-helpers-linux
+  test ! -f .zero/native-test/std-http-redirect-response-helpers-linux.zero.o
+  test ! -f .zero/native-test/std-http-redirect-response-helpers-linux.zero-runtime.o
+  node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-redirect-response-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
   rm -f .zero/native-test/std-http-api-helpers-linux .zero/native-test/std-http-api-helpers-linux.json .zero/native-test/std-http-api-helpers-linux.zero.o .zero/native-test/std-http-api-helpers-linux.zero-runtime.o
   if ! bin/zero build --json --emit exe --target linux-x64 conformance/native/pass/std-http-api-helpers.graph --out .zero/native-test/std-http-api-helpers-linux > .zero/native-test/std-http-api-helpers-linux.json; then
     cat .zero/native-test/std-http-api-helpers-linux.json >&2
@@ -388,6 +456,19 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
   test ! -f .zero/native-test/std-http-api-helpers-linux.zero.o
   test ! -f .zero/native-test/std-http-api-helpers-linux.zero-runtime.o
   node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-api-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
+  rm -f .zero/native-test/std-http-cors-helpers-linux .zero/native-test/std-http-cors-helpers-linux.json .zero/native-test/std-http-cors-helpers-linux.zero.o .zero/native-test/std-http-cors-helpers-linux.zero-runtime.o
+  if ! bin/zero build --json --emit exe --target linux-x64 conformance/native/pass/std-http-cors-helpers.graph --out .zero/native-test/std-http-cors-helpers-linux > .zero/native-test/std-http-cors-helpers-linux.json; then
+    cat .zero/native-test/std-http-cors-helpers-linux.json >&2
+    exit 1
+  fi
+  set +e
+  .zero/native-test/std-http-cors-helpers-linux
+  std_http_cors_helpers_linux_status=$?
+  set -e
+  test "$std_http_cors_helpers_linux_status" = "32"
+  test ! -f .zero/native-test/std-http-cors-helpers-linux.zero.o
+  test ! -f .zero/native-test/std-http-cors-helpers-linux.zero-runtime.o
+  node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-cors-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
   curl_link_smoke_src="/tmp/zero-curl-link-smoke-$$.c"
   curl_link_smoke_exe="/tmp/zero-curl-link-smoke-$$"
   cat > "$curl_link_smoke_src" <<'SOURCE'
@@ -796,6 +877,12 @@ SOURCE
   test ! -f .zero/native-test/std-http-response-helpers.zero.o
   test ! -f .zero/native-test/std-http-response-helpers.zero-runtime.o
   node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-response-helpers.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
+  rm -f .zero/native-test/std-http-redirect-response-helpers .zero/native-test/std-http-redirect-response-helpers.json .zero/native-test/std-http-redirect-response-helpers.zero.o .zero/native-test/std-http-redirect-response-helpers.zero-runtime.o
+  bin/zero build --json --emit exe --target darwin-arm64 conformance/native/pass/std-http-redirect-response-helpers.graph --out .zero/native-test/std-http-redirect-response-helpers > .zero/native-test/std-http-redirect-response-helpers.json
+  .zero/native-test/std-http-redirect-response-helpers
+  test ! -f .zero/native-test/std-http-redirect-response-helpers.zero.o
+  test ! -f .zero/native-test/std-http-redirect-response-helpers.zero-runtime.o
+  node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-redirect-response-helpers.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
   rm -f .zero/native-test/std-http-api-helpers .zero/native-test/std-http-api-helpers.json .zero/native-test/std-http-api-helpers.zero.o .zero/native-test/std-http-api-helpers.zero-runtime.o
   bin/zero build --json --emit exe --target darwin-arm64 conformance/native/pass/std-http-api-helpers.graph --out .zero/native-test/std-http-api-helpers > .zero/native-test/std-http-api-helpers.json
   set +e
@@ -806,6 +893,16 @@ SOURCE
   test ! -f .zero/native-test/std-http-api-helpers.zero.o
   test ! -f .zero/native-test/std-http-api-helpers.zero-runtime.o
   node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-api-helpers.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
+  rm -f .zero/native-test/std-http-cors-helpers .zero/native-test/std-http-cors-helpers.json .zero/native-test/std-http-cors-helpers.zero.o .zero/native-test/std-http-cors-helpers.zero-runtime.o
+  bin/zero build --json --emit exe --target darwin-arm64 conformance/native/pass/std-http-cors-helpers.graph --out .zero/native-test/std-http-cors-helpers > .zero/native-test/std-http-cors-helpers.json
+  set +e
+  .zero/native-test/std-http-cors-helpers
+  std_http_cors_helpers_status=$?
+  set -e
+  test "$std_http_cors_helpers_status" = "32"
+  test ! -f .zero/native-test/std-http-cors-helpers.zero.o
+  test ! -f .zero/native-test/std-http-cors-helpers.zero-runtime.o
+  node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-cors-helpers.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
   rm -f .zero/native-test/std-http-fetch .zero/native-test/std-http-fetch.json .zero/native-test/std-http-fetch.zero.o .zero/native-test/std-http-fetch.zero-runtime.o .zero/native-test/std-http-fetch.zero-http-curl.o
   if bin/zero build --json --emit exe --target darwin-arm64 conformance/native/pass/std-http-fetch.graph --out .zero/native-test/std-http-fetch > .zero/native-test/std-http-fetch.json; then
     set +e

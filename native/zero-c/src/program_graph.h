@@ -129,6 +129,7 @@ void z_program_graph_finalize_identities(ZProgramGraph *graph);
 bool z_program_graph_node_id_valid(const char *id);
 void z_program_graph_init(ZProgramGraph *graph);
 void z_program_graph_free(ZProgramGraph *graph);
+bool z_program_graph_clone(const ZProgramGraph *from, ZProgramGraph *out);
 bool z_program_graph_validate(const ZProgramGraph *graph, ZProgramGraphValidation *validation);
 
 #endif

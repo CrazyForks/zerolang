@@ -56,6 +56,11 @@ typedef struct {
 
 static const unsigned char STORE_BINARY_MAGIC[8] = {'Z', 'R', 'G', 'B', 'I', 'N', '1', 0};
 static const uint64_t STORE_BINARY_NULL_LEN = UINT64_MAX;
+static const size_t STORE_BINARY_MAX_SOURCE_COUNT = 100000;
+static const size_t STORE_BINARY_MAX_PROJECTION_COUNT = 100000;
+static const size_t STORE_BINARY_MAX_NODE_COUNT = 1000000;
+static const size_t STORE_BINARY_MAX_EDGE_COUNT = 4000000;
+static const size_t STORE_BINARY_MAX_STRING_BYTES = 256u * 1024u * 1024u;
 
 static bool binary_text_eq(const char *left, const char *right) {
   return strcmp(left ? left : "", right ? right : "") == 0;
@@ -459,7 +464,10 @@ static bool binary_ref_string(const StoreBinaryHeader *header, StoreBinaryString
     return true;
   }
   if (ref.offset > (uint64_t)header->strings_len || ref.len > (uint64_t)header->strings_len - ref.offset || ref.len > (uint64_t)SIZE_MAX) return false;
-  *out = z_strndup((const char *)header->strings + (size_t)ref.offset, (size_t)ref.len);
+  const unsigned char *start = header->strings + (size_t)ref.offset;
+  size_t len = (size_t)ref.len;
+  if (memchr(start, 0, len) != NULL) return false;
+  *out = z_strndup((const char *)start, len);
   return true;
 }
 
@@ -500,6 +508,14 @@ static bool binary_header_records_fit(const StoreBinaryHeader *header, const Sto
   return record_bytes <= (uint64_t)(header->strings_offset - reader->cursor);
 }
 
+static bool binary_header_counts_are_reasonable(const StoreBinaryHeader *header) {
+  return header->source_count <= STORE_BINARY_MAX_SOURCE_COUNT &&
+         header->projection_count <= STORE_BINARY_MAX_PROJECTION_COUNT &&
+         header->node_count <= STORE_BINARY_MAX_NODE_COUNT &&
+         header->edge_count <= STORE_BINARY_MAX_EDGE_COUNT &&
+         header->strings_len <= STORE_BINARY_MAX_STRING_BYTES;
+}
+
 static bool binary_read_header(StoreBinaryReader *reader, StoreBinaryHeader *header, size_t file_len) {
   unsigned char magic[sizeof(STORE_BINARY_MAGIC)];
   uint32_t reserved = 0;
@@ -531,7 +547,9 @@ static bool binary_read_header(StoreBinaryReader *reader, StoreBinaryHeader *hea
   header->strings = reader->data + header->strings_offset;
   header->strings_len = (size_t)string_bytes64;
   reader->len = header->strings_offset;
-  return header->strings_offset >= reader->cursor && binary_header_records_fit(header, reader);
+  return header->strings_offset >= reader->cursor &&
+         binary_header_counts_are_reasonable(header) &&
+         binary_header_records_fit(header, reader);
 }
 
 static bool binary_parse_sources(StoreBinaryReader *reader, const StoreBinaryHeader *header, ZProgramGraphStore *out) {

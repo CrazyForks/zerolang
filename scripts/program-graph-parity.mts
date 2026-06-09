@@ -113,6 +113,116 @@ function compilerCacheKey(result, name) {
   return cache.key;
 }
 
+function compilerCache(result, name) {
+  const cache = result.compilerCaches?.find((item) => item.name === name);
+  assert(cache, `missing compiler cache ${name}`);
+  return cache;
+}
+
+const MIR_FUNCTION_COUNT_OFFSET = 16;
+const MIR_LOCAL_COUNT_OFFSET = 24;
+const MIR_INSTR_COUNT_OFFSET = 32;
+const MIR_VALUE_COUNT_OFFSET = 40;
+const MIR_VALUE_REF_COUNT_OFFSET = 48;
+const MIR_INSTR_REF_COUNT_OFFSET = 56;
+const MIR_EXTERNAL_COUNT_OFFSET = 64;
+const MIR_EXTERNAL_PARAM_TYPE_COUNT_OFFSET = 72;
+const MIR_DATA_SEGMENT_COUNT_OFFSET = 80;
+const MIR_DATA_BYTES_OFFSET = 88;
+const MIR_STRING_BYTES_OFFSET = 96;
+const MIR_GRAPH_HASH_REF_OFFSET = 120;
+
+function corruptMappedMirGraphHashIdentity(bytes) {
+  const copy = Buffer.from(bytes);
+  const stringBytes = Number(copy.readBigUInt64LE(MIR_STRING_BYTES_OFFSET));
+  const graphHashOffset = Number(copy.readBigUInt64LE(MIR_GRAPH_HASH_REF_OFFSET));
+  const graphHashLen = Number(copy.readBigUInt64LE(MIR_GRAPH_HASH_REF_OFFSET + 8));
+  assert(stringBytes <= copy.length, "mapped MIR cache has invalid string table size");
+  assert(graphHashLen > 8, "mapped MIR graph hash identity is too short to corrupt");
+  const stringsOffset = copy.length - stringBytes;
+  assert(graphHashOffset + 6 < stringBytes, "mapped MIR graph hash identity offset is out of range");
+  copy[stringsOffset + graphHashOffset + 6] = 0;
+  return copy;
+}
+
+function corruptMappedMirU64(bytes, offset, value) {
+  const copy = Buffer.from(bytes);
+  copy.writeBigUInt64LE(value, offset);
+  return copy;
+}
+
+function corruptMappedMirFunctionCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_FUNCTION_COUNT_OFFSET, 100_001n);
+}
+
+function corruptMappedMirLocalCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_LOCAL_COUNT_OFFSET, 1_000_001n);
+}
+
+function corruptMappedMirInstrCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_INSTR_COUNT_OFFSET, 4_000_001n);
+}
+
+function corruptMappedMirValueCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_VALUE_COUNT_OFFSET, 4_000_001n);
+}
+
+function corruptMappedMirValueRefCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_VALUE_REF_COUNT_OFFSET, 8_000_001n);
+}
+
+function corruptMappedMirInstrRefCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_INSTR_REF_COUNT_OFFSET, 8_000_001n);
+}
+
+function corruptMappedMirExternalCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_EXTERNAL_COUNT_OFFSET, 100_001n);
+}
+
+function corruptMappedMirExternalParamTypeCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_EXTERNAL_PARAM_TYPE_COUNT_OFFSET, 1_000_001n);
+}
+
+function corruptMappedMirDataSegmentCount(bytes) {
+  return corruptMappedMirU64(bytes, MIR_DATA_SEGMENT_COUNT_OFFSET, 1_000_001n);
+}
+
+function corruptMappedMirDataBytes(bytes) {
+  return corruptMappedMirU64(bytes, MIR_DATA_BYTES_OFFSET, 256n * 1024n * 1024n + 1n);
+}
+
+function corruptMappedMirStringBytes(bytes) {
+  return corruptMappedMirU64(bytes, MIR_STRING_BYTES_OFFSET, 256n * 1024n * 1024n + 1n);
+}
+
+async function assertMappedMirCacheRegeneratesAfterCorruption(cachePath, corrupt, buildOut, artifact, message) {
+  const original = await readFile(cachePath);
+  await writeFile(cachePath, corrupt(original));
+  const result = await zeroJson(["build", "--json", "--target", "linux-musl-x64", "--out", buildOut, artifact]);
+  const cache = compilerCache(result, "mappedFinalMir");
+  assert.equal(cache.hit, false, `${message}: corrupted mapped MIR cache must not be reused`);
+  assert.equal(cache.written, true, `${message}: corrupted mapped MIR cache should be regenerated`);
+  assert.equal(cache.codegenImmediate, false, `${message}: regeneration should not claim immediate codegen from stale MIR`);
+  assert.equal(cache.programReconstructed, false, `${message}: graph build should stay graph-native while regenerating MIR`);
+  assert.equal(cache.path, cachePath, `${message}: regenerated cache should use the same deterministic path`);
+  assert(result.artifactBytes > 0, `${message}: build should still produce an artifact`);
+}
+
+const mappedMirCorruptionCases = [
+  ["embedded NUL in mapped MIR graph identity", corruptMappedMirGraphHashIdentity],
+  ["oversized mapped MIR function count", corruptMappedMirFunctionCount],
+  ["oversized mapped MIR local count", corruptMappedMirLocalCount],
+  ["oversized mapped MIR instruction count", corruptMappedMirInstrCount],
+  ["oversized mapped MIR value count", corruptMappedMirValueCount],
+  ["oversized mapped MIR value ref count", corruptMappedMirValueRefCount],
+  ["oversized mapped MIR instruction ref count", corruptMappedMirInstrRefCount],
+  ["oversized mapped MIR external count", corruptMappedMirExternalCount],
+  ["oversized mapped MIR external param type count", corruptMappedMirExternalParamTypeCount],
+  ["oversized mapped MIR data segment count", corruptMappedMirDataSegmentCount],
+  ["oversized mapped MIR data bytes", corruptMappedMirDataBytes],
+  ["oversized mapped MIR string bytes", corruptMappedMirStringBytes],
+];
+
 function testSummary(result) {
   return {
     ok: result.ok,
@@ -484,6 +594,15 @@ async function assertCommandStateContracts() {
   assert.equal(buildMirCache.hit, true, "graph build should reuse the mapped final MIR warmed by size");
   assert.equal(buildMirCache.codegenImmediate, true, "graph build should codegen immediately from mapped final MIR");
   assert.equal(buildMirCache.programReconstructed, false, "graph build should not reconstruct checked program facts on a mapped MIR hit");
+  for (const [index, [label, corrupt]] of mappedMirCorruptionCases.entries()) {
+    await assertMappedMirCacheRegeneratesAfterCorruption(
+      sizeMirCache.path,
+      corrupt,
+      `${outDir}/state-contracts-build-corrupt-${index}`,
+      artifact,
+      label,
+    );
+  }
 
   const stdArgsArtifact = await dumpGraphArtifact("conformance/native/pass/std-args.0", "std-args-mir");
   const stdArgsSize = await zeroJson(["size", "--json", "--target", "linux-musl-x64", stdArgsArtifact]);
