@@ -2363,6 +2363,8 @@ const graphDeletedNodeFactPath = join(outDir, "hello.delete-node-fact.program-gr
 const graphRepositoryPatchPackageDir = join(outDir, "repository-graph-patch-package");
 const graphRepositoryBodyPatchPath = join(outDir, "repository-graph.replace-body.patch");
 const graphRepositoryBlockPatchPath = join(outDir, "repository-graph.replace-block.patch");
+const graphRepositoryCheckExprPatchPath = join(outDir, "repository-graph.check-expr.patch");
+const graphRepositoryRowErgonomicsPatchPath = join(outDir, "repository-graph.row-ergonomics.patch");
 const graphRepositoryInvalidBodyPatchPath = join(outDir, "repository-graph.invalid-body.patch");
 const graphPatchDeleteExternalRootRefPath = join(outDir, "hello.delete-external-root-ref.program-graph.patch");
 const graphPatchDeleteExtraOwnerPath = join(outDir, "hello.delete-extra-owner.program-graph.patch");
@@ -2692,6 +2694,52 @@ assert.match(repositoryBlockView, /check world\.out\.write\("hello anonymous\\n"
 assert.equal(zero(["check", graphRepositoryPatchPackageDir]).stdout, "ok\n");
 assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "name: Ada\n");
 assert.match(zero(["status", graphRepositoryPatchPackageDir]).stdout, /source-stale/);
+assert.match(zero(["export", graphRepositoryPatchPackageDir]).stdout, /repository graph export ok/);
+assert.equal(zero(["verify-projection", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-projection ok\n");
+const repositoryRowQueryJson = json(["query", "--json", graphRepositoryPatchPackageDir]).body;
+writeFileSync(graphRepositoryCheckExprPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryRowQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  var path_storage [32]u8 = repeat 0_u8 32",
+  "  let name String = check std.path.join path_storage \".zero\" \"row-ergonomics\"",
+  "  if !std.mem.eql name \".zero/row-ergonomics\"",
+  "    check world.err.write \"wrong name\\n\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryCheckExprDryRunJson = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryCheckExprPatchPath]).body;
+assert.equal(repositoryCheckExprDryRunJson.ok, true);
+assert.equal(repositoryCheckExprDryRunJson.checkOnly, true);
+assert.equal(repositoryCheckExprDryRunJson.saved, null);
+assert.equal(repositoryCheckExprDryRunJson.operations[0].op, "replaceFunctionBody");
+writeFileSync(graphRepositoryRowErgonomicsPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryRowQueryJson.graphHash}"`,
+  "replaceFunctionBody main",
+  "  let name String = \".zero/row-ergonomics\"",
+  "  let status i32 = 200_u16 as i32",
+  "  if !std.mem.eql name \".zero/row-ergonomics\"",
+  "    check world.err.write \"wrong name\\n\"",
+  "  else",
+  "    if status == 200",
+  "      check world.out.write \"row ergonomics ok\\n\"",
+  "end",
+  "",
+].join("\n"));
+const repositoryRowErgonomicsDryRunJson = json(["patch", "--json", "--check-only", graphRepositoryPatchPackageDir, graphRepositoryRowErgonomicsPatchPath]).body;
+assert.equal(repositoryRowErgonomicsDryRunJson.ok, true);
+assert.equal(repositoryRowErgonomicsDryRunJson.checkOnly, true);
+assert.equal(repositoryRowErgonomicsDryRunJson.saved, null);
+const repositoryRowErgonomicsPatchJson = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryRowErgonomicsPatchPath]).body;
+assert.equal(repositoryRowErgonomicsPatchJson.ok, true);
+assert.equal(repositoryRowErgonomicsPatchJson.operations[0].op, "replaceFunctionBody");
+const repositoryRowErgonomicsView = zero(["view", graphRepositoryPatchPackageDir]).stdout;
+assert.match(repositoryRowErgonomicsView, /let name: String = "\.zero\/row-ergonomics"/);
+assert.match(repositoryRowErgonomicsView, /let status: i32 = 200_u16 as i32/);
+assert.match(repositoryRowErgonomicsView, /if !std\.mem\.eql\(name, "\.zero\/row-ergonomics"\)/);
+assert.equal(zero(["check", graphRepositoryPatchPackageDir]).stdout, "ok\n");
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, "row ergonomics ok\n");
 assert.match(zero(["export", graphRepositoryPatchPackageDir]).stdout, /repository graph export ok/);
 assert.equal(zero(["verify-projection", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-projection ok\n");
 const repositorySyncedQueryJson = json(["query", "--json", graphRepositoryPatchPackageDir]).body;

@@ -115,7 +115,7 @@ static char *body_call_source(char **tokens, size_t len) {
 }
 
 static char *body_find_infix(char *expr, const char **out_op) {
-  const char *ops[] = {" == ", " != ", " <= ", " >= ", " < ", " > ", " + ", " - ", " * ", " / ", " % "};
+  const char *ops[] = {" == ", " != ", " <= ", " >= ", " as ", " < ", " > ", " + ", " - ", " * ", " / ", " % "};
   bool quoted = false;
   size_t depth = 0;
   for (char *cursor = expr; cursor && *cursor; cursor++) {
@@ -134,6 +134,29 @@ static char *body_find_infix(char *expr, const char **out_op) {
 static char *body_expr_source(const char *expr) {
   char *copy = z_strdup(expr ? expr : "");
   char *trimmed = body_trim(copy);
+  if (strncmp(trimmed, "check ", 6) == 0 || strncmp(trimmed, "meta ", 5) == 0) {
+    const char *prefix = strncmp(trimmed, "check ", 6) == 0 ? "check" : "meta";
+    size_t prefix_len = strlen(prefix);
+    char *operand = body_expr_source(trimmed + prefix_len + 1);
+    ZBuf out;
+    zbuf_init(&out);
+    zbuf_append(&out, prefix);
+    zbuf_append_char(&out, ' ');
+    zbuf_append(&out, operand);
+    free(operand);
+    free(copy);
+    return out.data ? out.data : z_strdup("");
+  }
+  if (trimmed[0] == '!' && trimmed[1] != '=') {
+    char *operand = body_expr_source(trimmed + 1);
+    ZBuf out;
+    zbuf_init(&out);
+    zbuf_append_char(&out, '!');
+    zbuf_append(&out, operand);
+    free(operand);
+    free(copy);
+    return out.data ? out.data : z_strdup("");
+  }
   char *and = strstr(trimmed, " && ");
   if (and) {
     *and = '\0';
