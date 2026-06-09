@@ -173,6 +173,7 @@ async function main() {
           prompt,
           expectedStdout,
           expectedStderr,
+          maxValidationDurationMs,
           runChecks,
           requiredSourcePatterns,
         }) => ({
@@ -183,6 +184,7 @@ async function main() {
           prompt,
           expectedStdout,
           expectedStderr: expectedStderr ?? "",
+          maxValidationDurationMs: maxValidationDurationMs ?? null,
           runCheckCount: normalizedRunChecks({
             expectedStdout,
             expectedStderr,
@@ -336,6 +338,7 @@ async function runCase(
     await writeFile(sourcePath, source);
   }
 
+  const validationStarted = performance.now();
   const validation = await validateEvalCase({
     caseDir,
     evalCase,
@@ -346,6 +349,7 @@ async function runCase(
     source,
     sourcePath,
   });
+  const validationDurationMs = Math.round(performance.now() - validationStarted);
   const { check, build, runs, remoteSourcePath, sourceText } = validation;
   const run = runs[0]?.command ?? null;
 
@@ -365,11 +369,16 @@ async function runCase(
   const actualStderr = run?.stderr ?? "";
   const expectedStderr = normalizedRunChecks(evalCase)[0]?.expectedStderr ?? "";
   const runFailures = runResultFailures(runs);
+  const budgetFailures = validationBudgetFailures(
+    evalCase,
+    validationDurationMs,
+  );
   const passed =
     agentRun.error === null &&
     check.code === 0 &&
     (build?.code ?? 0) === 0 &&
     runFailures.length === 0 &&
+    budgetFailures.length === 0 &&
     patternFailures.length === 0 &&
     responseFormatFailures.length === 0 &&
     agentRequirementFailures.length === 0;
@@ -379,6 +388,7 @@ async function runCase(
       run,
       build,
       runFailures,
+      budgetFailures,
       actualStdout,
       actualStderr,
       expectedStdout: evalCase.expectedStdout,
@@ -397,6 +407,7 @@ async function runCase(
     mode: options.fixture ? "fixture" : "sandbox",
     kind: evalCase.kind ?? "source",
     durationMs: Math.round(performance.now() - started),
+    validationDurationMs,
     sourcePath: isPackageEvalCase(evalCase) ? null : sourcePath,
     remoteSourcePath,
     remoteProjectDir: sandboxProjectDir,
@@ -412,6 +423,7 @@ async function runCase(
     run,
     runChecks: runs,
     runFailures,
+    budgetFailures,
     expectedStdout: evalCase.expectedStdout,
     expectedStderr,
     actualStdout,
@@ -1583,6 +1595,7 @@ function failureReason(input: {
   run: CommandResult | null;
   build: CommandResult | null;
   runFailures: string[];
+  budgetFailures: string[];
   actualStdout: string;
   actualStderr: string;
   expectedStdout: string;
@@ -1598,6 +1611,9 @@ function failureReason(input: {
   if (input.runFailures.length > 0) {
     return input.runFailures[0];
   }
+  if (input.budgetFailures.length > 0) {
+    return input.budgetFailures[0];
+  }
   if (input.patternFailures.length > 0) {
     return "source did not match required patterns";
   }
@@ -1608,6 +1624,17 @@ function failureReason(input: {
     return "agent did not satisfy the required Zero CLI workflow";
   }
   return "unknown failure";
+}
+
+function validationBudgetFailures(
+  evalCase: EvalCase,
+  validationDurationMs: number,
+): string[] {
+  const max = evalCase.maxValidationDurationMs;
+  if (!max || validationDurationMs <= max) return [];
+  return [
+    `validation took ${validationDurationMs}ms, exceeding budget ${max}ms`,
+  ];
 }
 
 function getAgentRequirementFailures(
@@ -1719,6 +1746,9 @@ function printJsonOrText(json: boolean, value: unknown) {
       if (result.responseFormatFailures.length > 0) {
         console.log(`  ${result.responseFormatFailures.join("; ")}`);
       }
+      if (result.budgetFailures.length > 0) {
+        console.log(`  ${result.budgetFailures.join("; ")}`);
+      }
     }
     if (value.sandboxId) {
       console.log(
@@ -1746,6 +1776,7 @@ function isSummary(value: unknown): value is {
     agent: AgentMetrics | null;
     agentRequirementFailures: string[];
     responseFormatFailures: string[];
+    budgetFailures: string[];
   }>;
 } {
   return Boolean(

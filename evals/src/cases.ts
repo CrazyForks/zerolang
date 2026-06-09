@@ -21,6 +21,7 @@ export interface EvalCase {
   fixtureProjectDir?: string;
   runArgs?: string[];
   runChecks?: EvalRunCheck[];
+  maxValidationDurationMs?: number;
   expectedStdout: string;
   expectedStderr?: string;
   requiredSourcePatterns: RegExp[];
@@ -231,6 +232,7 @@ const agentScaleEvalCases: EvalCase[] = [
     ].join("\n"),
     runArgs: ["help"],
     expectedStdout: scaleCliUsage,
+    maxValidationDurationMs: 10_000,
     runChecks: [
       {
         name: "help",
@@ -285,6 +287,7 @@ const agentScaleEvalCases: EvalCase[] = [
     runArgs: ["GET /health\n\n"],
     expectedStdout:
       "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 27\n\n{\"ok\":true,\"service\":\"crm\"}",
+    maxValidationDurationMs: 45_000,
     runChecks: [
       {
         name: "health",
