@@ -11,6 +11,13 @@ export interface EvalRunCheck {
   expectedStderr?: string;
 }
 
+export interface EvalServerCheck {
+  name: string;
+  path: string;
+  expectedStdout: string;
+  expectedStderr?: string;
+}
+
 export interface EvalCase {
   id: string;
   title: string;
@@ -21,6 +28,7 @@ export interface EvalCase {
   fixtureProjectDir?: string;
   runArgs?: string[];
   runChecks?: EvalRunCheck[];
+  serverChecks?: EvalServerCheck[];
   maxValidationDurationMs?: number;
   expectedStdout: string;
   expectedStderr?: string;
@@ -167,6 +175,12 @@ const scaleOpsOverdue =
   "overdue activities: 2\n- Grace Hopper: follow up proposal\n- Alan Turing: send renewal note\n";
 const scaleOpsCsv =
   "account,contact,stage,amount\nAcme,Grace Hopper,proposal,120000\nGlobex,Ada Lovelace,qualified,65000\nInitech,Alan Turing,discovery,30000\n";
+const scalePingResponse =
+  "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 18\n\n{\"message\":\"pong\"}";
+const scaleHealthResponse =
+  "HTTP/1.1 200 OK\ncontent-type: application/json\ncontent-length: 11\n\n{\"ok\":true}";
+const scaleMissingResponse =
+  "HTTP/1.1 404 Not Found\ncontent-type: application/json\ncontent-length: 21\n\n{\"error\":\"not_found\"}";
 
 const agentScaleEvalCases: EvalCase[] = [
   {
@@ -390,6 +404,52 @@ const agentScaleEvalCases: EvalCase[] = [
       /Ada Lovelace/,
       /Alan Turing/,
       /usage: zero run \. -- <summary\|overdue\|csv\|help>/,
+    ],
+  },
+  {
+    id: "scale-ping-pong-web-server",
+    title: "Agent scale: curlable ping/pong web server package",
+    kind: "package",
+    suites: ["agent-scale"],
+    prompt: [
+      "Build a graph-first Zerolang ping/pong web server package.",
+      "Create the package in the candidate package root provided by the evaluator.",
+      "Use std.http.listen(world) without an explicit port so Zero can auto-select a free local development port.",
+      "Implement a same-module handle(request, response) function.",
+      "GET /ping should return JSON {\"message\":\"pong\"}.",
+      "GET /health should return JSON {\"ok\":true}.",
+      "Unknown routes should return JSON {\"error\":\"not_found\"} with a 404 response.",
+    ].join("\n"),
+    fixtureProjectDir: "examples/ping-pong-api",
+    expectedStdout: scalePingResponse,
+    maxValidationDurationMs: 45_000,
+    serverChecks: [
+      {
+        name: "ping",
+        path: "/ping",
+        expectedStdout: scalePingResponse,
+      },
+      {
+        name: "health",
+        path: "/health",
+        expectedStdout: scaleHealthResponse,
+      },
+      {
+        name: "missing",
+        path: "/missing",
+        expectedStdout: scaleMissingResponse,
+      },
+    ],
+    requiredSourcePatterns: [
+      ...packageProgramPatterns,
+      /std\.http\.listen\s*\(\s*world\s*\)/,
+      /fn\s+handle/,
+      /std\.http\.requestIsGet/,
+      /std\.http\.writeJsonOk/,
+      /std\.http\.writeJsonNotFound/,
+      /\/ping/,
+      /\/health/,
+      /not_found/,
     ],
   },
   {

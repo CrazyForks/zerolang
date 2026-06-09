@@ -1,5 +1,5 @@
 import { Sandbox, type NetworkPolicy } from "@vercel/sandbox";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { cp, mkdir, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -12,6 +12,7 @@ import {
   findEvalSuite,
   type EvalCase,
   type EvalRunCheck,
+  type EvalServerCheck,
 } from "./cases.js";
 import {
   extractZeroSource,
@@ -176,6 +177,7 @@ async function main() {
           expectedStderr,
           maxValidationDurationMs,
           runChecks,
+          serverChecks,
           requiredSourcePatterns,
         }) => ({
           id,
@@ -186,11 +188,15 @@ async function main() {
           expectedStdout,
           expectedStderr: expectedStderr ?? "",
           maxValidationDurationMs: maxValidationDurationMs ?? null,
-          runCheckCount: normalizedRunChecks({
-            expectedStdout,
-            expectedStderr,
-            runChecks,
-          }).length,
+          runCheckCount:
+            serverChecks && serverChecks.length > 0
+              ? 0
+              : normalizedRunChecks({
+                  expectedStdout,
+                  expectedStderr,
+                  runChecks,
+                }).length,
+          serverCheckCount: serverChecks?.length ?? 0,
           requiredSourcePatternCount: requiredSourcePatterns.length,
         }),
       ),
@@ -368,7 +374,7 @@ async function runCase(
     : getAgentRequirementFailures(agentRun.metrics, options.maxTurns);
   const actualStdout = run?.stdout ?? "";
   const actualStderr = run?.stderr ?? "";
-  const expectedStderr = normalizedRunChecks(evalCase)[0]?.expectedStderr ?? "";
+  const expectedStderr = expectedStderrForEvalCase(evalCase);
   const runFailures = runResultFailures(runs);
   const budgetFailures = validationBudgetFailures(
     evalCase,
@@ -648,13 +654,21 @@ async function validateSourceLocally(
   let build: CommandResult | null = null;
   let runs: EvalRunResult[] = [];
   if (check.code === 0) {
-    const built = await buildCandidateLocally(
-      evalCase,
-      graphPath,
-      dirname(sourcePath),
-    );
-    build = built.build;
-    runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    if (hasServerChecks(evalCase)) {
+      runs = await runServerCandidateLocally(
+        evalCase,
+        graphPath,
+        dirname(sourcePath),
+      );
+    } else {
+      const built = await buildCandidateLocally(
+        evalCase,
+        graphPath,
+        dirname(sourcePath),
+      );
+      build = built.build;
+      runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    }
   }
   return { check, build, runs, remoteSourcePath: null, sourceText: source };
 }
@@ -717,15 +731,25 @@ async function validateSourceInSandbox(
   let build: CommandResult | null = null;
   let runs: EvalRunResult[] = [];
   if (check.code === 0) {
-    const built = await buildCandidateInSandbox(
-      context,
-      evalCase,
-      projectDir,
-      remoteGraphPath,
-      remoteCaseDir,
-    );
-    build = built.build;
-    runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    if (hasServerChecks(evalCase)) {
+      runs = await runServerCandidateInSandbox(
+        context,
+        evalCase,
+        projectDir,
+        remoteGraphPath,
+        remoteCaseDir,
+      );
+    } else {
+      const built = await buildCandidateInSandbox(
+        context,
+        evalCase,
+        projectDir,
+        remoteGraphPath,
+        remoteCaseDir,
+      );
+      build = built.build;
+      runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    }
   }
 
   return { check, build, runs, remoteSourcePath, sourceText: source };
@@ -752,9 +776,13 @@ async function validateFixturePackageLocally(
   let build: CommandResult | null = null;
   let runs: EvalRunResult[] = [];
   if (check.code === 0) {
-    const built = await buildCandidateLocally(evalCase, packageDir, caseDir);
-    build = built.build;
-    runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    if (hasServerChecks(evalCase)) {
+      runs = await runServerCandidateLocally(evalCase, packageDir, caseDir);
+    } else {
+      const built = await buildCandidateLocally(evalCase, packageDir, caseDir);
+      build = built.build;
+      runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    }
   }
   return { check, build, runs, remoteSourcePath: null, sourceText };
 }
@@ -788,20 +816,33 @@ async function validatePackageInSandbox(
     workspaceDir,
     packageDir,
   );
-  const runs =
-    check.code === 0
-      ? await buildCandidateInSandbox(
-          context,
-          evalCase,
-          workspaceDir,
-          packageDir,
-          remoteCaseDir,
-        )
-      : { build: null, runs: [] };
+  let build: CommandResult | null = null;
+  let runs: EvalRunResult[] = [];
+  if (check.code === 0) {
+    if (hasServerChecks(evalCase)) {
+      runs = await runServerCandidateInSandbox(
+        context,
+        evalCase,
+        workspaceDir,
+        packageDir,
+        remoteCaseDir,
+      );
+    } else {
+      const built = await buildCandidateInSandbox(
+        context,
+        evalCase,
+        workspaceDir,
+        packageDir,
+        remoteCaseDir,
+      );
+      build = built.build;
+      runs = built.runs.length > 0 ? built.runs : emptyRunResults(evalCase);
+    }
+  }
   return {
     check,
-    build: runs.build,
-    runs: runs.runs.length > 0 ? runs.runs : emptyRunResults(evalCase),
+    build,
+    runs: runs.length > 0 ? runs : emptyRunResults(evalCase),
     remoteSourcePath: null,
     sourceText,
   };
@@ -880,6 +921,227 @@ async function buildCandidateInSandbox(
   return { build, runs: results };
 }
 
+async function runServerCandidateLocally(
+  evalCase: EvalCase,
+  inputPath: string,
+  outDir: string,
+): Promise<EvalRunResult[]> {
+  const runDir = join(outDir, "server-run");
+  await mkdir(runDir, { recursive: true });
+
+  const server = spawn(zero, ["run", inputPath], {
+    cwd: runDir,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  let serverStdout = "";
+  let serverStderr = "";
+  server.stdout.setEncoding("utf8");
+  server.stderr.setEncoding("utf8");
+  server.stdout.on("data", (chunk) => {
+    serverStdout += String(chunk);
+  });
+  server.stderr.on("data", (chunk) => {
+    serverStderr += String(chunk);
+  });
+
+  try {
+    const url = await waitForLocalServerUrl(
+      server,
+      () => serverStdout,
+      () => serverStderr,
+    );
+    if (!url) {
+      const command = {
+        code: 1,
+        stdout: serverStdout,
+        stderr: [
+          "server did not print a loopback listening URL",
+          serverStderr.trim(),
+        ].filter(Boolean).join("\n"),
+      };
+      return normalizedServerChecks(evalCase).map((check) =>
+        toServerEvalRunResult(check, command, runDir),
+      );
+    }
+    const results: EvalRunResult[] = [];
+    for (const check of normalizedServerChecks(evalCase)) {
+      const command = await runLocalCommand(
+        "curl",
+        ["-sS", "-i", `${url}${check.path}`],
+        DEFAULT_LOCAL_COMMAND_TIMEOUT_MS,
+        runDir,
+      );
+      results.push(toServerEvalRunResult(check, command, runDir));
+    }
+    return results;
+  } finally {
+    await stopLocalServer(server);
+  }
+}
+
+async function runServerCandidateInSandbox(
+  context: SandboxContext,
+  evalCase: EvalCase,
+  workspaceDir: string,
+  inputPath: string,
+  remoteCaseDir: string,
+): Promise<EvalRunResult[]> {
+  const runDir = `${remoteCaseDir}/server-run`;
+  await runSandboxCommandChecked(
+    context.sandbox,
+    { cmd: "mkdir", args: ["-p", runDir] },
+    "prepare server run directory",
+  );
+
+  const checks = normalizedServerChecks(evalCase);
+  const command = await runSandboxCommand(
+    context.sandbox,
+    {
+      cmd: "bash",
+      args: [
+        "-lc",
+        buildSandboxServerChecksScript(
+          `${workspaceDir}/bin/zero`,
+          inputPath,
+          runDir,
+          checks,
+        ),
+      ],
+      cwd: runDir,
+    },
+    "server curl checks",
+  );
+  return parseSandboxServerCheckResults(checks, command, runDir);
+}
+
+function buildSandboxServerChecksScript(
+  zeroPath: string,
+  inputPath: string,
+  runDir: string,
+  checks: EvalServerCheck[],
+) {
+  const logPath = `${runDir}/server.log`;
+  const curlLines = checks.flatMap((check, index) => {
+    const stdoutPath = `${runDir}/server-check-${index}.stdout`;
+    const stderrPath = `${runDir}/server-check-${index}.stderr`;
+    return [
+      `check_code=0`,
+      `curl -sS -i "$url"${shellQuote(check.path)} > ${shellQuote(stdoutPath)} 2> ${shellQuote(stderrPath)} || check_code=$?`,
+      `printf '\\n__ZERO_EVAL_SERVER_CHECK_${index}_CODE__%s\\n' "$check_code"`,
+      `printf '__ZERO_EVAL_SERVER_CHECK_${index}_STDOUT_BEGIN__\\n'`,
+      `cat ${shellQuote(stdoutPath)} || true`,
+      `printf '\\n__ZERO_EVAL_SERVER_CHECK_${index}_STDOUT_END__\\n'`,
+      `printf '__ZERO_EVAL_SERVER_CHECK_${index}_STDERR_BEGIN__\\n'`,
+      `cat ${shellQuote(stderrPath)} || true`,
+      `printf '\\n__ZERO_EVAL_SERVER_CHECK_${index}_STDERR_END__\\n'`,
+    ];
+  });
+  return [
+    "set -euo pipefail",
+    `${shellQuote(zeroPath)} run ${shellQuote(inputPath)} > ${shellQuote(logPath)} 2>&1 &`,
+    "server_pid=$!",
+    "cleanup() { kill \"$server_pid\" >/dev/null 2>&1 || true; wait \"$server_pid\" >/dev/null 2>&1 || true; }",
+    "trap cleanup EXIT",
+    "url=\"\"",
+    "for _ in $(seq 1 300); do",
+    `  url="$(grep -Eo 'http://127[.]0[.]0[.]1:[0-9]+' ${shellQuote(logPath)} | tail -n 1 || true)"`,
+    "  if [ -n \"$url\" ]; then break; fi",
+    "  if ! kill -0 \"$server_pid\" >/dev/null 2>&1; then",
+    "    echo 'server exited before listening' >&2",
+    `    cat ${shellQuote(logPath)} >&2 || true`,
+    "    exit 1",
+    "  fi",
+    "  sleep 0.05",
+    "done",
+    "if [ -z \"$url\" ]; then",
+    "  echo 'server did not print a loopback listening URL' >&2",
+    `  cat ${shellQuote(logPath)} >&2 || true`,
+    "  exit 1",
+    "fi",
+    ...curlLines,
+  ].join("\n");
+}
+
+function parseSandboxServerCheckResults(
+  checks: EvalServerCheck[],
+  command: CommandResult,
+  cwd: string,
+) {
+  if (command.code !== 0) {
+    return checks.map((check) => toServerEvalRunResult(check, command, cwd));
+  }
+  return checks.map((check, index) => {
+    const codeText = extractBetween(
+      command.stdout,
+      `__ZERO_EVAL_SERVER_CHECK_${index}_CODE__`,
+      "\n",
+    ).trim();
+    const code = Number.parseInt(codeText, 10);
+    const stdout = extractBetween(
+      command.stdout,
+      `__ZERO_EVAL_SERVER_CHECK_${index}_STDOUT_BEGIN__\n`,
+      `\n__ZERO_EVAL_SERVER_CHECK_${index}_STDOUT_END__`,
+    );
+    const stderr = extractBetween(
+      command.stdout,
+      `__ZERO_EVAL_SERVER_CHECK_${index}_STDERR_BEGIN__\n`,
+      `\n__ZERO_EVAL_SERVER_CHECK_${index}_STDERR_END__`,
+    );
+    return toServerEvalRunResult(
+      check,
+      {
+        code: Number.isFinite(code) ? code : 1,
+        stdout,
+        stderr,
+      },
+      cwd,
+    );
+  });
+}
+
+function extractBetween(value: string, start: string, end: string) {
+  const startIndex = value.indexOf(start);
+  if (startIndex === -1) return "";
+  const contentStart = startIndex + start.length;
+  const endIndex = value.indexOf(end, contentStart);
+  return endIndex === -1 ? value.slice(contentStart) : value.slice(contentStart, endIndex);
+}
+
+async function waitForLocalServerUrl(
+  server: ReturnType<typeof spawn>,
+  stdout: () => string,
+  stderr: () => string,
+) {
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const url = extractLoopbackUrl(`${stdout()}\n${stderr()}`);
+    if (url) return url;
+    if (server.exitCode !== null) {
+      if (!stderr()) return null;
+      return null;
+    }
+    await delay(50);
+  }
+  return extractLoopbackUrl(`${stdout()}\n${stderr()}`);
+}
+
+function extractLoopbackUrl(output: string) {
+  return /http:\/\/127[.]0[.]0[.]1:[0-9]+/.exec(output)?.[0] ?? null;
+}
+
+async function stopLocalServer(server: ReturnType<typeof spawn>) {
+  if (server.exitCode !== null) return;
+  server.kill("SIGTERM");
+  await Promise.race([
+    new Promise<void>((resolveStop) => {
+      server.once("exit", () => resolveStop());
+    }),
+    delay(1_000).then(() => {
+      if (server.exitCode === null) server.kill("SIGKILL");
+    }),
+  ]);
+}
+
 function toEvalRunResult(
   check: EvalRunCheck,
   command: CommandResult | null,
@@ -888,6 +1150,23 @@ function toEvalRunResult(
   return {
     name: check.name,
     args: check.args ?? [],
+    cwd,
+    expectedStdout: check.expectedStdout,
+    expectedStderr: check.expectedStderr ?? "",
+    actualStdout: command?.stdout ?? "",
+    actualStderr: command?.stderr ?? "",
+    command,
+  };
+}
+
+function toServerEvalRunResult(
+  check: EvalServerCheck,
+  command: CommandResult | null,
+  cwd: string | null = null,
+): EvalRunResult {
+  return {
+    name: check.name,
+    args: [check.path],
     cwd,
     expectedStdout: check.expectedStdout,
     expectedStderr: check.expectedStderr ?? "",
@@ -920,6 +1199,26 @@ function normalizedRunChecks(evalCase: {
   ];
 }
 
+function normalizedServerChecks(evalCase: {
+  serverChecks?: EvalServerCheck[];
+}): EvalServerCheck[] {
+  return (evalCase.serverChecks ?? []).map((check) => ({
+    ...check,
+    expectedStderr: check.expectedStderr ?? "",
+  }));
+}
+
+function hasServerChecks(evalCase: { serverChecks?: EvalServerCheck[] }) {
+  return Boolean(evalCase.serverChecks && evalCase.serverChecks.length > 0);
+}
+
+function expectedStderrForEvalCase(evalCase: EvalCase) {
+  if (hasServerChecks(evalCase)) {
+    return normalizedServerChecks(evalCase)[0]?.expectedStderr ?? "";
+  }
+  return normalizedRunChecks(evalCase)[0]?.expectedStderr ?? "";
+}
+
 function runResultFailures(runs: EvalRunResult[]): string[] {
   if (runs.length === 0) return ["zero run did not execute"];
   const failures: string[] = [];
@@ -943,6 +1242,11 @@ function runResultFailures(runs: EvalRunResult[]): string[] {
 }
 
 function emptyRunResults(evalCase: EvalCase): EvalRunResult[] {
+  if (hasServerChecks(evalCase)) {
+    return normalizedServerChecks(evalCase).map((check) =>
+      toServerEvalRunResult(check, null),
+    );
+  }
   return normalizedRunChecks(evalCase).map((check) =>
     toEvalRunResult(check, null),
   );
@@ -1586,6 +1890,10 @@ function parsePositiveIntOrDefault(
 ) {
   if (value === undefined || value === "") return fallback;
   return parsePositiveInt(value, label);
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolveDelay) => setTimeout(resolveDelay, ms));
 }
 
 async function runLocalCommand(
