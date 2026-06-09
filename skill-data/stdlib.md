@@ -42,7 +42,7 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.crypto`: small hash and byte-oriented crypto helpers.
 - `std.json`: explicit-buffer JSON validation, structured status codes, shallow field lookup, typed scalar decode, parsing, and string/object writing helpers.
 - `std.toml`: no-allocation TOML validation, shallow/dotted field lookup, and typed scalar decode helpers.
-- `std.url`: target-neutral URL splitting, percent/query encoding and decoding, query lookup, and query append helpers.
+- `std.url`: target-neutral URL splitting, percent/query/form encoding and decoding, query/form lookup, and query append helpers.
 - `std.str`: byte-span string helpers, including non-overlapping reverse, prefix/suffix, substring, trim, and word counts.
 - `std.io`: buffered reader/writer surfaces, cursor writes, line scanning, and byte copy over caller-owned storage.
 - `std.testing`: Bool-returning helpers for test blocks and byte-output checks.
@@ -796,7 +796,11 @@ host(arg0: Span<u8>) -> Maybe<Span<u8>>
 path(arg0: Span<u8>) -> Span<u8>
 query(arg0: Span<u8>) -> Maybe<Span<u8>>
 queryValue(arg0: Span<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+queryValueDecoded(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeQueryParam(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeFormField(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+appendFormField(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
+formValue(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 appendQuery(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>) -> Maybe<Span<u8>>
 ```
 

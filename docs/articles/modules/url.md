@@ -1,7 +1,7 @@
 ## When To Use std.url
 
-In Zerolang, use `std.url` for lexical URL splitting, percent encoding, query lookup, and
-query appending.
+In Zerolang, use `std.url` for lexical URL splitting, percent encoding, decoded
+query lookup, form-urlencoded bodies, and query appending.
 
 This module is graph-backed. The compiler uses its standard-library graph store,
 while the projection snippets below show the human-readable projection that agents may
@@ -24,7 +24,11 @@ Runnable today:
 | `std.url.path(url)` | `Span<u8>` | Borrows the path or an empty suffix. |
 | `std.url.query(url)` | `Maybe<Span<u8>>` | Borrows the raw query string if present. |
 | `std.url.queryValue(query, key)` | `Maybe<Span<u8>>` | Borrows a raw query parameter value by key. |
+| `std.url.queryValueDecoded(buffer, query, key)` | `Maybe<Span<u8>>` | Looks up a raw or escaped query key and writes the decoded value. |
 | `std.url.writeQueryParam(buffer, key, value)` | `Maybe<Span<u8>>` | Writes an escaped `key=value` query parameter. |
+| `std.url.writeFormField(buffer, key, value)` | `Maybe<Span<u8>>` | Writes one application/x-www-form-urlencoded field. |
+| `std.url.appendFormField(buffer, form, field)` | `Maybe<Span<u8>>` | Appends one encoded field to an existing form body. |
+| `std.url.formValue(buffer, form, key)` | `Maybe<Span<u8>>` | Looks up a form field by raw or escaped key and writes the decoded value. |
 | `std.url.appendQuery(buffer, base, query)` | `Maybe<Span<u8>>` | Writes a URL with an appended raw query segment. |
 
 Metadata labels:
@@ -46,11 +50,16 @@ pub fn main(world: World) -> Void raises {
     var out: [48]u8 = [0_u8; 48]
     var param_buf: [16]u8 = [0_u8; 16]
     let param: Maybe<Span<u8>> = std.url.writeQueryParam(param_buf, "q", "zero lang")
+    var decoded_buf: [16]u8 = [0_u8; 16]
+    var decoded: Maybe<Span<u8>> = null
     var next: Maybe<Span<u8>> = null
     if param.has {
         next = std.url.appendQuery(out, "https://example.com/path", param.value)
     }
-    if host.has && query.has && next.has && std.mem.eql(host.value, "example.com") {
+    if query.has {
+        decoded = std.url.queryValueDecoded(decoded_buf, query.value, "q")
+    }
+    if host.has && query.has && decoded.has && next.has && std.mem.eql(host.value, "example.com") && std.mem.eql(decoded.value, "zero lang") {
         check world.out.write("url ok\n")
     }
 }
@@ -59,4 +68,6 @@ pub fn main(world: World) -> Void raises {
 ## Design Notes
 
 URL helpers are lexical and byte-oriented. They do not resolve DNS, normalize
-paths, or allocate. Decoding rejects malformed percent escapes.
+paths, or allocate. Decoding rejects malformed percent escapes. Form helpers use
+the same encoding as query strings: spaces become `+`, and other non-unreserved
+bytes are percent-escaped.

@@ -191,7 +191,9 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.toml.validate", "__zero_std_toml_validate", "std.toml"},
   {"std.toml.validateBytes", "__zero_std_toml_validate_bytes", "std.toml"},
   {"std.url.appendQuery", "__zero_std_url_append_query", "std.url"},
+  {"std.url.appendFormField", "__zero_std_url_append_form_field", "std.url"},
   {"std.url.authority", "__zero_std_url_authority", "std.url"},
+  {"std.url.formValue", "__zero_std_url_form_value", "std.url"},
   {"std.url.host", "__zero_std_url_host", "std.url"},
   {"std.url.path", "__zero_std_url_path", "std.url"},
   {"std.url.percentDecode", "__zero_std_url_percent_decode", "std.url"},
@@ -200,7 +202,9 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.url.queryEscape", "__zero_std_url_query_escape", "std.url"},
   {"std.url.queryUnescape", "__zero_std_url_query_unescape", "std.url"},
   {"std.url.queryValue", "__zero_std_url_query_value", "std.url"},
+  {"std.url.queryValueDecoded", "__zero_std_url_query_value_decoded", "std.url"},
   {"std.url.scheme", "__zero_std_url_scheme", "std.url"},
+  {"std.url.writeFormField", "__zero_std_url_write_form_field", "std.url"},
   {"std.url.writeQueryParam", "__zero_std_url_write_query_param", "std.url"},
 };
 

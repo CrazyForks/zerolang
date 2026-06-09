@@ -113,6 +113,20 @@ pub fn main(world: World) -> Void raises {
         if !q.has || !std.mem.eql(q.value, "zero%20lang") {
             ok = false
         }
+        var decoded_q_buf: [16]u8 = [0_u8; 16]
+        let decoded_q: Maybe<Span<u8>> = std.url.queryValueDecoded(decoded_q_buf, query.value, "q")
+        if !decoded_q.has || !std.mem.eql(decoded_q.value, "zero lang") {
+            ok = false
+        }
+    }
+    var decoded_name_buf: [24]u8 = [0_u8; 24]
+    let decoded_name: Maybe<Span<u8>> = std.url.queryValueDecoded(decoded_name_buf, "first+name=Ada%2BLovelace&empty=", "first name")
+    var decoded_empty_buf: [1]u8 = [0_u8; 1]
+    let decoded_empty: Maybe<Span<u8>> = std.url.queryValueDecoded(decoded_empty_buf, "first+name=Ada%2BLovelace&empty=", "empty")
+    var decoded_bad_buf: [8]u8 = [0_u8; 8]
+    let decoded_bad: Maybe<Span<u8>> = std.url.queryValueDecoded(decoded_bad_buf, "q=%zz", "q")
+    if !decoded_name.has || !std.mem.eql(decoded_name.value, "Ada+Lovelace") || !decoded_empty.has || std.mem.len(decoded_empty.value) != 0_usize || decoded_bad.has {
+        ok = false
     }
     var query_param_buf: [16]u8 = [0_u8; 16]
     let query_param: Maybe<Span<u8>> = std.url.writeQueryParam(query_param_buf, "q", "zero lang")
@@ -130,6 +144,36 @@ pub fn main(world: World) -> Void raises {
         appended_fragment = std.url.appendQuery(append_fragment_buf, "https://example.com/path#frag", query_param.value)
     }
     if fragment_query.has || !appended_fragment.has || !std.mem.eql(appended_fragment.value, "https://example.com/path?q=zero+lang#frag") {
+        ok = false
+    }
+    var form_name_buf: [32]u8 = [0_u8; 32]
+    let form_name: Maybe<Span<u8>> = std.url.writeFormField(form_name_buf, "first name", "Ada Lovelace")
+    var form_note_buf: [24]u8 = [0_u8; 24]
+    let form_note: Maybe<Span<u8>> = std.url.writeFormField(form_note_buf, "note", "a+b&c")
+    var form_buf: [64]u8 = [0_u8; 64]
+    var form: Maybe<Span<u8>> = null
+    if form_name.has && form_note.has {
+        form = std.url.appendFormField(form_buf, form_name.value, form_note.value)
+    }
+    var form_single_buf: [32]u8 = [0_u8; 32]
+    var form_single: Maybe<Span<u8>> = null
+    if form_note.has {
+        form_single = std.url.appendFormField(form_single_buf, "", form_note.value)
+    }
+    var form_value_name_buf: [24]u8 = [0_u8; 24]
+    var form_value_name: Maybe<Span<u8>> = null
+    var form_value_note_buf: [16]u8 = [0_u8; 16]
+    var form_value_note: Maybe<Span<u8>> = null
+    if form.has {
+        form_value_name = std.url.formValue(form_value_name_buf, form.value, "first name")
+        form_value_note = std.url.formValue(form_value_note_buf, form.value, "note")
+    }
+    var form_tiny_buf: [4]u8 = [0_u8; 4]
+    var form_tiny: Maybe<Span<u8>> = null
+    if form_name.has && form_note.has {
+        form_tiny = std.url.appendFormField(form_tiny_buf, form_name.value, form_note.value)
+    }
+    if !form_name.has || !std.mem.eql(form_name.value, "first+name=Ada+Lovelace") || !form_note.has || !std.mem.eql(form_note.value, "note=a%2Bb%26c") || !form.has || !std.mem.eql(form.value, "first+name=Ada+Lovelace&note=a%2Bb%26c") || !form_single.has || !std.mem.eql(form_single.value, "note=a%2Bb%26c") || !form_value_name.has || !std.mem.eql(form_value_name.value, "Ada Lovelace") || !form_value_note.has || !std.mem.eql(form_value_note.value, "a+b&c") || form_tiny.has {
         ok = false
     }
 
