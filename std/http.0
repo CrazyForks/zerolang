@@ -129,8 +129,17 @@ fn __zero_std_http_status_reason(status: u16) -> String {
     if status == 302_u16 {
         return "Found"
     }
+    if status == 303_u16 {
+        return "See Other"
+    }
     if status == 304_u16 {
         return "Not Modified"
+    }
+    if status == 307_u16 {
+        return "Temporary Redirect"
+    }
+    if status == 308_u16 {
+        return "Permanent Redirect"
     }
     if status == 400_u16 {
         return "Bad Request"
@@ -1052,6 +1061,98 @@ fn __zero_std_http_write_text_ok(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<S
 
 fn __zero_std_http_write_html_ok(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
     return std.http.writeHtmlResponse(buffer, 200_u16, body)
+}
+
+fn __zero_std_http_header_value_safe(value: Span<u8>) -> Bool {
+    if std.mem.len(value) == 0 {
+        return false
+    }
+    var index: usize = 0
+    while index < std.mem.len(value) {
+        let byte: u8 = value[index]
+        if byte < 32_u8 || byte == 127_u8 {
+            return false
+        }
+        index = index + 1
+    }
+    return true
+}
+
+fn __zero_std_http_write_redirect(buffer: MutSpan<u8>, status: u16, location: Span<u8>) -> Maybe<Span<u8>> {
+    let redirect_status: Bool = __zero_std_http_status_is_redirect(status)
+    if !redirect_status {
+        return null
+    }
+    let safe_location: Bool = __zero_std_http_header_value_safe(location)
+    if !safe_location {
+        return null
+    }
+    var offset: usize = 0
+    let prefix: Maybe<usize> = __zero_std_http_write(buffer, offset, "HTTP/1.1 ")
+    if !prefix.has {
+        return null
+    }
+    offset = prefix.value
+    let status_value: usize = status as usize
+    let code: Maybe<usize> = __zero_std_http_write_usize(buffer, offset, status_value)
+    if !code.has {
+        return null
+    }
+    offset = code.value
+    let space: Maybe<usize> = __zero_std_http_write(buffer, offset, " ")
+    if !space.has {
+        return null
+    }
+    offset = space.value
+    let reason_text: String = __zero_std_http_status_reason(status)
+    let reason_span: Span<u8> = std.mem.span(reason_text)
+    let reason: Maybe<usize> = __zero_std_http_write(buffer, offset, reason_span)
+    if !reason.has {
+        return null
+    }
+    offset = reason.value
+    let location_label: Maybe<usize> = __zero_std_http_write(buffer, offset, "\r\nlocation: ")
+    if !location_label.has {
+        return null
+    }
+    offset = location_label.value
+    let location_value: Maybe<usize> = __zero_std_http_write(buffer, offset, location)
+    if !location_value.has {
+        return null
+    }
+    offset = location_value.value
+    let line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\r\nconnection: close\r\n")
+    if !line.has {
+        return null
+    }
+    offset = line.value
+    let body_len: usize = 0
+    let length: Maybe<usize> = __zero_std_http_write_content_length(buffer, offset, body_len)
+    if !length.has {
+        return null
+    }
+    offset = length.value
+    let blank: Maybe<usize> = __zero_std_http_write(buffer, offset, "\r\n")
+    if !blank.has {
+        return null
+    }
+    return buffer[..blank.value]
+}
+
+fn __zero_std_http_write_found(buffer: MutSpan<u8>, location: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_http_write_redirect(buffer, 302_u16, location)
+}
+
+fn __zero_std_http_write_see_other(buffer: MutSpan<u8>, location: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_http_write_redirect(buffer, 303_u16, location)
+}
+
+fn __zero_std_http_write_moved_permanently(buffer: MutSpan<u8>, location: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_http_write_redirect(buffer, 301_u16, location)
+}
+
+fn __zero_std_http_write_permanent_redirect(buffer: MutSpan<u8>, location: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_http_write_redirect(buffer, 308_u16, location)
 }
 
 fn __zero_std_io_write_byte(buffer: MutSpan<u8>, offset: usize, byte: u8) -> Maybe<usize> {

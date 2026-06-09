@@ -60,6 +60,11 @@ Runnable today:
 | `std.http.writeTextOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 plain-text response envelope into caller storage. |
 | `std.http.writeHtmlResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a `text/html; charset=utf-8` response envelope into caller storage. |
 | `std.http.writeHtmlOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 HTML response envelope into caller storage. |
+| `std.http.writeRedirect(buffer, status, location)` | `Maybe<Span<u8>>` | Writes a redirect response with a safe `Location` header; rejects non-3xx statuses and empty or control-character locations. |
+| `std.http.writeFound(buffer, location)` | `Maybe<Span<u8>>` | Writes a 302 redirect response. |
+| `std.http.writeSeeOther(buffer, location)` | `Maybe<Span<u8>>` | Writes a 303 redirect response. |
+| `std.http.writeMovedPermanently(buffer, location)` | `Maybe<Span<u8>>` | Writes a 301 redirect response. |
+| `std.http.writePermanentRedirect(buffer, location)` | `Maybe<Span<u8>>` | Writes a 308 redirect response. |
 | `std.http.writeJsonOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 JSON response envelope into caller storage. |
 | `std.http.writeJsonCreated(buffer, body)` | `Maybe<Span<u8>>` | Writes a 201 JSON response envelope into caller storage. |
 | `std.http.writeJsonBadRequest(buffer, body)` | `Maybe<Span<u8>>` | Writes a 400 JSON response envelope into caller storage. |
@@ -281,6 +286,9 @@ fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
     }
     if std.http.requestIsGet(request, "/robots.txt") {
         return std.http.writeTextOk(response, "user-agent: *\nallow: /\n")
+    }
+    if std.http.requestIsGet(request, "/old") {
+        return std.http.writeMovedPermanently(response, "/ping")
     }
     return std.http.writeJsonError(response, 404, "not_found")
 }

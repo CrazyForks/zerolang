@@ -447,6 +447,11 @@ writeTextResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8
 writeTextOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeHtmlResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeHtmlOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeRedirect(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeFound(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeSeeOther(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeMovedPermanently(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writePermanentRedirect(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonCreated(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonBadRequest(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
@@ -907,9 +912,14 @@ and `std.http.writeCorsJsonResponse` when a JSON response also needs
 `access-control-allow-origin`. `writeCorsJsonResponse` takes a status-line
 fragment such as `"200 OK"` or `"422 Unprocessable Entity"`. Use
 `std.http.writeTextOk` or `std.http.writeHtmlOk` for simple non-JSON responses
-such as health text, `robots.txt`, or a small HTML page. Use
+such as health text, `robots.txt`, or a small HTML page. Use redirect helpers
+such as `std.http.writeFound`, `std.http.writeSeeOther`,
+`std.http.writeMovedPermanently`, or `std.http.writePermanentRedirect` instead
+of hand-writing `Location` headers; they reject empty or control-character
+location values before writing. Use
 `std.http.responseBodyBytes` to read the body from a response envelope produced
-locally by `writeResponse`, a JSON writer, or a text/html writer.
+locally by `writeResponse`, a JSON writer, a redirect writer, or a text/html
+writer.
 
 For a runnable local API server, define a same-module handler and call
 `std.http.listen(world)` from `main`. The handler signature is
