@@ -443,6 +443,10 @@ writeJsonResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8
 writeJsonError(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
 writeCorsPreflight(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
 writeCorsJsonResponse(arg0: MutSpan<u8>, arg1: Span<u8>, arg2: Span<u8>, arg3: Span<u8>) -> Maybe<Span<u8>>
+writeTextResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeTextOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
+writeHtmlResponse(arg0: MutSpan<u8>, arg1: u16, arg2: Span<u8>) -> Maybe<Span<u8>>
+writeHtmlOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonOk(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonCreated(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
 writeJsonBadRequest(arg0: MutSpan<u8>, arg1: Span<u8>) -> Maybe<Span<u8>>
@@ -902,8 +906,10 @@ body writers remain available:
 and `std.http.writeCorsJsonResponse` when a JSON response also needs
 `access-control-allow-origin`. `writeCorsJsonResponse` takes a status-line
 fragment such as `"200 OK"` or `"422 Unprocessable Entity"`. Use
+`std.http.writeTextOk` or `std.http.writeHtmlOk` for simple non-JSON responses
+such as health text, `robots.txt`, or a small HTML page. Use
 `std.http.responseBodyBytes` to read the body from a response envelope produced
-locally by `writeResponse` or a JSON writer.
+locally by `writeResponse`, a JSON writer, or a text/html writer.
 
 For a runnable local API server, define a same-module handler and call
 `std.http.listen(world)` from `main`. The handler signature is

@@ -419,6 +419,15 @@ if [ "$(uname -s)" = "Linux" ] && [ "$(uname -m)" = "x86_64" ]; then
   test ! -f .zero/native-test/std-http-response-helpers-linux.zero.o
   test ! -f .zero/native-test/std-http-response-helpers-linux.zero-runtime.o
   node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-response-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
+  rm -f .zero/native-test/std-http-text-html-response-helpers-linux .zero/native-test/std-http-text-html-response-helpers-linux.json .zero/native-test/std-http-text-html-response-helpers-linux.zero.o .zero/native-test/std-http-text-html-response-helpers-linux.zero-runtime.o
+  if ! bin/zero build --json --emit exe --target linux-x64 conformance/native/pass/std-http-text-html-response-helpers.graph --out .zero/native-test/std-http-text-html-response-helpers-linux > .zero/native-test/std-http-text-html-response-helpers-linux.json; then
+    cat .zero/native-test/std-http-text-html-response-helpers-linux.json >&2
+    exit 1
+  fi
+  .zero/native-test/std-http-text-html-response-helpers-linux
+  test ! -f .zero/native-test/std-http-text-html-response-helpers-linux.zero.o
+  test ! -f .zero/native-test/std-http-text-html-response-helpers-linux.zero-runtime.o
+  node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/std-http-text-html-response-helpers-linux.json","utf8")); if (report.generatedCBytes!==0 || report.objectBackend.objectEmission.path!=="direct-elf64-object" || report.objectBackend.linking.targetLibraries!=="zero-runtime" || report.objectBackend.linking.externalToolchain!=="cc" || !report.objectBackend.linkerPlan.staticLibraries.includes("zero_runtime.o") || report.objectBackend.directFacts.runtimeHelperCount!==1) process.exit(1);'
   rm -f .zero/native-test/std-http-api-helpers-linux .zero/native-test/std-http-api-helpers-linux.json .zero/native-test/std-http-api-helpers-linux.zero.o .zero/native-test/std-http-api-helpers-linux.zero-runtime.o
   if ! bin/zero build --json --emit exe --target linux-x64 conformance/native/pass/std-http-api-helpers.graph --out .zero/native-test/std-http-api-helpers-linux > .zero/native-test/std-http-api-helpers-linux.json; then
     cat .zero/native-test/std-http-api-helpers-linux.json >&2

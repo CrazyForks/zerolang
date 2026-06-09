@@ -980,6 +980,80 @@ fn __zero_std_http_write_json_error(buffer: MutSpan<u8>, status: u16, code: Span
     return buffer[..body_suffix.value]
 }
 
+fn __zero_std_http_write_typed_response(buffer: MutSpan<u8>, status: u16, content_type: Span<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    var offset: usize = 0
+    let prefix: Maybe<usize> = __zero_std_http_write(buffer, offset, "HTTP/1.1 ")
+    if !prefix.has {
+        return null
+    }
+    offset = prefix.value
+    let status_value: usize = status as usize
+    let code: Maybe<usize> = __zero_std_http_write_usize(buffer, offset, status_value)
+    if !code.has {
+        return null
+    }
+    offset = code.value
+    let space: Maybe<usize> = __zero_std_http_write(buffer, offset, " ")
+    if !space.has {
+        return null
+    }
+    offset = space.value
+    let reason_text: String = __zero_std_http_status_reason(status)
+    let reason_span: Span<u8> = std.mem.span(reason_text)
+    let reason: Maybe<usize> = __zero_std_http_write(buffer, offset, reason_span)
+    if !reason.has {
+        return null
+    }
+    offset = reason.value
+    let header: Maybe<usize> = __zero_std_http_write(buffer, offset, "\r\ncontent-type: ")
+    if !header.has {
+        return null
+    }
+    offset = header.value
+    let header_value: Maybe<usize> = __zero_std_http_write(buffer, offset, content_type)
+    if !header_value.has {
+        return null
+    }
+    offset = header_value.value
+    let line: Maybe<usize> = __zero_std_http_write(buffer, offset, "\r\nconnection: close\r\n")
+    if !line.has {
+        return null
+    }
+    offset = line.value
+    let body_len: usize = std.mem.len(body)
+    let length: Maybe<usize> = __zero_std_http_write_content_length(buffer, offset, body_len)
+    if !length.has {
+        return null
+    }
+    offset = length.value
+    let blank: Maybe<usize> = __zero_std_http_write(buffer, offset, "\r\n")
+    if !blank.has {
+        return null
+    }
+    offset = blank.value
+    let wrote_body: Maybe<usize> = __zero_std_http_write(buffer, offset, body)
+    if !wrote_body.has {
+        return null
+    }
+    return buffer[..wrote_body.value]
+}
+
+fn __zero_std_http_write_text_response(buffer: MutSpan<u8>, status: u16, body: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_http_write_typed_response(buffer, status, "text/plain; charset=utf-8", body)
+}
+
+fn __zero_std_http_write_html_response(buffer: MutSpan<u8>, status: u16, body: Span<u8>) -> Maybe<Span<u8>> {
+    return __zero_std_http_write_typed_response(buffer, status, "text/html; charset=utf-8", body)
+}
+
+fn __zero_std_http_write_text_ok(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeTextResponse(buffer, 200_u16, body)
+}
+
+fn __zero_std_http_write_html_ok(buffer: MutSpan<u8>, body: Span<u8>) -> Maybe<Span<u8>> {
+    return std.http.writeHtmlResponse(buffer, 200_u16, body)
+}
+
 fn __zero_std_io_write_byte(buffer: MutSpan<u8>, offset: usize, byte: u8) -> Maybe<usize> {
     if offset >= std.mem.len(buffer) {
         return null

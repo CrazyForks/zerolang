@@ -56,6 +56,10 @@ Runnable today:
 | `std.http.writeJsonError(buffer, status, code)` | `Maybe<Span<u8>>` | Writes `{"error":"code"}` after validating the code is JSON-safe lower-case ASCII, digits, `_`, or `-`. |
 | `std.http.writeCorsPreflight(buffer, allowOrigin, allowMethods, allowHeaders)` | `Maybe<Span<u8>>` | Writes a 204 CORS preflight response with caller-provided allow headers. |
 | `std.http.writeCorsJsonResponse(buffer, statusLine, body, allowOrigin)` | `Maybe<Span<u8>>` | Writes a JSON response with `access-control-allow-origin`; `statusLine` is a fragment such as `"200 OK"`. |
+| `std.http.writeTextResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a `text/plain; charset=utf-8` response envelope into caller storage. |
+| `std.http.writeTextOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 plain-text response envelope into caller storage. |
+| `std.http.writeHtmlResponse(buffer, status, body)` | `Maybe<Span<u8>>` | Writes a `text/html; charset=utf-8` response envelope into caller storage. |
+| `std.http.writeHtmlOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 HTML response envelope into caller storage. |
 | `std.http.writeJsonOk(buffer, body)` | `Maybe<Span<u8>>` | Writes a 200 JSON response envelope into caller storage. |
 | `std.http.writeJsonCreated(buffer, body)` | `Maybe<Span<u8>>` | Writes a 201 JSON response envelope into caller storage. |
 | `std.http.writeJsonBadRequest(buffer, body)` | `Maybe<Span<u8>>` | Writes a 400 JSON response envelope into caller storage. |
@@ -274,6 +278,9 @@ pub fn main(world: World) -> Void raises {
 fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
     if std.http.requestIsGet(request, "/ping") {
         return std.http.writeJsonOk(response, "{\"message\":\"pong\"}")
+    }
+    if std.http.requestIsGet(request, "/robots.txt") {
+        return std.http.writeTextOk(response, "user-agent: *\nallow: /\n")
     }
     return std.http.writeJsonError(response, 404, "not_found")
 }
