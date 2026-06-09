@@ -181,13 +181,23 @@ async function runSequential(phases: Phase[]) {
 
 async function runConcurrent(phases: Phase[]) {
   const results: PhaseResult[] = [];
-  for (let start = 0; start < phases.length; start += jobs) {
-    const batch = phases.slice(start, start + jobs);
-    const batchResults = await Promise.all(batch.map(runPhase));
-    results.push(...batchResults);
-    if (failFast && batchResults.some((result) => !result.ok)) break;
+  let next = 0;
+  let stop = false;
+  const workerCount = Math.min(jobs, Math.max(1, phases.length));
+
+  async function worker() {
+    for (;;) {
+      if (stop) return;
+      const index = next++;
+      if (index >= phases.length) return;
+      const result = await runPhase(phases[index]);
+      results[index] = result;
+      if (!result.ok && failFast) stop = true;
+    }
   }
-  return results;
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results.filter(Boolean);
 }
 
 function printFailures(results: any[]) {

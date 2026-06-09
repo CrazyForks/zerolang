@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${CI:-}" == "true" || "${ZERO_NATIVE_TEST_TRACE:-}" == "1" ]]; then
+if [[ "${ZERO_NATIVE_TEST_TRACE:-}" == "1" ]]; then
   PS4='+ ${BASH_SOURCE[0]}:${LINENO}: '
   set -x
 fi
@@ -29,10 +29,27 @@ if (( native_test_shard_count < 1 || native_test_shard_index < 1 || native_test_
 fi
 
 native_test_case_index=0
+native_test_phases=",${ZERO_NATIVE_TEST_PHASES:-all},"
+
+native_log_elapsed() {
+  local label="$1"
+  local started_at="$2"
+  echo "native ${label} ($((SECONDS - started_at))s)"
+}
+
+native_phase_enabled() {
+  local phase="$1"
+  [[ "$native_test_phases" == ",all," || "$native_test_phases" == *",$phase,"* ]]
+}
 
 native_phase_selected() {
   local phase="$1"
   local target
+
+  if ! native_phase_enabled "$phase"; then
+    return 1
+  fi
+
   case "$phase" in
     preflight)
       target=1
@@ -57,18 +74,26 @@ native_phase_selected() {
 }
 
 native_case_selected() {
+  if ! native_phase_enabled "cases"; then
+    return 1
+  fi
+
   native_test_case_index=$((native_test_case_index + 1))
   local selected=$(( (native_test_case_index - 1) % native_test_shard_count + 1 ))
   [[ "$selected" -eq "$native_test_shard_index" ]]
 }
 
 echo "native test shard ${native_test_shard_index}/${native_test_shard_count}"
+echo "native test phases ${ZERO_NATIVE_TEST_PHASES:-all}"
 
+native_build_started_at="$SECONDS"
 make -C native/zero-c
+native_log_elapsed "compiler build ok" "$native_build_started_at"
 
 mkdir -p .zero/native-test .zero/conformance
 
 if native_phase_selected "preflight"; then
+  native_phase_started_at="$SECONDS"
   bin/zero check --json std/path.graph >/dev/null
   bin/zero check --json std/str.graph >/dev/null
   bin/zero check --json std/testing.graph >/dev/null
@@ -119,6 +144,7 @@ if native_phase_selected "preflight"; then
     test ! -f "$json_cross_out.zero.o"
     test ! -f "$json_cross_out.zero-runtime.o"
   fi
+  native_log_elapsed "preflight ok" "$native_phase_started_at"
 fi
 
 expected_output() {
@@ -217,10 +243,12 @@ run_native_or_gap() {
     return 0
   fi
 
+  local native_case_started_at="$SECONDS"
   bin/zero check "$input" >/dev/null
   if bin/zero build --json --emit exe --target linux-musl-x64 "$input" --out "$out" > "$out.json"; then
     local native_output
     if ! native_output="$("$out" "$@" 2>/dev/null)"; then
+      native_log_elapsed "case backend gap: $input" "$native_case_started_at"
       return 0
     fi
     if [[ "$native_output" != "$expected" ]]; then
@@ -229,8 +257,10 @@ run_native_or_gap() {
       echo "expected: $expected" >&2
       exit 1
     fi
+    native_log_elapsed "case ok: $input" "$native_case_started_at"
   else
     grep -q '"code"[[:space:]]*:[[:space:]]*"BLD004"' "$out.json"
+    native_log_elapsed "case backend gap: $input" "$native_case_started_at"
   fi
 }
 
@@ -295,8 +325,24 @@ run_native_or_gap conformance/native/pass/rescue-check.graph .zero/native-test/r
 run_native_or_gap conformance/native/pass/std-fs-fallible.graph .zero/native-test/std-fs-fallible "fs named errors ok"
 run_native_or_gap conformance/native/pass/std-fs-fallible-resources.graph .zero/native-test/std-fs-fallible-resources "fs fallible resources ok"
 run_native_or_gap conformance/native/pass/std-cli-helpers.graph .zero/native-test/std-cli-helpers "cli helpers ok"
+run_native_or_gap conformance/native/pass/std-fs-bytes.graph .zero/native-test/std-fs-bytes "fs bytes ok"
+run_native_or_gap conformance/native/pass/std-fs-resource.graph .zero/native-test/std-fs-resource "fs resource ok"
+run_native_or_gap conformance/native/pass/std-fs-readall.graph .zero/native-test/std-fs-readall "fs readAll ok"
+run_native_or_gap conformance/native/pass/std-fs-polish.graph .zero/native-test/std-fs-polish "fs polish ok"
+run_native_or_gap conformance/native/pass/std-mem-copy-fill.graph .zero/native-test/std-mem-copy-fill "mem copy fill ok"
+run_native_or_gap conformance/native/pass/generic-function-basic.graph .zero/native-test/generic-function-basic "generic function ok"
+run_native_or_gap conformance/native/pass/generic-shape-basic.graph .zero/native-test/generic-shape-basic "generic shape ok"
+run_native_or_gap conformance/native/pass/generic-shape-multi.graph .zero/native-test/generic-shape-multi "generic shape multi ok"
+run_native_or_gap conformance/native/pass/generic-constructor-expected.graph .zero/native-test/generic-constructor-expected "generic constructor expected ok"
+run_native_or_gap conformance/native/pass/generic-literals-arrays.graph .zero/native-test/generic-literals-arrays "generic literals arrays ok"
+run_native_or_gap conformance/native/pass/top-level-const.graph .zero/native-test/top-level-const "const ok"
+run_native_or_gap conformance/native/pass/const-arithmetic.graph .zero/native-test/const-arithmetic "const arithmetic ok"
+run_native_or_gap conformance/native/pass/type-alias-basic.graph .zero/native-test/type-alias-basic "type alias ok"
+run_native_or_gap conformance/native/pass/static-method-namespace.graph .zero/native-test/static-method-namespace "static method ok"
+run_native_or_gap conformance/native/pass/match-fallback.graph .zero/native-test/match-fallback "match fallback ok"
 
 if native_phase_selected "metadata-and-reports"; then
+native_phase_started_at="$SECONDS"
 std_args_run_exe="/tmp/zero-std-args-run-$$"
 std_args_run_output="$(bin/zero run --out "$std_args_run_exe" conformance/native/pass/std-args.graph -- agent-arg extra)"
 rm -f "$std_args_run_exe"
@@ -371,36 +417,6 @@ SOURCE
 fi
 
 bin/zero check conformance/native/pass/std-env.graph >/dev/null
-
-run_native_or_gap conformance/native/pass/std-fs-bytes.graph .zero/native-test/std-fs-bytes "fs bytes ok"
-
-run_native_or_gap conformance/native/pass/std-fs-resource.graph .zero/native-test/std-fs-resource "fs resource ok"
-
-run_native_or_gap conformance/native/pass/std-fs-readall.graph .zero/native-test/std-fs-readall "fs readAll ok"
-
-run_native_or_gap conformance/native/pass/std-fs-polish.graph .zero/native-test/std-fs-polish "fs polish ok"
-
-run_native_or_gap conformance/native/pass/std-mem-copy-fill.graph .zero/native-test/std-mem-copy-fill "mem copy fill ok"
-
-run_native_or_gap conformance/native/pass/generic-function-basic.graph .zero/native-test/generic-function-basic "generic function ok"
-
-run_native_or_gap conformance/native/pass/generic-shape-basic.graph .zero/native-test/generic-shape-basic "generic shape ok"
-
-run_native_or_gap conformance/native/pass/generic-shape-multi.graph .zero/native-test/generic-shape-multi "generic shape multi ok"
-
-run_native_or_gap conformance/native/pass/generic-constructor-expected.graph .zero/native-test/generic-constructor-expected "generic constructor expected ok"
-
-run_native_or_gap conformance/native/pass/generic-literals-arrays.graph .zero/native-test/generic-literals-arrays "generic literals arrays ok"
-
-run_native_or_gap conformance/native/pass/top-level-const.graph .zero/native-test/top-level-const "const ok"
-
-run_native_or_gap conformance/native/pass/const-arithmetic.graph .zero/native-test/const-arithmetic "const arithmetic ok"
-
-run_native_or_gap conformance/native/pass/type-alias-basic.graph .zero/native-test/type-alias-basic "type alias ok"
-
-run_native_or_gap conformance/native/pass/static-method-namespace.graph .zero/native-test/static-method-namespace "static method ok"
-
-run_native_or_gap conformance/native/pass/match-fallback.graph .zero/native-test/match-fallback "match fallback ok"
 
 bin/zero inspect --json conformance/check/pass/imports > .zero/native-test/imports-graph.json
 node -e 'const fs=require("node:fs"); const j=JSON.parse(fs.readFileSync(".zero/native-test/imports-graph.json","utf8")); const imports=(j.importEdges||[]).map((edge)=>edge.to).sort(); if (!j.targets || imports.join(",")!=="math,types") process.exit(1);'
@@ -613,9 +629,11 @@ if bin/zero build --json --legacy-backend --target linux-musl-x64 examples/hello
   exit 1
 fi
 node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); if (report.diagnostics?.[0]?.code!=="BLD003") process.exit(1);' .zero/native-test/removed-legacy-backend.json
+native_log_elapsed "metadata and reports ok" "$native_phase_started_at"
 fi
 
 if native_phase_selected "direct-backend-artifacts"; then
+native_phase_started_at="$SECONDS"
 rm -f .zero/native-test/direct-obj-add.o .zero/native-test/direct-obj-add.o.c
 bin/zero build --json --emit obj --target linux-musl-x64 examples/direct-obj-add.graph --out .zero/native-test/direct-obj-add.o > .zero/native-test/direct-obj-add.json
 node <<'NODE'
@@ -1112,6 +1130,7 @@ grep -q '"driverKind": "target-cc"' .zero/native-test/doctor.json
 grep -q '"sysrootStatus":' .zero/native-test/doctor.json
 bin/zero doctor > .zero/native-test/doctor.txt
 grep -q "target toolchains:" .zero/native-test/doctor.txt
+native_log_elapsed "direct backend artifacts ok" "$native_phase_started_at"
 fi
 
 echo "native conformance ok"

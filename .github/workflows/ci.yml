@@ -31,15 +31,43 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Conformance suite
+        env:
+          ZERO_VALIDATION_JOBS: "4"
+          ZERO_CONFORMANCE_CHECK_JOBS: "4"
         run: pnpm run conformance:local
 
-  native-tests:
-    name: Native Tests (${{ matrix.shard }}/4)
+  native-preflight:
+    name: Native Preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.3 --activate
+
+      - name: Install pinned Zig
+        run: bash scripts/install-zig.sh
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Native preflight
+        env:
+          ZERO_NATIVE_TEST_PHASES: preflight
+        run: pnpm run native:test:local
+
+  native-runtime-cases:
+    name: Native Runtime Cases (${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6]
     steps:
       - uses: actions/checkout@v4
 
@@ -59,7 +87,58 @@ jobs:
 
       - name: Native tests
         env:
-          ZERO_NATIVE_TEST_SHARD: "${{ matrix.shard }}/4"
+          ZERO_NATIVE_TEST_PHASES: cases
+          ZERO_NATIVE_TEST_SHARD: "${{ matrix.shard }}/6"
+        run: pnpm run native:test:local
+
+  native-metadata-reports:
+    name: Native Metadata Reports
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.3 --activate
+
+      - name: Install pinned Zig
+        run: bash scripts/install-zig.sh
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Native metadata and reports
+        env:
+          ZERO_NATIVE_TEST_PHASES: metadata-and-reports
+        run: pnpm run native:test:local
+
+  native-direct-backend-artifacts:
+    name: Native Direct Backend Artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.1.3 --activate
+
+      - name: Install pinned Zig
+        run: bash scripts/install-zig.sh
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Native direct backend artifacts
+        env:
+          ZERO_NATIVE_TEST_PHASES: direct-backend-artifacts
         run: pnpm run native:test:local
 
   native-sanitizer-smoke:
