@@ -36,7 +36,7 @@ const fileBudgets = {
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
   "native/zero-c/src/manifest_toml.c": { maxLines: 430, maxStrcmpCalls: 4 },
   "native/zero-c/src/manifest_toml.h": { maxLines: 8, maxStrcmpCalls: 0 },
-  "native/zero-c/src/mir_binary.c": { maxLines: 1285, maxStrcmpCalls: 1 },
+  "native/zero-c/src/mir_binary.c": { maxLines: 1320, maxStrcmpCalls: 1 },
   "native/zero-c/src/mir_binary.h": { maxLines: 37, maxStrcmpCalls: 0 },
   "native/zero-c/src/ast.c": { maxLines: 250, maxStrcmpCalls: 0 },
   "native/zero-c/src/backend_family.c": { maxLines: 75, maxStrcmpCalls: 5 },
@@ -1026,6 +1026,7 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
       !programGraph.repositoryGraphMirPrepImmediateCacheHit ||
       !programGraph.artifactGraphMirPrepMappedFinalMir ||
       !programGraph.artifactGraphMirPrepImmediateCacheHit ||
+      !programGraph.mappedMirCacheReadHardening ||
       !programGraph.repositoryGraphMirCacheFacts ||
       !programGraph.repositoryGraphMirPrepSourceFreeFirst ||
       !programGraph.repositoryGraphMirPrepNoStdHelperBridge ||
@@ -1438,6 +1439,7 @@ const machoArm64Source = cCodeText(texts.get("native/zero-c/src/emit_macho64.c")
 const machoX64Source = cCodeText(texts.get("native/zero-c/src/emit_macho_x64.c") ?? "");
 const fsRaw = texts.get("native/zero-c/src/fs.c") ?? "";
 const fsSource = cCodeText(fsRaw);
+const mirBinaryRaw = texts.get("native/zero-c/src/mir_binary.c") ?? "";
 const programGraphCompileSource = cCodeText(texts.get("native/zero-c/src/program_graph_compile.c") ?? "");
 const programGraphMirRaw = texts.get("native/zero-c/src/program_graph_mir.c") ?? "";
 const programGraphBuildRaw = texts.get("native/zero-c/src/program_graph_build.c") ?? "";
@@ -1477,6 +1479,7 @@ const directManifestGraphInputBody = cCodeText(cBlock(main, "static int resolve_
 const readFileBody = cCodeText(cBlock(fsRaw, "char *z_read_file"));
 const writeFileBody = cCodeText(cBlock(fsRaw, "bool z_write_file"));
 const writeBinaryFileBody = cCodeText(cBlock(fsRaw, "bool z_write_binary_file"));
+const mirMapFileBody = cCodeText(cBlock(mirBinaryRaw, "static bool mir_map_file"));
 const artifactGraphMirPrepRawBody = cTextWithoutComments(cBlock(programGraphMirRaw, "bool z_program_graph_prepare_artifact_mir_input"));
 const artifactGraphMirPrepBody = cCodeText(cBlock(programGraphMirRaw, "bool z_program_graph_prepare_artifact_mir_input"));
 const repositoryGraphMirPrepRawBody = cTextWithoutComments(cBlock(programGraphMirRaw, "bool z_program_graph_prepare_repository_store_mir_input"));
@@ -2066,6 +2069,15 @@ const programGraph = {
   artifactGraphMirPrepImmediateCacheHit: !/require_checked_program/.test(artifactGraphMirPrepRawBody) &&
     !/ir_graph_lower_checked_program\s*\(/.test(artifactGraphMirPrepRawBody) &&
     /ir_graph_set_mapped_mir_cache_facts\s*\(\s*input,\s*&mir_cache,\s*true,\s*false,\s*true,\s*false\s*\)/.test(artifactGraphMirPrepRawBody),
+  mappedMirCacheReadHardening: /fstat\s*\(\s*fd\s*,\s*&st\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /st\.st_size\s*<=\s*0\s*\|\|\s*\(uintmax_t\)\s*st\.st_size\s*>\s*\(uintmax_t\)\s*SIZE_MAX/.test(mirMapFileBody) &&
+    /mmap\s*\(\s*NULL\s*,\s*\(size_t\)\s*st\.st_size/.test(mirMapFileBody) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /size\s*<=\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX/.test(mirMapFileBody) &&
+    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(mirMapFileBody) &&
+    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    !/\brewind\s*\(\s*file\s*\)\s*;/.test(mirMapFileBody),
   repositoryGraphMirCacheFacts: /mappedFinalMir/.test(main) &&
     /borrowedStorage/.test(main) &&
     /memoryMapped/.test(main) &&

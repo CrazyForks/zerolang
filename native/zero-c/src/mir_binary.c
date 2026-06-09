@@ -1126,14 +1126,23 @@ static bool mir_map_file(const char *path, MirMappedFile *mapped, ZDiag *diag) {
     return false;
   }
   struct stat st;
-  if (fstat(fd, &st) != 0 || st.st_size <= 0) {
+  if (fstat(fd, &st) != 0) {
+    int saved_errno = errno;
     close(fd);
+    errno = saved_errno;
     mir_diag(diag, path, "failed to stat mapped MIR cache", strerror(errno));
+    return false;
+  }
+  if (st.st_size <= 0 || (uintmax_t)st.st_size > (uintmax_t)SIZE_MAX) {
+    close(fd);
+    mir_diag(diag, path, "failed to stat mapped MIR cache", st.st_size <= 0 ? "empty MIR cache" : "MIR cache is too large");
     return false;
   }
   void *data = mmap(NULL, (size_t)st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
   if (data == MAP_FAILED) {
+    int saved_errno = errno;
     close(fd);
+    errno = saved_errno;
     mir_diag(diag, path, "failed to mmap MIR cache", strerror(errno));
     return false;
   }
@@ -1148,22 +1157,42 @@ static bool mir_map_file(const char *path, MirMappedFile *mapped, ZDiag *diag) {
     mir_diag(diag, path, "failed to open mapped MIR cache", strerror(errno));
     return false;
   }
-  fseek(file, 0, SEEK_END);
-  long size = ftell(file);
-  if (size <= 0) {
-    fclose(file);
+  if (fseek(file, 0, SEEK_END) != 0) {
     mir_diag(diag, path, "failed to stat mapped MIR cache", strerror(errno));
+    fclose(file);
     return false;
   }
-  rewind(file);
+  long size = ftell(file);
+  if (size <= 0 || (size_t)size > SIZE_MAX) {
+    if (size < 0 && errno == 0) errno = EIO;
+    if (size > 0) errno = EFBIG;
+    int saved_errno = errno;
+    const char *actual = size == 0 ? "empty MIR cache" : strerror(errno);
+    fclose(file);
+    errno = saved_errno;
+    mir_diag(diag, path, "failed to stat mapped MIR cache", actual);
+    return false;
+  }
+  if (fseek(file, 0, SEEK_SET) != 0) {
+    mir_diag(diag, path, "failed to stat mapped MIR cache", strerror(errno));
+    fclose(file);
+    return false;
+  }
   unsigned char *data = z_checked_malloc((size_t)size);
   if (fread(data, 1, (size_t)size, file) != (size_t)size) {
+    if (errno == 0) errno = EIO;
+    int saved_errno = errno;
     free(data);
     fclose(file);
+    errno = saved_errno;
     mir_diag(diag, path, "failed to read mapped MIR cache", strerror(errno));
     return false;
   }
-  fclose(file);
+  if (fclose(file) != 0) {
+    free(data);
+    mir_diag(diag, path, "failed to read mapped MIR cache", strerror(errno));
+    return false;
+  }
   mapped->data = data;
   mapped->len = (size_t)size;
   mapped->mapped = false;
