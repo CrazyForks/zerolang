@@ -39,7 +39,7 @@ const fileBudgets = {
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
   "native/zero-c/src/manifest_toml.c": { maxLines: 430, maxStrcmpCalls: 4 },
   "native/zero-c/src/manifest_toml.h": { maxLines: 8, maxStrcmpCalls: 0 },
-  "native/zero-c/src/mir_binary.c": { maxLines: 1320, maxStrcmpCalls: 1 },
+  "native/zero-c/src/mir_binary.c": { maxLines: 1400, maxStrcmpCalls: 1 },
   "native/zero-c/src/mir_binary.h": { maxLines: 37, maxStrcmpCalls: 0 },
   "native/zero-c/src/ast.c": { maxLines: 250, maxStrcmpCalls: 0 },
   "native/zero-c/src/backend_family.c": { maxLines: 75, maxStrcmpCalls: 5 },
@@ -1459,6 +1459,7 @@ const fsSource = cCodeText(fsRaw);
 const processExecRaw = texts.get("native/zero-c/src/process_exec.c") ?? "";
 const nativeTestRaw = auditTexts.get("scripts/test-native.sh") ?? "";
 const mirBinaryRaw = texts.get("native/zero-c/src/mir_binary.c") ?? "";
+const mirBinarySource = cCodeText(mirBinaryRaw);
 const programGraphCompileSource = cCodeText(texts.get("native/zero-c/src/program_graph_compile.c") ?? "");
 const programGraphMirRaw = texts.get("native/zero-c/src/program_graph_mir.c") ?? "";
 const programGraphBuildRaw = texts.get("native/zero-c/src/program_graph_build.c") ?? "";
@@ -2163,6 +2164,14 @@ const programGraph = {
     /size\s*<=\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX/.test(mirMapFileBody) &&
     /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(mirMapFileBody) &&
     /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /MIR_BINARY_MAX_FUNCTION_COUNT/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_VALUE_COUNT/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_REF_COUNT/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_DATA_BYTES/.test(mirBinaryRaw) &&
+    /MIR_BINARY_MAX_STRING_BYTES/.test(mirBinaryRaw) &&
+    /memchr\s*\(\s*start\s*,\s*0\s*,\s*len\s*\)\s*!=\s*NULL/.test(mirBinarySource) &&
+    /mir_header_counts_are_reasonable\s*\(\s*header\s*\)/.test(mirBinarySource) &&
+    /mir_header_records_fit\s*\(\s*header\s*,\s*reader\s*\)/.test(mirBinarySource) &&
     !/\brewind\s*\(\s*file\s*\)\s*;/.test(mirMapFileBody),
   repositoryGraphMirCacheFacts: /mappedFinalMir/.test(main) &&
     /borrowedStorage/.test(main) &&
