@@ -3,6 +3,7 @@ import { readdir, readFile } from "node:fs/promises";
 const LARGE_FUNCTION_REPORT_THRESHOLD = 80;
 const NEW_LARGE_FUNCTION_LIMIT = 120;
 const STRCMP_CALL_PATTERN = /\bstrcmp\s*\(/g;
+const SHELL_CALL_PATTERN = /\b(?:system|popen)\s*\(/g;
 
 const sourceFileDirs = [
   "native/zero-c/include",
@@ -27,7 +28,7 @@ const fileBudgets = {
   "native/zero-c/src/http_listen_runner.h": { maxLines: 22, maxStrcmpCalls: 0 },
   "native/zero-c/src/init_template.c": { maxLines: 310, maxStrcmpCalls: 13 },
   "native/zero-c/src/init_template.h": { maxLines: 15, maxStrcmpCalls: 0 },
-  "native/zero-c/src/main.c": { maxLines: 14896, maxStrcmpCalls: 440 },
+  "native/zero-c/src/main.c": { maxLines: 14896, maxStrcmpCalls: 440, maxShellCalls: 2 },
   "native/zero-c/src/ir.c": { maxLines: 5508, maxStrcmpCalls: 272 },
   "native/zero-c/src/llvm_backend_metadata.c": { maxLines: 80, maxStrcmpCalls: 0 },
   "native/zero-c/src/llvm_toolchain.c": { maxLines: 335, maxStrcmpCalls: 19 },
@@ -82,7 +83,7 @@ const fileBudgets = {
   "native/zero-c/src/emit_llvm_ir.c": { maxLines: 944, maxStrcmpCalls: 9 },
   "native/zero-c/src/emit_coff.c": { maxLines: 1974, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff_aarch64.c": { maxLines: 490, maxStrcmpCalls: 0 },
-  "native/zero-c/src/fs.c": { maxLines: 1364, maxStrcmpCalls: 36 },
+  "native/zero-c/src/fs.c": { maxLines: 1405, maxStrcmpCalls: 36, maxShellCalls: 3 },
   "native/zero-c/src/mir_verify.c": { maxLines: 2331, maxStrcmpCalls: 0 },
   "native/zero-c/src/mir_verify.h": { maxLines: 50, maxStrcmpCalls: 0 },
   "native/zero-c/src/program_graph.c": { maxLines: 40, maxStrcmpCalls: 0 },
@@ -778,6 +779,15 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
         limit: budget.maxStrcmpCalls,
       });
     }
+    const maxShellCalls = budget.maxShellCalls ?? 0;
+    if (metrics.shellCalls > maxShellCalls) {
+      violations.push({
+        kind: "shell-call-budget",
+        path,
+        actual: metrics.shellCalls,
+        limit: maxShellCalls,
+      });
+    }
   }
   for (const item of allLargeFunctions) {
     const key = largeFunctionKey(item);
@@ -1278,6 +1288,7 @@ for (const path of sourceFiles) {
 const files = Object.fromEntries([...texts.entries()].map(([path, text]) => [path, {
   lines: lineCount(text),
   strcmpCalls: countMatches(cCodeText(text), STRCMP_CALL_PATTERN),
+  shellCalls: countMatches(cCodeText(text), SHELL_CALL_PATTERN),
   unsupportedMarkers: countMatches(text, /Unknown|unsupported|currently|MVP|direct backend/g),
 }]));
 

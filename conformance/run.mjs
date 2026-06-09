@@ -1020,6 +1020,13 @@ const compilerMetrics = await execFileAsync("node", ["--experimental-strip-types
 const compilerMetricsBody = JSON.parse(compilerMetrics.stdout);
 assert.equal(compilerMetricsBody.schema, 1);
 assert(compilerMetricsBody.files["native/zero-c/src/checker.c"].lines > 0);
+assert.equal(compilerMetricsBody.files["native/zero-c/src/fs.c"].shellCalls, 3);
+assert.equal(compilerMetricsBody.files["native/zero-c/src/main.c"].shellCalls, 2);
+for (const [path, metrics] of Object.entries(compilerMetricsBody.files)) {
+  if (path !== "native/zero-c/src/fs.c" && path !== "native/zero-c/src/main.c") {
+    assert.equal(metrics.shellCalls, 0, `${path} should not introduce shell execution calls`);
+  }
+}
 assert(Array.isArray(compilerMetricsBody.largeFunctions));
 assert(compilerMetricsBody.stdlib.mainHelperCount > 0);
 assert.equal(compilerMetricsBody.stdlib.mainHelperCount, compilerMetricsBody.stdlib.checkerReturnCount);
