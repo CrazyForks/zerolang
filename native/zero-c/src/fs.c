@@ -177,51 +177,6 @@ static bool mkdir_parent_one(const char *path, const char *diag_path, ZDiag *dia
   return false;
 }
 
-char *z_read_file(const char *path, ZDiag *diag) {
-  struct stat st;
-  if (path && stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-    errno = EACCES;
-    diag_io(diag, path, "read");
-    return NULL;
-  }
-  FILE *file = fopen(path, "rb");
-  if (!file) { diag_io(diag, path, "read"); return NULL; }
-  if (fseek(file, 0, SEEK_END) != 0) {
-    if (errno == 0) errno = EIO;
-    diag_io(diag, path, "read");
-    fclose(file);
-    return NULL;
-  }
-  long size = ftell(file);
-  if (size < 0 || (size_t)size > SIZE_MAX - 1) {
-    if (errno == 0) errno = EIO;
-    diag_io(diag, path, "read");
-    fclose(file);
-    return NULL;
-  }
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    if (errno == 0) errno = EIO;
-    diag_io(diag, path, "read");
-    fclose(file);
-    return NULL;
-  }
-  char *data = z_checked_malloc((size_t)size + 1);
-  if (size > 0 && fread(data, 1, (size_t)size, file) != (size_t)size) {
-    if (errno == 0) errno = EIO;
-    diag_io(diag, path, "read");
-    free(data);
-    fclose(file);
-    return NULL;
-  }
-  data[(size_t)size] = 0;
-  if (fclose(file) != 0) {
-    diag_io(diag, path, "read");
-    free(data);
-    return NULL;
-  }
-  return data;
-}
-
 static bool mkdir_parents(const char *path, ZDiag *diag) {
   char *copy = z_strdup(path);
   for (char *cursor = copy + 1; *cursor; cursor++) {

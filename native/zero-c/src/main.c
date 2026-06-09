@@ -1894,32 +1894,11 @@ static uint64_t fnv1a_text(const char *text) {
 }
 
 static char *read_optional_file(const char *path) {
-  FILE *file = fopen(path, "rb");
-  if (!file) return NULL;
-  if (fseek(file, 0, SEEK_END) != 0) {
-    fclose(file);
-    return NULL;
-  }
-  long size = ftell(file);
-  if (size < 0 || (size_t)size > SIZE_MAX - 1) {
-    fclose(file);
-    return NULL;
-  }
-  if (fseek(file, 0, SEEK_SET) != 0) {
-    fclose(file);
-    return NULL;
-  }
-  char *data = z_checked_calloc((size_t)size + 1, 1);
-  if (size > 0 && fread(data, 1, (size_t)size, file) != (size_t)size) {
-    free(data);
-    fclose(file);
-    return NULL;
-  }
-  if (fclose(file) != 0) {
-    free(data);
-    return NULL;
-  }
-  return data;
+  unsigned char *bytes = NULL;
+  size_t len = 0;
+  if (!z_read_binary_file(path, &bytes, &len, NULL)) return NULL;
+  (void)len;
+  return (char *)bytes;
 }
 
 static char *read_optional_manifest_file(const SourceInput *input) {
@@ -4395,27 +4374,12 @@ static bool is_existing_directory_path(const char *path) {
   return path && stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
-static bool read_file_prefix(const char *path, void *bytes, size_t len, size_t *out_read) {
-  if (out_read) *out_read = 0;
-  if (!path || !path[0] || !bytes || len == 0) return false;
-  FILE *file = fopen(path, "rb");
-  if (!file) return false;
-  size_t read = fread(bytes, 1, len, file);
-  if (out_read) *out_read = read;
-  if (ferror(file)) {
-    fclose(file);
-    return false;
-  }
-  if (fclose(file) != 0) return false;
-  return true;
-}
-
 static bool path_has_program_graph_storage_header(const char *path) {
   static const char graph_header[] = "zero-graph v";
   static const char repository_header[] = "zero-repository-graph v";
   unsigned char bytes[32];
   size_t read = 0;
-  if (!read_file_prefix(path, bytes, sizeof(bytes), &read)) return false;
+  if (!z_read_file_prefix(path, bytes, sizeof(bytes), &read, NULL)) return false;
   return (read >= sizeof(graph_header) - 1 && memcmp(bytes, graph_header, sizeof(graph_header) - 1) == 0) ||
          (read >= sizeof(repository_header) - 1 && memcmp(bytes, repository_header, sizeof(repository_header) - 1) == 0) ||
          z_program_graph_store_bytes_are_binary(bytes, read);
@@ -4461,7 +4425,7 @@ static bool path_has_program_graph_patch_header(const char *path) {
   static const char header[] = "zero-program-graph-patch v1";
   char bytes[sizeof(header) - 1];
   size_t read = 0;
-  if (!read_file_prefix(path, bytes, sizeof(bytes), &read)) return false;
+  if (!z_read_file_prefix(path, bytes, sizeof(bytes), &read, NULL)) return false;
   return read == sizeof(bytes) && memcmp(bytes, header, sizeof(bytes)) == 0;
 }
 

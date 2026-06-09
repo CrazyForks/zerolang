@@ -95,6 +95,7 @@ const fileBudgets: Record<string, FileBudget> = {
   "native/zero-c/src/emit_coff.c": { maxLines: 1974, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff_aarch64.c": { maxLines: 490, maxStrcmpCalls: 0 },
   "native/zero-c/src/fs.c": { maxLines: 1525, maxStrcmpCalls: 36, maxShellCalls: 0 },
+  "native/zero-c/src/fs_read.c": { maxLines: 130, maxStrcmpCalls: 0, maxShellCalls: 0 },
   "native/zero-c/src/process_exec.c": { maxLines: 225, maxStrcmpCalls: 1, maxShellCalls: 0 },
   "native/zero-c/src/process_exec.h": { maxLines: 25, maxStrcmpCalls: 0, maxShellCalls: 0 },
   "native/zero-c/src/process_path.c": { maxLines: 110, maxStrcmpCalls: 0, maxShellCalls: 0 },
@@ -1104,6 +1105,7 @@ function budgetViolations(files, allLargeFunctions, stdlib, backendFormats, prog
       !backendFormats.fileIo.readSeekChecked ||
       !backendFormats.fileIo.readSizeChecked ||
       !backendFormats.fileIo.readShortReadChecked ||
+      !backendFormats.fileIo.sharedBinaryReadHelperUsed ||
       !backendFormats.fileIo.optionalReadChecked ||
       !backendFormats.fileIo.inputProbeReadChecked ||
       !backendFormats.fileIo.atomicWriteHelperUsed ||
@@ -1467,6 +1469,7 @@ const machoArm64Source = cCodeText(texts.get("native/zero-c/src/emit_macho64.c")
 const machoX64Source = cCodeText(texts.get("native/zero-c/src/emit_macho_x64.c") ?? "");
 const fsRaw = texts.get("native/zero-c/src/fs.c") ?? "";
 const fsSource = cCodeText(fsRaw);
+const fsReadRaw = texts.get("native/zero-c/src/fs_read.c") ?? "";
 const directWriteFopenFiles = [...texts.entries()]
   .filter(([path]) => path.startsWith("native/zero-c/src/") && path !== "native/zero-c/src/fs.c")
   .filter(([, text]) => /\bfopen\s*\([^,\n]+,\s*"w[ab]?"/.test(cCodeText(text)))
@@ -1515,7 +1518,6 @@ const repositoryGraphCheckJsonBody = cCodeText(cBlock(main, "static void append_
 const repositoryGraphDefaultReadinessRawBody = cBlock(main, "static void append_repository_graph_default_readiness_json");
 const directManifestGraphInputBody = cCodeText(cBlock(main, "static int resolve_direct_command_manifest_graph_input"));
 const readOptionalFileBody = cCodeText(cBlock(main, "static char *read_optional_file"));
-const readFilePrefixBody = cCodeText(cBlock(main, "static bool read_file_prefix"));
 const programGraphStorageHeaderBody = cCodeText(cBlock(main, "static bool path_has_program_graph_storage_header"));
 const programGraphPatchHeaderBody = cCodeText(cBlock(main, "static bool path_has_program_graph_patch_header"));
 const directFileExistsBody = cCodeText(cBlock(main, "static bool direct_file_exists"));
@@ -1548,7 +1550,9 @@ const processExecHardening = {
   noIgnoredNullStreams: !/FILE\s+\*null_/.test(processRunArgvBody) && !/FILE\s+\*null_/.test(processFirstStdoutLineBody),
 };
 const processExecChildSetupChecked = Object.values(processExecHardening).every(Boolean);
-const readFileBody = cCodeText(cBlock(fsRaw, "char *z_read_file"));
+const readFileBody = cCodeText(cBlock(fsReadRaw, "char *z_read_file"));
+const readBinaryFileBody = cCodeText(cBlock(fsReadRaw, "bool z_read_binary_file"));
+const readFilePrefixBody = cCodeText(cBlock(fsReadRaw, "bool z_read_file_prefix"));
 const atomicWriteBytesBody = cCodeText(cBlock(fsRaw, "static bool write_atomic_bytes"));
 const atomicOpenTempBody = cCodeText(cBlock(fsRaw, "static FILE *open_atomic_write_temp"));
 const atomicCloseBody = cCodeText(cBlock(fsRaw, "static bool close_atomic_write"));
@@ -1610,23 +1614,25 @@ const backendFormats = {
     parentCreationChecked: /\bstatic\s+bool\s+mkdir_parents\s*\(\s*const\s+char\s+\*path\s*,\s*ZDiag\s+\*diag\s*\)/.test(fsSource) &&
       /if\s*\(\s*!mkdir_parents\s*\(\s*path\s*,\s*diag\s*\)\s*\)\s*return\s+false/.test(atomicWriteBytesBody) &&
       !/\bzero_mkdir\s*\(\s*copy\s*\)\s*;/.test(fsSource),
-    readSeekChecked: /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(readFileBody) &&
-      /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(readFileBody) &&
-      !/\brewind\s*\(\s*file\s*\)\s*;/.test(readFileBody),
-    readSizeChecked: /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readFileBody),
-    readShortReadChecked: /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readFileBody) &&
-      /free\s*\(\s*data\s*\)/.test(readFileBody),
-    optionalReadChecked: /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
-      /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
-      /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readOptionalFileBody) &&
-      /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readOptionalFileBody) &&
-      /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(readOptionalFileBody) &&
-      !/\brewind\s*\(\s*file\s*\)\s*;/.test(readOptionalFileBody),
+    readSeekChecked: /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(readBinaryFileBody) &&
+      /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(readBinaryFileBody) &&
+      !/\brewind\s*\(\s*file\s*\)\s*;/.test(readBinaryFileBody),
+    readSizeChecked: /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(readBinaryFileBody),
+    readShortReadChecked: /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(readBinaryFileBody) &&
+      /free\s*\(\s*data\s*\)/.test(readBinaryFileBody),
+    sharedBinaryReadHelperUsed: /z_read_binary_file\s*\(\s*path\s*,\s*&data\s*,\s*&len\s*,\s*diag\s*\)/.test(readFileBody) &&
+      /z_read_binary_file\s*\(\s*path\s*,\s*&bytes\s*,\s*&len\s*,\s*NULL\s*\)/.test(readOptionalFileBody) &&
+      /z_read_binary_file\s*\(\s*path\s*,\s*&bytes\s*,\s*&len\s*,\s*diag\s*\)/.test(programGraphPatchReadBody) &&
+      /z_read_binary_file\s*\(\s*path\s*,\s*out\s*,\s*out_len\s*,\s*&read_diag\s*\)/.test(programGraphStoreReadBody),
+    optionalReadChecked: /z_read_binary_file\s*\(\s*path\s*,\s*&bytes\s*,\s*&len\s*,\s*NULL\s*\)/.test(readOptionalFileBody) &&
+      !/\bfopen\s*\(/.test(readOptionalFileBody) &&
+      !/\bfseek\s*\(/.test(readOptionalFileBody) &&
+      !/\bfread\s*\(/.test(readOptionalFileBody),
     inputProbeReadChecked: /fread\s*\(\s*bytes\s*,\s*1\s*,\s*len\s*,\s*file\s*\)/.test(readFilePrefixBody) &&
       /ferror\s*\(\s*file\s*\)/.test(readFilePrefixBody) &&
       /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(readFilePrefixBody) &&
-      /read_file_prefix\s*\(\s*path\s*,\s*bytes\s*,\s*sizeof\s*\(\s*bytes\s*\)\s*,\s*&read\s*\)/.test(programGraphStorageHeaderBody) &&
-      /read_file_prefix\s*\(\s*path\s*,\s*bytes\s*,\s*sizeof\s*\(\s*bytes\s*\)\s*,\s*&read\s*\)/.test(programGraphPatchHeaderBody) &&
+      /z_read_file_prefix\s*\(\s*path\s*,\s*bytes\s*,\s*sizeof\s*\(\s*bytes\s*\)\s*,\s*&read\s*,\s*NULL\s*\)/.test(programGraphStorageHeaderBody) &&
+      /z_read_file_prefix\s*\(\s*path\s*,\s*bytes\s*,\s*sizeof\s*\(\s*bytes\s*\)\s*,\s*&read\s*,\s*NULL\s*\)/.test(programGraphPatchHeaderBody) &&
       !/\bfopen\s*\(/.test(programGraphStorageHeaderBody) &&
       !/\bfopen\s*\(/.test(programGraphPatchHeaderBody) &&
       /stat\s*\(\s*path\s*,\s*&st\s*\)\s*==\s*0/.test(directFileExistsBody) &&
@@ -2069,11 +2075,11 @@ const programGraph = {
     /z_program_graph_store_path_exists\s*\(/.test(programGraphStoreHeaderRaw) &&
     /z_program_graph_store_path_exists\s*\(/.test(programGraphRepositoryRaw) &&
     /z_program_graph_store_path_exists\s*\(/.test(programGraphRepositoryInputRaw) &&
-    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(programGraphStoreReadBody) &&
-    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(programGraphStoreReadBody) &&
-    /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(programGraphStoreReadBody) &&
-    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(programGraphStoreReadBody) &&
-    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(programGraphStoreReadBody) &&
+    /store_path_is_dir\s*\(\s*path\s*\)/.test(programGraphStoreReadBody) &&
+    /z_read_binary_file\s*\(\s*path\s*,\s*out\s*,\s*out_len\s*,\s*&read_diag\s*\)/.test(programGraphStoreReadBody) &&
+    /store_diag\s*\(\s*diag\s*,\s*path\s*,\s*1\s*,/.test(programGraphStoreReadBody) &&
+    /strerror\s*\(\s*errno\s*\)/.test(programGraphStoreReadBody) &&
+    !/\bfopen\s*\(/.test(programGraphStoreReadBody) &&
     !/\brewind\s*\(\s*file\s*\)\s*;/.test(programGraphStoreReadBody),
   repositoryBinaryStoreReadHardening: /STORE_BINARY_MAX_SOURCE_COUNT/.test(programGraphStoreBinaryRaw) &&
     /STORE_BINARY_MAX_PROJECTION_COUNT/.test(programGraphStoreBinaryRaw) &&
@@ -2085,11 +2091,8 @@ const programGraph = {
     /binary_header_counts_are_reasonable\s*\(\s*header\s*\)\s*&&\s*binary_header_records_fit/.test(programGraphStoreBinarySource),
   graphPatchFileReadHardening: /#include\s+<errno\.h>/.test(programGraphPatchRaw) &&
     /#include\s+<stdint\.h>/.test(programGraphPatchRaw) &&
-    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(programGraphPatchReadBody) &&
-    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(programGraphPatchReadBody) &&
-    /size\s*<\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX\s*-\s*1/.test(programGraphPatchReadBody) &&
-    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(programGraphPatchReadBody) &&
-    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(programGraphPatchReadBody) &&
+    /z_read_binary_file\s*\(\s*path\s*,\s*&bytes\s*,\s*&len\s*,\s*diag\s*\)/.test(programGraphPatchReadBody) &&
+    !/\bfopen\s*\(/.test(programGraphPatchReadBody) &&
     !/\brewind\s*\(\s*file\s*\)\s*;/.test(programGraphPatchReadBody),
   repositoryStatusCompilerStoreFacts: /compilerStore/.test(programGraphRepositoryRaw) &&
     /sourceFreeInspection/.test(programGraphRepositoryRaw) &&
@@ -2186,13 +2189,11 @@ const programGraph = {
     !/ir_graph_lower_checked_program\s*\(/.test(artifactGraphMirPrepRawBody) &&
     /ir_graph_set_mapped_mir_cache_facts\s*\(\s*input,\s*&mir_cache,\s*true,\s*false,\s*true,\s*false\s*\)/.test(artifactGraphMirPrepRawBody),
   mappedMirCacheReadHardening: /fstat\s*\(\s*fd\s*,\s*&st\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /!\s*S_ISREG\s*\(\s*st\.st_mode\s*\)/.test(mirMapFileBody) &&
     /st\.st_size\s*<=\s*0\s*\|\|\s*\(uintmax_t\)\s*st\.st_size\s*>\s*\(uintmax_t\)\s*SIZE_MAX/.test(mirMapFileBody) &&
     /mmap\s*\(\s*NULL\s*,\s*\(size_t\)\s*st\.st_size/.test(mirMapFileBody) &&
-    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_END\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
-    /fseek\s*\(\s*file\s*,\s*0\s*,\s*SEEK_SET\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
-    /size\s*<=\s*0\s*\|\|\s*\(size_t\)\s*size\s*>\s*SIZE_MAX/.test(mirMapFileBody) &&
-    /fread\s*\(\s*data\s*,\s*1\s*,\s*\(size_t\)\s*size\s*,\s*file\s*\)\s*!=\s*\(size_t\)\s*size/.test(mirMapFileBody) &&
-    /fclose\s*\(\s*file\s*\)\s*!=\s*0/.test(mirMapFileBody) &&
+    /z_read_binary_file\s*\(\s*path\s*,\s*&data\s*,\s*&len\s*,\s*&read_diag\s*\)/.test(mirMapFileBody) &&
+    /len\s*==\s*0/.test(mirMapFileBody) &&
     /MIR_BINARY_MAX_FUNCTION_COUNT/.test(mirBinaryRaw) &&
     /MIR_BINARY_MAX_VALUE_COUNT/.test(mirBinaryRaw) &&
     /MIR_BINARY_MAX_REF_COUNT/.test(mirBinaryRaw) &&
