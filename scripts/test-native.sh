@@ -30,6 +30,15 @@ fi
 
 native_test_case_index=0
 native_test_phases=",${ZERO_NATIVE_TEST_PHASES:-all},"
+native_test_scope="${ZERO_NATIVE_TEST_SCOPE:-deep}"
+
+case "$native_test_scope" in
+  fast|deep) ;;
+  *)
+    echo "ZERO_NATIVE_TEST_SCOPE must be fast or deep" >&2
+    exit 1
+    ;;
+esac
 
 native_log_elapsed() {
   local label="$1"
@@ -85,6 +94,7 @@ native_case_selected() {
 
 echo "native test shard ${native_test_shard_index}/${native_test_shard_count}"
 echo "native test phases ${ZERO_NATIVE_TEST_PHASES:-all}"
+echo "native test scope ${native_test_scope}"
 
 native_build_started_at="$SECONDS"
 make -C native/zero-c
@@ -100,7 +110,7 @@ if native_phase_selected "preflight"; then
   bin/zero check --json std/log.graph >/dev/null
   bin/zero check --json std/math.graph >/dev/null
   bin/zero check --json std/time.graph >/dev/null
-  node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/stdlib-target-matrix.mts
+  ZERO_STDLIB_TARGET_MATRIX_SCOPE="$native_test_scope" node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/stdlib-target-matrix.mts
 
   host_runtime_target=""
   case "$(uname -s):$(uname -m)" in
@@ -233,11 +243,45 @@ examples=(
   conformance/native/pass/std-testing-log.graph
 )
 
+native_case_in_scope() {
+  if [[ "$native_test_scope" != "fast" ]]; then
+    return 0
+  fi
+
+  case "$1" in
+    examples/hello.graph | \
+    examples/add.graph | \
+    examples/generic-pair.graph | \
+    examples/fallibility.graph | \
+    examples/std-math.graph | \
+    examples/std-str.graph | \
+    examples/std-testing-log.graph | \
+    .zero/native-test/project | \
+    conformance/native/pass/world-stream-renamed-param.graph | \
+    conformance/native/pass/std-collections-u8.graph | \
+    conformance/native/pass/std-codec-json-url.graph | \
+    conformance/native/pass/std-json-allocator-capacity.graph | \
+    conformance/native/pass/std-fs-bytes.graph | \
+    conformance/native/pass/std-cli-helpers.graph | \
+    conformance/native/pass/generic-function-basic.graph | \
+    conformance/native/pass/match-fallback.graph)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 run_native_or_gap() {
   local input="$1"
   local out="$2"
   local expected="$3"
   shift 3
+
+  if ! native_case_in_scope "$input"; then
+    return 0
+  fi
 
   if ! native_case_selected; then
     return 0

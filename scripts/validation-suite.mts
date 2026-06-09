@@ -65,11 +65,13 @@ Usage:
 
 Options:
   --list                 List phases and exit.
+  --phases <a,b>         Run only the named comma-separated phases after setup.
   --shard <index/count>  Run only this 1-based phase shard after setup.
   --jobs <count>         Run selected phases concurrently. Defaults to 1.
   --fail-fast            Stop after the first failing phase.
 
 Environment:
+  ZERO_VALIDATION_PHASES     Default phase allowlist, for example a,b,c.
   ZERO_VALIDATION_SHARD       Default shard, for example 1/4.
   ZERO_VALIDATION_JOBS        Default jobs count.
   ZERO_VALIDATION_FAIL_FAST=1 Stop after the first failing phase.`);
@@ -108,20 +110,38 @@ function parseShard(value: string | undefined) {
   return { index, count, text };
 }
 
+function parsePhaseFilter(value: string | undefined, suite: Suite) {
+  const text = value || process.env.ZERO_VALIDATION_PHASES || "";
+  if (!text.trim()) return null;
+  const wanted = new Set(text.split(",").map((part) => part.trim()).filter(Boolean));
+  const known = new Set(suite.phases.map((phase) => phase.name));
+  const unknown = [...wanted].filter((name) => !known.has(name));
+  if (unknown.length > 0) {
+    throw new Error(`unknown validation phase(s): ${unknown.join(", ")}`);
+  }
+  return wanted;
+}
+
 const suite = suites[suiteName];
 const listOnly = rawArgs.includes("--list");
+const phaseFilter = parsePhaseFilter(optionValue("--phases"), suite);
 const shard = parseShard(optionValue("--shard"));
 const jobs = parsePositiveInt(optionValue("--jobs") ?? process.env.ZERO_VALIDATION_JOBS, suite.defaultJobs ?? 1);
 const failFast = rawArgs.includes("--fail-fast") || process.env.ZERO_VALIDATION_FAIL_FAST === "1";
 
-const selectedPhases = shard
-  ? suite.phases.filter((_, index) => index % shard.count === shard.index - 1)
+const filteredPhases = phaseFilter
+  ? suite.phases.filter((phase) => phaseFilter.has(phase.name))
   : suite.phases;
+const selectedPhases = shard
+  ? filteredPhases.filter((_, index) => index % shard.count === shard.index - 1)
+  : filteredPhases;
 
 if (listOnly) {
   for (const phase of suite.setup) console.log(`${phase.name} setup`);
   for (const [index, phase] of suite.phases.entries()) {
-    const selected = selectedPhases.includes(phase) ? "selected" : "skipped";
+    const selected = selectedPhases.includes(phase)
+      ? "selected"
+      : phaseFilter && !phaseFilter.has(phase.name) ? "filtered" : "skipped";
     console.log(`${index + 1}. ${phase.name} ${selected}`);
   }
   process.exit(0);
@@ -226,6 +246,7 @@ async function main() {
   const report = {
     suite: suiteName,
     ok,
+    phases: phaseFilter ? [...phaseFilter] : null,
     shard: shard?.text ?? null,
     jobs,
     failFast,

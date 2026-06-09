@@ -28,6 +28,7 @@ const representativeStdlibTargets = [
   "linux-musl-x64",
   "win32-x64.exe",
 ];
+const matrixScope = process.env.ZERO_STDLIB_TARGET_MATRIX_SCOPE === "fast" ? "fast" : "deep";
 
 type MatrixRow = {
   fixture: string;
@@ -86,12 +87,19 @@ async function json(args: string[]) {
 }
 
 const rows: MatrixRow[] = [];
-const matrix = fixtures.flatMap((fixture) => {
+const deepMatrix = fixtures.flatMap((fixture) => {
   const fixtureTargets = fixture.includes("stdlib-target-neutral")
     ? representativeStdlibTargets
     : targets;
   return fixtureTargets.map((target) => ({ fixture, target }));
 });
+const fastMatrix = [
+  { fixture: "conformance/native/pass/stdlib-target-neutral.graph", target: "linux-musl-x64" },
+  { fixture: "conformance/native/pass/direct-checksum-helpers.graph", target: "linux-musl-x64" },
+  { fixture: "conformance/native/pass/direct-checksum-helpers.graph", target: "darwin-arm64" },
+  { fixture: "conformance/native/pass/direct-checksum-helpers.graph", target: "win32-x64.exe" },
+];
+const matrix = matrixScope === "fast" ? fastMatrix : deepMatrix;
 const jobs = parsePositiveInt(process.env.ZERO_STDLIB_TARGET_MATRIX_JOBS, 4);
 
 rows.push(...await mapLimit(matrix, jobs, async ({ fixture, target }) => {
@@ -120,7 +128,7 @@ rows.push(...await mapLimit(matrix, jobs, async ({ fixture, target }) => {
   return row;
 }));
 
-for (const fixture of fixtures) {
+for (const fixture of [...new Set(matrix.map((row) => row.fixture))]) {
   const hostRun = await execFileAsync(zero, ["run", fixture]);
   assert.equal(hostRun.stdout, "", `${fixture} should run silently`);
 }
@@ -128,6 +136,7 @@ for (const fixture of fixtures) {
 const report = {
   schemaVersion: 1,
   ok: rows.every((row) => row.ok),
+  scope: matrixScope,
   fixtures,
   artifactBudgetBytes,
   representativeStdlibTargets,
