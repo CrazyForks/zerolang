@@ -2718,8 +2718,9 @@ writeFileSync(graphRepositoryRowErgonomicsPatchPath, [
   `expect graphHash "${repositoryRowQueryJson.graphHash}"`,
   "replaceFunctionBody main",
   "  let name String = \".zero/row-ergonomics\"",
+  "  let same Bool = std.mem.eql (std.mem.span name) \".zero/row-ergonomics\"",
   "  let status i32 = 200_u16 as i32",
-  "  if !std.mem.eql name \".zero/row-ergonomics\"",
+  "  if !same",
   "    check world.err.write \"wrong name\\n\"",
   "  else",
   "    if status == 200",
@@ -2736,8 +2737,9 @@ assert.equal(repositoryRowErgonomicsPatchJson.ok, true);
 assert.equal(repositoryRowErgonomicsPatchJson.operations[0].op, "replaceFunctionBody");
 const repositoryRowErgonomicsView = zero(["view", graphRepositoryPatchPackageDir]).stdout;
 assert.match(repositoryRowErgonomicsView, /let name: String = "\.zero\/row-ergonomics"/);
+assert.match(repositoryRowErgonomicsView, /let same: Bool = std\.mem\.eql\(std\.mem\.span\(name\), "\.zero\/row-ergonomics"\)/);
 assert.match(repositoryRowErgonomicsView, /let status: i32 = 200_u16 as i32/);
-assert.match(repositoryRowErgonomicsView, /if !std\.mem\.eql\(name, "\.zero\/row-ergonomics"\)/);
+assert.match(repositoryRowErgonomicsView, /if !same/);
 assert.equal(zero(["check", graphRepositoryPatchPackageDir]).stdout, "ok\n");
 assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, "row ergonomics ok\n");
 assert.match(zero(["export", graphRepositoryPatchPackageDir]).stdout, /repository graph export ok/);

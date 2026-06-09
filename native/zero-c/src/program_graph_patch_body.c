@@ -12,6 +12,8 @@ typedef struct {
   char *to;
 } BodyIdMap;
 
+static char *body_expr_source(const char *expr);
+
 static bool body_text_eq(const char *left, const char *right) {
   return strcmp(left ? left : "", right ? right : "") == 0;
 }
@@ -77,6 +79,26 @@ static bool body_tokenize(const char *text, char ***out, size_t *out_len) {
           break;
         }
       }
+    } else if (*cursor == '(') {
+      size_t depth = 0;
+      bool quoted = false;
+      bool escaped = false;
+      while (*cursor) {
+        char ch = *cursor++;
+        zbuf_append_char(&token, ch);
+        if (quoted) {
+          if (escaped) escaped = false;
+          else if (ch == '\\') escaped = true;
+          else if (ch == '"') quoted = false;
+        } else if (ch == '"') {
+          quoted = true;
+        } else if (ch == '(') {
+          depth++;
+        } else if (ch == ')') {
+          if (depth) depth--;
+          if (!depth) break;
+        }
+      }
     } else {
       while (*cursor && !isspace((unsigned char)*cursor)) zbuf_append_char(&token, *cursor++);
     }
@@ -108,7 +130,9 @@ static char *body_call_source(char **tokens, size_t len) {
   zbuf_append_char(&out, '(');
   for (size_t i = 1; i < len; i++) {
     if (i > 1) zbuf_append(&out, ", ");
-    zbuf_append(&out, tokens[i]);
+    char *arg = body_expr_source(tokens[i]);
+    zbuf_append(&out, arg);
+    free(arg);
   }
   zbuf_append_char(&out, ')');
   return out.data ? out.data : z_strdup("");
@@ -131,9 +155,38 @@ static char *body_find_infix(char *expr, const char **out_op) {
   return NULL;
 }
 
+static bool body_outer_parens_wrap(const char *text) {
+  if (!text || text[0] != '(') return false;
+  size_t depth = 0;
+  bool quoted = false;
+  bool escaped = false;
+  for (size_t i = 0; text[i]; i++) {
+    char ch = text[i];
+    if (quoted) {
+      if (escaped) escaped = false;
+      else if (ch == '\\') escaped = true;
+      else if (ch == '"') quoted = false;
+      continue;
+    }
+    if (ch == '"') { quoted = true; continue; }
+    if (ch == '(') depth++;
+    if (ch == ')' && depth) {
+      depth--;
+      if (depth == 0 && text[i + 1] != '\0') return false;
+    }
+  }
+  return depth == 0;
+}
+
 static char *body_expr_source(const char *expr) {
   char *copy = z_strdup(expr ? expr : "");
   char *trimmed = body_trim(copy);
+  if (body_outer_parens_wrap(trimmed)) {
+    trimmed[strlen(trimmed) - 1] = '\0';
+    char *out = body_expr_source(trimmed + 1);
+    free(copy);
+    return out;
+  }
   if (strncmp(trimmed, "check ", 6) == 0 || strncmp(trimmed, "meta ", 5) == 0) {
     const char *prefix = strncmp(trimmed, "check ", 6) == 0 ? "check" : "meta";
     size_t prefix_len = strlen(prefix);
@@ -190,7 +243,7 @@ static char *body_expr_source(const char *expr) {
     free(copy);
     return out.data ? out.data : z_strdup("");
   }
-  if (strchr(trimmed, '(') || trimmed[0] == '"' || trimmed[0] == '[' || trimmed[0] == 0) {
+  if (trimmed[0] == '"' || trimmed[0] == '[' || trimmed[0] == 0) {
     char *out = z_strdup(trimmed);
     free(copy);
     return out;
@@ -201,6 +254,8 @@ static char *body_expr_source(const char *expr) {
   char *out = NULL;
   if (len > 1 && (strchr(tokens[0], '.') || body_identifier(tokens[0]))) {
     out = body_call_source(tokens, len);
+  } else if (len == 1 && strchr(trimmed, '(')) {
+    out = z_strdup(trimmed);
   } else {
     out = z_strdup(trimmed);
   }
