@@ -104,6 +104,12 @@ mkdir -p .zero/native-test .zero/conformance
 
 if native_phase_selected "preflight"; then
   native_phase_started_at="$SECONDS"
+  cc -std=c11 -Wall -Wextra -Wpedantic -I native/zero-c/include \
+    native/zero-c/tests/process_exec_smoke.c \
+    native/zero-c/src/process_exec.c \
+    native/zero-c/src/process_path.c \
+    -o .zero/native-test/process-exec-smoke
+  .zero/native-test/process-exec-smoke
   bin/zero check --json std/path.graph >/dev/null
   bin/zero check --json std/str.graph >/dev/null
   bin/zero check --json std/testing.graph >/dev/null

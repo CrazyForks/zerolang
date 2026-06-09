@@ -82,6 +82,16 @@ void z_process_argv_free(ZProcessArgv *argv) {
   argv->cap = 0;
 }
 
+static bool z_process_existing_dir(const char *path) {
+#if defined(_WIN32)
+  struct _stat st;
+  return _stat(path, &st) == 0 && (st.st_mode & _S_IFDIR) != 0;
+#else
+  struct stat st;
+  return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+#endif
+}
+
 bool z_process_ensure_dir(const char *path) {
   if (!path || !path[0]) return false;
 #if defined(_WIN32)
@@ -89,12 +99,21 @@ bool z_process_ensure_dir(const char *path) {
 #else
   if (mkdir(path, 0777) == 0) return true;
 #endif
-  return errno == EEXIST;
+  if (errno != EEXIST) return false;
+  return z_process_existing_dir(path);
 }
 
 #if !defined(_WIN32)
 static bool z_process_suppress_stream(FILE *stream) {
   return freopen("/dev/null", "w", stream) != NULL;
+}
+
+static bool z_process_wait_success(pid_t pid) {
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0) {
+    if (errno != EINTR) return false;
+  }
+  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
 }
 #endif
 
@@ -125,15 +144,8 @@ bool z_process_run_argv(const ZProcessArgv *argv, bool suppress_stdout, bool sup
     execv(executable, argv->items);
     _exit(127);
   }
-  int status = 0;
-  while (waitpid(pid, &status, 0) < 0) {
-    if (errno != EINTR) {
-      free(executable);
-      return false;
-    }
-  }
   free(executable);
-  return WIFEXITED(status) && WEXITSTATUS(status) == 0;
+  return z_process_wait_success(pid);
 #endif
 }
 
@@ -171,11 +183,13 @@ char *z_process_first_stdout_line(const char *const *argv, bool suppress_stderr)
   ZBuf line;
   zbuf_init(&line);
   bool capturing = true;
+  bool read_ok = true;
   char bytes[256];
   while (true) {
     ssize_t n = read(pipe_fd[0], bytes, sizeof(bytes));
     if (n < 0) {
       if (errno == EINTR) continue;
+      read_ok = false;
       break;
     }
     if (n == 0) break;
@@ -188,10 +202,9 @@ char *z_process_first_stdout_line(const char *const *argv, bool suppress_stderr)
     }
   }
   close(pipe_fd[0]);
-  int status = 0;
-  while (waitpid(pid, &status, 0) < 0) if (errno != EINTR) break;
-  char *out = line.data ? line.data : z_strdup("");
-  line.data = NULL;
+  bool child_ok = z_process_wait_success(pid);
+  char *out = read_ok && child_ok && line.data ? line.data : z_strdup("");
+  if (out == line.data) line.data = NULL;
   zbuf_free(&line);
   return out;
 #endif
