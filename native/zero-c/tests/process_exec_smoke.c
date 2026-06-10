@@ -163,28 +163,52 @@ static void test_output_file_contract(void) {
   char empty_path[256];
   char dir_path[256];
   char missing_parent_path[256];
+  char cleanup_path[256];
+  char cleanup_missing_path[256];
   snprintf(missing_path, sizeof(missing_path), "%s/missing.out", root);
   snprintf(file_path, sizeof(file_path), "%s/file.out", root);
   snprintf(empty_path, sizeof(empty_path), "%s/empty.out", root);
   snprintf(dir_path, sizeof(dir_path), "%s/dir.out", root);
   snprintf(missing_parent_path, sizeof(missing_parent_path), "%s/nope/out", root);
+  snprintf(cleanup_path, sizeof(cleanup_path), "%s/cleanup.out", root);
+  snprintf(cleanup_missing_path, sizeof(cleanup_missing_path), "%s/already-gone.out", root);
 
   expect_true(z_process_prepare_output_file(missing_path), "missing output is ready for creation");
   expect_false(z_process_output_file_ready(missing_path), "missing output is not ready after tool run");
+  expect_false(z_process_executable_file_ready(missing_path), "executable ready rejects missing output");
+  expect_false(z_process_mark_executable(missing_path), "mark executable rejects missing output");
+  expect_true(z_process_remove_regular_file(cleanup_missing_path), "cleanup accepts missing regular output");
   expect_false(z_process_prepare_output_file(missing_parent_path), "output preparation rejects missing parent directory");
 
   write_text_file(file_path, "artifact");
   expect_true(z_process_output_file_ready(file_path), "non-empty regular output is ready");
+#if !defined(_WIN32)
+  expect_false(z_process_executable_file_ready(file_path), "plain output is not executable before finalization");
+#endif
+  expect_true(z_process_mark_executable(file_path), "mark executable accepts regular non-empty output");
+  expect_true(z_process_executable_file_ready(file_path), "executable ready accepts finalized artifact");
+#if !defined(_WIN32)
+  expect_true(access(file_path, X_OK) == 0, "mark executable sets execute bit");
+#endif
   expect_true(z_process_prepare_output_file(file_path), "stale regular output can be removed");
   expect_false(z_process_output_file_ready(file_path), "removed stale output is no longer ready");
 
   write_text_file(empty_path, "");
   expect_false(z_process_output_file_ready(empty_path), "empty output is not ready");
+  expect_false(z_process_executable_file_ready(empty_path), "executable ready rejects empty output");
+  expect_false(z_process_mark_executable(empty_path), "mark executable rejects empty output");
   expect_true(z_process_prepare_output_file(empty_path), "empty regular output can be removed before rebuild");
+
+  write_text_file(cleanup_path, "temporary");
+  expect_true(z_process_remove_regular_file(cleanup_path), "cleanup removes regular output");
+  expect_false(z_process_output_file_ready(cleanup_path), "cleanup removed regular output");
 
   expect_true(mkdir(dir_path, 0700) == 0, "created directory output fixture");
   expect_false(z_process_prepare_output_file(dir_path), "output preparation rejects directories");
   expect_false(z_process_output_file_ready(dir_path), "output ready rejects directories");
+  expect_false(z_process_executable_file_ready(dir_path), "executable ready rejects directories");
+  expect_false(z_process_mark_executable(dir_path), "mark executable rejects directories");
+  expect_false(z_process_remove_regular_file(dir_path), "cleanup rejects directories");
   rmdir(dir_path);
 
 #if !defined(_WIN32)
@@ -196,6 +220,9 @@ static void test_output_file_contract(void) {
   expect_true(symlink(target_path, symlink_path) == 0, "created symlink output fixture");
   expect_false(z_process_prepare_output_file(symlink_path), "output preparation rejects symlinks");
   expect_false(z_process_output_file_ready(symlink_path), "output ready rejects symlinks");
+  expect_false(z_process_executable_file_ready(symlink_path), "executable ready rejects symlinks");
+  expect_false(z_process_mark_executable(symlink_path), "mark executable rejects symlinks");
+  expect_false(z_process_remove_regular_file(symlink_path), "cleanup rejects symlinks");
   unlink(symlink_path);
   unlink(target_path);
 #endif

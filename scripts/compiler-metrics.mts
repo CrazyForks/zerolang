@@ -13,6 +13,7 @@ const auditFiles = [
   "native/zero-c/runtime/zero_runtime.c",
   "native/zero-c/tests/http_listen_runner_smoke.c",
   "native/zero-c/tests/process_exec_smoke.c",
+  "scripts/artifact-finalization-smoke.mts",
   "scripts/fs-runtime-smoke.mts",
   "scripts/test-native.sh",
 ];
@@ -98,10 +99,10 @@ const fileBudgets: Record<string, FileBudget> = {
   "native/zero-c/src/emit_llvm_ir.c": { maxLines: 944, maxStrcmpCalls: 9 },
   "native/zero-c/src/emit_coff.c": { maxLines: 1974, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_coff_aarch64.c": { maxLines: 490, maxStrcmpCalls: 0 },
-  "native/zero-c/src/fs.c": { maxLines: 1525, maxStrcmpCalls: 36, maxShellCalls: 0 },
+  "native/zero-c/src/fs.c": { maxLines: 1545, maxStrcmpCalls: 36, maxShellCalls: 0 },
   "native/zero-c/src/fs_read.c": { maxLines: 130, maxStrcmpCalls: 0, maxShellCalls: 0 },
-  "native/zero-c/src/process_exec.c": { maxLines: 300, maxStrcmpCalls: 1, maxShellCalls: 0 },
-  "native/zero-c/src/process_exec.h": { maxLines: 25, maxStrcmpCalls: 0, maxShellCalls: 0 },
+  "native/zero-c/src/process_exec.c": { maxLines: 325, maxStrcmpCalls: 1, maxShellCalls: 0 },
+  "native/zero-c/src/process_exec.h": { maxLines: 26, maxStrcmpCalls: 0, maxShellCalls: 0 },
   "native/zero-c/src/process_path.c": { maxLines: 110, maxStrcmpCalls: 0, maxShellCalls: 0 },
   "native/zero-c/src/process_path.h": { maxLines: 10, maxStrcmpCalls: 0, maxShellCalls: 0 },
   "native/zero-c/src/mir_verify.c": { maxLines: 2331, maxStrcmpCalls: 0 },
@@ -1496,6 +1497,7 @@ const processExecRaw = texts.get("native/zero-c/src/process_exec.c") ?? "";
 const processExecSmokeRaw = auditTexts.get("native/zero-c/tests/process_exec_smoke.c") ?? "";
 const nativeTestRaw = auditTexts.get("scripts/test-native.sh") ?? "";
 const fsRuntimeSmokeRaw = auditTexts.get("scripts/fs-runtime-smoke.mts") ?? "";
+const artifactFinalizationSmokeRaw = auditTexts.get("scripts/artifact-finalization-smoke.mts") ?? "";
 const runtimeRaw = auditTexts.get("native/zero-c/runtime/zero_runtime.c") ?? "";
 const runtimeSource = cCodeText(runtimeRaw);
 const runtimeFsReadBody = cCodeText(cBlock(runtimeRaw, "ZeroMaybeUsize zero_fs_read_bytes"));
@@ -1561,6 +1563,9 @@ const processRunArgvBody = cCodeText(cBlock(processExecRaw, "bool z_process_run_
 const processFirstStdoutLineBody = cCodeText(cBlock(processExecRaw, "char *z_process_first_stdout_line"));
 const processPrepareOutputBody = cCodeText(cBlock(processExecRaw, "bool z_process_prepare_output_file"));
 const processOutputReadyBody = cCodeText(cBlock(processExecRaw, "bool z_process_output_file_ready"));
+const processExecutableReadyBody = cCodeText(cBlock(processExecRaw, "bool z_process_executable_file_ready"));
+const processMarkExecutableBody = cCodeText(cBlock(processExecRaw, "bool z_process_mark_executable"));
+const processRemoveRegularBody = cCodeText(cBlock(processExecRaw, "bool z_process_remove_regular_file"));
 const checkedChildSetenvCount = (processRunArgvBody.match(/setenv\s*\([^;]*\)\s*!=\s*0\)\s*_exit\s*\(\s*127\s*\)/g) ?? []).length;
 const checkedChildSuppressCount = ((processRunArgvBody + processFirstStdoutLineBody).match(/!\s*z_process_suppress_stream\s*\([^)]*\)\)\s*_exit\s*\(\s*127\s*\)/g) ?? []).length;
 const processExecHardening = {
@@ -1591,6 +1596,21 @@ const processExecHardening = {
     /z_process_output_is_symlink\s*\(\s*&st\s*\)/.test(processOutputReadyBody) &&
     /!\s*z_process_output_is_regular\s*\(\s*&st\s*\)/.test(processOutputReadyBody) &&
     /st\.st_size\s*>\s*0/.test(processOutputReadyBody),
+  executableFinalizationStrict: /z_process_output_file_ready\s*\(\s*path\s*\)/.test(processMarkExecutableBody) &&
+    /z_process_output_file_ready\s*\(\s*path\s*\)/.test(processExecutableReadyBody) &&
+    /access\s*\(\s*path\s*,\s*X_OK\s*\)\s*==\s*0/.test(processExecutableReadyBody) &&
+    /chmod\s*\(\s*path\s*,\s*0755\s*\)\s*!=\s*0/.test(processMarkExecutableBody) &&
+    /z_process_executable_file_ready\s*\(\s*path\s*\)/.test(processMarkExecutableBody) &&
+    /z_process_mark_executable\s*\(\s*exe_file\s*\)/.test(main) &&
+    /z_process_executable_file_ready\s*\(\s*exe_file\s*\)/.test(main) &&
+    !/chmod\s*\(/.test(cCodeText(main)) &&
+    /failed to finalize executable artifact/.test(main),
+  cleanupRejectsNonRegular: /z_process_lstat_output\s*\(\s*path\s*,\s*&st\s*\)/.test(processRemoveRegularBody) &&
+    /z_process_output_is_symlink\s*\(\s*&st\s*\)/.test(processRemoveRegularBody) &&
+    /!\s*z_process_output_is_regular\s*\(\s*&st\s*\)/.test(processRemoveRegularBody) &&
+    /remove\s*\(\s*path\s*\)\s*==\s*0/.test(processRemoveRegularBody) &&
+    /z_process_remove_regular_file\s*\(\s*object_file\s*\)/.test(main) &&
+    /z_process_remove_regular_file\s*\(\s*llvm_file\s*\)/.test(main),
   toolchainUsesOutputContract: /z_process_prepare_output_file\s*\(\s*object_file\s*\)/.test(fsRaw) &&
     /z_process_prepare_output_file\s*\(\s*exe_file\s*\)/.test(fsRaw) &&
     /z_process_output_file_ready\s*\(\s*object_file\s*\)/.test(fsRaw) &&
@@ -1598,10 +1618,19 @@ const processExecHardening = {
     !/remove_existing_tool_output/.test(fsRaw),
   nativeSmokeWired: /process_exec_smoke\.c/.test(nativeTestRaw) &&
     /process-exec-smoke/.test(nativeTestRaw) &&
+    /artifact-finalization-smoke\.mts/.test(nativeTestRaw) &&
     /test_output_file_contract/.test(processExecSmokeRaw) &&
     /missing parent directory/.test(processExecSmokeRaw) &&
     /z_process_prepare_output_file/.test(processExecSmokeRaw) &&
-    /z_process_output_file_ready/.test(processExecSmokeRaw),
+    /z_process_output_file_ready/.test(processExecSmokeRaw) &&
+    /z_process_executable_file_ready/.test(processExecSmokeRaw) &&
+    /z_process_mark_executable/.test(processExecSmokeRaw) &&
+    /z_process_remove_regular_file/.test(processExecSmokeRaw) &&
+    /zero-artifact-finalization-/.test(artifactFinalizationSmokeRaw) &&
+    /assertExecutable/.test(artifactFinalizationSmokeRaw) &&
+    /assertRunnable/.test(artifactFinalizationSmokeRaw) &&
+    /as-directory/.test(artifactFinalizationSmokeRaw) &&
+    /as-symlink/.test(artifactFinalizationSmokeRaw),
   noIgnoredNullStreams: !/FILE\s+\*null_/.test(processRunArgvBody) && !/FILE\s+\*null_/.test(processFirstStdoutLineBody),
 };
 const processExecChildSetupChecked = Object.values(processExecHardening).every(Boolean);
@@ -1609,6 +1638,7 @@ const readFileBody = cCodeText(cBlock(fsReadRaw, "char *z_read_file"));
 const readBinaryFileBody = cCodeText(cBlock(fsReadRaw, "bool z_read_binary_file"));
 const readFilePrefixBody = cCodeText(cBlock(fsReadRaw, "bool z_read_file_prefix"));
 const atomicWriteBytesBody = cCodeText(cBlock(fsRaw, "static bool write_atomic_bytes"));
+const atomicOutputReadyBody = cCodeText(cBlock(fsRaw, "static bool atomic_output_path_ready_posix"));
 const atomicOpenTempBody = cCodeText(cBlock(fsRaw, "static FILE *open_atomic_write_temp"));
 const atomicCloseBody = cCodeText(cBlock(fsRaw, "static bool close_atomic_write"));
 const writeFileBody = cCodeText(cBlock(fsRaw, "bool z_write_file"));
@@ -1699,6 +1729,12 @@ const backendFormats = {
       /atomic_write_temp_path\s*\(\s*path\s*,\s*attempt\s*\)/.test(atomicOpenTempBody) &&
       /O_WRONLY\s*\|\s*O_CREAT\s*\|\s*O_EXCL/.test(atomicOpenTempBody),
     atomicWriteRenameChecked: /rename\s*\(\s*temp_path\s*,\s*path\s*\)\s*!=\s*0/.test(atomicCloseBody),
+    atomicWriteRejectsUnsafeOutput: /lstat\s*\(\s*path\s*,\s*&st\s*\)/.test(atomicOutputReadyBody) &&
+      /S_ISLNK\s*\(\s*st\.st_mode\s*\)/.test(atomicOutputReadyBody) &&
+      /!\s*S_ISREG\s*\(\s*st\.st_mode\s*\)/.test(atomicOutputReadyBody) &&
+      /atomic_output_path_ready\s*\(\s*path\s*,\s*diag\s*\)/.test(atomicWriteBytesBody) &&
+      /atomic_output_path_ready\s*\(\s*path\s*,\s*diag\s*\)/.test(atomicCloseBody) &&
+      /symlinks are rejected/.test(fsRaw),
     atomicWriteCleanup: countMatches(atomicWriteBytesBody + atomicOpenTempBody + atomicCloseBody, /remove\s*\(\s*temp_path\s*\)/g) >= 4 &&
       countMatches(atomicWriteBytesBody + atomicOpenTempBody + atomicCloseBody, /free\s*\(\s*temp_path\s*\)/g) >= 5,
     noDirectWriteFopenOutsideFs: directWriteFopenFiles.length === 0,

@@ -256,9 +256,16 @@ static FILE *open_atomic_write_temp(const char *path, char **temp_path_out, ZDia
   return NULL;
 }
 
+static bool atomic_output_path_ready(const char *path, ZDiag *diag);
+
 static bool close_atomic_write(FILE *file, const char *path, char *temp_path, ZDiag *diag) {
   if (fclose(file) != 0) {
     diag_io_at(diag, path, temp_path, "write");
+    remove(temp_path);
+    free(temp_path);
+    return false;
+  }
+  if (!atomic_output_path_ready(path, diag)) {
     remove(temp_path);
     free(temp_path);
     return false;
@@ -276,6 +283,65 @@ static bool close_atomic_write(FILE *file, const char *path, char *temp_path, ZD
   return true;
 }
 
+static void diag_output_path_contract(ZDiag *diag, const char *path, const char *actual) {
+  if (!diag) return;
+  diag->code = 1;
+  diag->path = path;
+  diag->line = 1;
+  diag->column = 1;
+  diag->length = 1;
+  snprintf(diag->message, sizeof(diag->message), "refusing to replace unsafe output path: '%s'", path ? path : "");
+  snprintf(diag->expected, sizeof(diag->expected), "missing path or regular output file");
+  snprintf(diag->actual, sizeof(diag->actual), "%s", actual ? actual : "unsafe output path");
+  snprintf(diag->help, sizeof(diag->help), "choose a regular file output path; directories and symlinks are rejected");
+}
+
+#if defined(_WIN32)
+static bool atomic_output_path_ready_windows(const char *path, ZDiag *diag) {
+  struct stat st;
+  if (stat(path, &st) != 0) {
+    if (errno == ENOENT) return true;
+    diag_io(diag, path, "inspect");
+    return false;
+  }
+  if ((st.st_mode & _S_IFDIR) != 0) {
+    diag_output_path_contract(diag, path, "directory output path");
+    return false;
+  }
+  if ((st.st_mode & _S_IFREG) == 0) {
+    diag_output_path_contract(diag, path, "non-regular output path");
+    return false;
+  }
+  return true;
+}
+#else
+static bool atomic_output_path_ready_posix(const char *path, ZDiag *diag) {
+  struct stat st;
+  if (lstat(path, &st) != 0) {
+    if (errno == ENOENT) return true;
+    diag_io(diag, path, "inspect");
+    return false;
+  }
+  if (S_ISLNK(st.st_mode)) {
+    diag_output_path_contract(diag, path, "symlink output path");
+    return false;
+  }
+  if (!S_ISREG(st.st_mode)) {
+    diag_output_path_contract(diag, path, "non-regular output path");
+    return false;
+  }
+  return true;
+}
+#endif
+
+static bool atomic_output_path_ready(const char *path, ZDiag *diag) {
+#if defined(_WIN32)
+  return atomic_output_path_ready_windows(path, diag);
+#else
+  return atomic_output_path_ready_posix(path, diag);
+#endif
+}
+
 static bool write_atomic_bytes(const char *path, const unsigned char *data, size_t len, ZDiag *diag) {
   if (!path || !path[0] || (!data && len > 0)) {
     errno = EINVAL;
@@ -283,6 +349,7 @@ static bool write_atomic_bytes(const char *path, const unsigned char *data, size
     return false;
   }
   if (!mkdir_parents(path, diag)) return false;
+  if (!atomic_output_path_ready(path, diag)) return false;
   char *temp_path = NULL;
   FILE *file = open_atomic_write_temp(path, &temp_path, diag);
   if (!file) return false;

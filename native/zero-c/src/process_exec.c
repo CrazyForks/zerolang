@@ -182,6 +182,34 @@ bool z_process_output_file_ready(const char *path) {
   return st.st_size > 0;
 }
 
+bool z_process_executable_file_ready(const char *path) {
+  if (!z_process_output_file_ready(path)) return false;
+#if defined(_WIN32)
+  return true;
+#else
+  return access(path, X_OK) == 0;
+#endif
+}
+
+bool z_process_mark_executable(const char *path) {
+  if (!z_process_output_file_ready(path)) return false;
+#if defined(_WIN32)
+  return true;
+#else
+  if (chmod(path, 0755) != 0) return false;
+  return z_process_executable_file_ready(path);
+#endif
+}
+
+bool z_process_remove_regular_file(const char *path) {
+  ZProcessOutputStat st;
+  if (!path || !path[0]) return false;
+  if (!z_process_lstat_output(path, &st)) return errno == ENOENT;
+  if (z_process_output_is_symlink(&st) || !z_process_output_is_regular(&st)) return false;
+  if (remove(path) == 0) return true;
+  return errno == ENOENT;
+}
+
 #if !defined(_WIN32)
 static bool z_process_suppress_stream(FILE *stream) {
   return freopen("/dev/null", "w", stream) != NULL;
