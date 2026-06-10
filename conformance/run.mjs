@@ -725,6 +725,8 @@ const passCheckFixtures = [
   "conformance/native/pass/std-hosted-cli.0",
   "conformance/native/pass/std-fs.0",
   "conformance/native/pass/std-fs-bytes.0",
+  "conformance/native/pass/frame-large-locals.0",
+  "conformance/native/pass/frame-limit-boundary.0",
   "conformance/native/pass/std-fs-resource.0",
   "conformance/native/pass/std-fs-readall.0",
   "conformance/native/pass/std-fs-polish.0",
@@ -4821,6 +4823,8 @@ for (const runtimeFixture of [
   ["conformance/native/pass/std-hosted-cli.0", "std-hosted-cli", { stdout: "std hosted cli ok\n", args: ["run", "7", "--json", "--name", "agent", "--count", "3"], env: { ZERO_CONFORMANCE_MODE: "test", ZERO_CONFORMANCE_VERBOSE: "true", ZERO_CONFORMANCE_LIMIT: "9" } }],
   ["conformance/native/pass/std-fs.0", "std-fs", { stdout: "fs ok\n", file: { name: "std-fs-write.txt", text: "zero write\n" } }],
   ["conformance/native/pass/std-fs-bytes.0", "std-fs-bytes", { stdout: "fs bytes ok\n", stderr: "fs bytes err ok\n" }],
+  ["conformance/native/pass/frame-large-locals.0", "frame-large-locals", { stdout: "frame large locals ok alpha\n", args: ["alpha"] }],
+  ["conformance/native/pass/frame-limit-boundary.0", "frame-limit-boundary", { stdout: "frame limit boundary ok\n" }],
   ["conformance/native/pass/std-fs-resource.0", "std-fs-resource", { stdout: "fs resource ok\n", file: { name: "std-fs-resource.txt", text: "zero file\n" } }],
   ["conformance/native/pass/std-fs-file-helpers.0", "std-fs-file-helpers", { stdout: "std fs file helpers ok\n" }],
   ["conformance/native/pass/std-io-lines.0", "std-io-lines", { stdout: "std io lines ok\n" }],
@@ -4885,6 +4889,20 @@ await assertDirectRuntimeRequired("conformance/native/pass/generic-nested-local-
 await assertDirectRuntimeRequired("conformance/native/pass/generic-static-array-specialization.0", "generic-static-array-specialization-required", { stdout: "generic static array specialization ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-static-forwarded-array-specialization.0", "generic-static-forwarded-array-specialization-required", { stdout: "generic static forwarded array specialization ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/explicit-cast-narrow-direct.0", "explicit-cast-narrow-direct-required", { stdout: "explicit cast narrow direct ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/frame-large-locals.0", "frame-large-locals-required", { stdout: "frame large locals ok alpha\n", args: ["alpha"] });
+await assertDirectRuntimeRequired("conformance/native/pass/frame-limit-boundary.0", "frame-limit-boundary-required", { stdout: "frame limit boundary ok\n" });
+
+const frameLimitOverFixture = `${outDir}/frame-limit-over.0`;
+const frameLimitOverBody = await writeImportFailureFixture(frameLimitOverFixture, `pub fn main(world: World) -> Void raises {
+    var buffer: [262144]u8 = [0; 262144]
+    buffer[0] = 1
+    check world.out.write("unreachable\\n")
+}
+`);
+assert.equal(frameLimitOverBody.diagnostics[0].code, "MEM003");
+assert.match(frameLimitOverBody.diagnostics[0].expected, /131072 bytes of locals/);
+assert.match(frameLimitOverBody.diagnostics[0].actual, /262144 bytes of locals/);
+assert.match(frameLimitOverBody.diagnostics[0].help, /pageAlloc/);
 
 const abiDump = await execFileAsync(zero, ["abi", "dump", "--json", "conformance/native/pass/const-layout.0"]);
 const abiDumpBody = JSON.parse(abiDump.stdout);
