@@ -5,10 +5,7 @@ description: Compact zerolang syntax and semantics guide for agents.
 
 # zerolang Language
 
-Use this when reading or writing Zero source. `.0` files are the
-human-readable projection syntax, not the package compiler input: package
-commands compile from `zero.graph` and refresh it automatically after `.0`
-edits. Read one function with `zero view --fn <name>` instead of whole files.
+Use this when reading or writing Zero source. `.0` files are the human-readable projection syntax, not the package compiler input: package commands compile from `zero.graph` and refresh it automatically after `.0` edits. Read one function with `zero view --fn <name>` instead of whole files.
 
 ## Minimal Program
 

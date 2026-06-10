@@ -5,33 +5,14 @@ description: Use ProgramGraph commands as the primary agent authoring and inspec
 
 # Zero Graph Authoring
 
-Use this when creating, inspecting, patching, importing, or exporting Zero
-programs through the graph interface, the primary agent authoring surface.
-`zero.graph` is the repository graph store for packages, `.0` files are the
-human-readable source projection, and `.program-graph` files are derived
-debug/interchange artifacts.
+Use this when creating, inspecting, patching, importing, or exporting Zero programs through the graph interface, the primary agent authoring surface. `zero.graph` is the repository graph store for packages, `.0` files are the human-readable source projection, and `.program-graph` files are derived debug/interchange artifacts.
 
 ## Source Boundary
 
-- Normal `zero check`, `zero run`, `zero test`, `zero build`, `zero size`, and
-  `zero mem` compile packages from `zero.graph` (`zero.toml` takes precedence
-  over `zero.json`). When the `.0` projection was edited, those commands
-  refresh the stale store from source first and note it on stderr;
-  `ZERO_STALE=fail` turns that refresh into an RGP008 error instead.
-- `zero import` refreshes `zero.graph` from edited source explicitly. It
-  accepts the package root, manifest, or any source path inside the package,
-  updates an existing store in place, and preserves node handles where the
-  edit is unambiguous. Ambiguous matches fail (RGP007) with a split-the-edit
-  strategy instead of guessing. Never delete the store to force a reimport,
-  and omit `--out` for package imports.
-- `zero export [package]` materializes `.0` projections for human review;
-  compiler commands report projection state but never rewrite `.0` files.
-  `zero verify-projection [package]` fails on drift without writing anything.
-- `zero.graph` is binary by default. Reads auto-detect text and binary stores,
-  writes preserve the existing encoding, and `zero status` reports
-  `store format: text|binary`. Use `--format text` only for a deliberately
-  readable debug store. Stdlib `std/*.graph` stores are binary; sibling
-  `std/*.0` files are projections, not the stdlib compile source.
+- Normal `zero check`, `zero run`, `zero test`, `zero build`, `zero size`, and `zero mem` compile packages from `zero.graph` (`zero.toml` takes precedence over `zero.json`). When the `.0` projection was edited, those commands refresh the stale store from source first and note it on stderr; `ZERO_STALE=fail` turns that refresh into an RGP008 error instead.
+- `zero import` refreshes `zero.graph` from edited source explicitly. It accepts the package root, manifest, or any source path inside the package, updates an existing store in place, and preserves node handles where the edit is unambiguous. Ambiguous matches fail (RGP007) with a split-the-edit strategy instead of guessing. Never delete the store to force a reimport, and omit `--out` for package imports.
+- `zero export [package]` materializes `.0` projections for human review; compiler commands report projection state but never rewrite `.0` files. `zero verify-projection [package]` fails on drift without writing anything.
+- `zero.graph` is binary by default. Reads auto-detect text and binary stores, writes preserve the existing encoding, and `zero status` reports `store format: text|binary`. Use `--format text` only for a deliberately readable debug store. Stdlib `std/*.graph` stores are binary; sibling `std/*.0` files are projections, not the stdlib compile source.
 
 ## Create
 
@@ -40,10 +21,7 @@ zero init
 zero patch --op 'addMain'
 ```
 
-`zero init` defaults to the current directory and that folder's name. Use
-`zero init app` for a new subdirectory, `--manifest json` only for explicit
-compatibility, and `--template cli|lib|package` only when the user asks for
-starter files.
+`zero init` defaults to the current directory and that folder's name. Use `zero init app` for a new subdirectory, `--manifest json` only for explicit compatibility, and `--template cli|lib|package` only when the user asks for starter files.
 
 ## Inspect
 
@@ -57,17 +35,11 @@ zero view --fn main        # one function's canonical source
 zero status                # store format and projection state
 ```
 
-`--node` defaults to depth 1; add `--full` for the whole-module report. Use
-handles from `--find` for checked edits (`set`, `insert`, `insertEdge`,
-`replace`, `rename`, `delete`); delete compacts ordered graph groups so valid
-sibling order is preserved. Reserve unfiltered `zero query` dumps for tools
-that need every node and edge.
+`--node` defaults to depth 1; add `--full` for the whole-module report. Use handles from `--find` for checked edits (`set`, `insert`, `insertEdge`, `replace`, `rename`, `delete`); delete compacts ordered graph groups so valid sibling order is preserved. Reserve unfiltered `zero query` dumps for tools that need every node and edge.
 
 ## Patches
 
-A successful patch loads, applies, validates, and saves `zero.graph`, and
-prints the saved path, new graph hash, functions, and tests. Do not run
-`zero check` or `zero query` just to confirm that the patch applied.
+A successful patch loads, applies, validates, and saves `zero.graph`, and prints the saved path, new graph hash, functions, and tests. Do not run `zero check` or `zero query` just to confirm that the patch applied.
 
 ```sh
 zero patch \
@@ -78,9 +50,7 @@ zero patch \
   --op 'addTest name="addition works" call="add" arg0="40" arg1="2" expect="42" type="i32"'
 ```
 
-For multi-statement bodies, use `replaceFunctionBody` for a whole function or
-`replaceBlockBody` for one selected `Block` node. Body rows accept canonical
-projection syntax, the same text `zero view` prints:
+For multi-statement bodies, use `replaceFunctionBody` for a whole function or `replaceBlockBody` for one selected `Block` node. Body rows accept canonical projection syntax, the same text `zero view` prints:
 
 ```text
 zero-program-graph-patch v1
@@ -97,8 +67,7 @@ replaceFunctionBody main
 end
 ```
 
-To patch one branch instead of rewriting the whole function, find the block
-handle first:
+To patch one branch instead of rewriting the whole function, find the block handle first:
 
 ```sh
 zero query --find Block
@@ -153,9 +122,7 @@ replaceBlockBody #block_id
 end
 ```
 
-`insert` and `insertEdge` default `order` to `0`, which fits singular edges
-like `expr`, `left`, and `declaredType`. For precise existing-node edits, pin
-the graph hash and node facts:
+`insert` and `insertEdge` default `order` to `0`, which fits singular edges like `expr`, `left`, and `declaredType`. For precise existing-node edits, pin the graph hash and node facts:
 
 ```sh
 zero patch \
@@ -163,13 +130,11 @@ zero patch \
   --op 'set node="#expr_653eeb6e" field="value" expect="hello from zero\n" value="hello agent\n"'
 ```
 
-For larger edits, write a patch file under `/tmp` or pass `--patch-text`.
-Always include `expect graphHash` when a patch is carried across tool calls.
+For larger edits, write a patch file under `/tmp` or pass `--patch-text`. Always include `expect graphHash` when a patch is carried across tool calls.
 
 ## Artifacts, Reconcile, And Diff
 
-Create a derived artifact only to carry a graph between tools, and validate it
-before applying accepted changes back to a package store:
+Create a derived artifact only to carry a graph between tools, and validate it before applying accepted changes back to a package store:
 
 ```sh
 zero dump --out .zero/agent/app.program-graph
@@ -177,26 +142,14 @@ zero validate .zero/agent/app.program-graph
 zero view .zero/agent/app.program-graph
 ```
 
-Do not commit `.program-graph` files unless the user explicitly asks.
-`zero source-map` connects graph nodes to source ranges. When a human edited
-source after a graph was captured, reconcile before relying on old node IDs:
+Do not commit `.program-graph` files unless the user explicitly asks. `zero source-map` connects graph nodes to source ranges. When a human edited source after a graph was captured, reconcile before relying on old node IDs:
 
 ```sh
 zero reconcile .zero/agent/app.before.program-graph --source <projection-or-package>
 ```
 
-`zero reconcile` reports unchanged, edited, inserted, deleted, ambiguous, and
-identity-changed nodes; ambiguous matches fail instead of assigning stale
-handles.
+`zero reconcile` reports unchanged, edited, inserted, deleted, ambiguous, and identity-changed nodes; ambiguous matches fail instead of assigning stale handles.
 
-For readable Git diffs of `.graph` files, mark them with `*.graph diff=zero-graph`
-in `.gitattributes` and set `git config diff.zero-graph.textconv 'zero diff'`
-(`bin/zero diff` inside a Zero checkout). `zero diff` prints canonical review
-text for textconv only; keep using `zero query`, `zero inspect`, and
-`zero patch` for graph work.
+For readable Git diffs of `.graph` files, mark them with `*.graph diff=zero-graph` in `.gitattributes` and set `git config diff.zero-graph.textconv 'zero diff'` (`bin/zero diff` inside a Zero checkout). `zero diff` prints canonical review text for textconv only; keep using `zero query`, `zero inspect`, and `zero patch` for graph work.
 
-`zero merge --base <base-zero.graph> --left <left-zero.graph> --right
-<right-zero.graph> <package>` combines independent node-hash edits and writes
-only the target store; run `export` separately if a human needs the refreshed
-projection. Build and run commands may also write a derived final-MIR cache
-under `.zero/cache/native/`; agents should not patch `.zmir` files.
+`zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> <package>` combines independent node-hash edits and writes only the target store; run `export` separately if a human needs the refreshed projection. Build and run commands may also write a derived final-MIR cache under `.zero/cache/native/`; agents should not patch `.zmir` files.

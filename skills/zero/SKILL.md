@@ -43,11 +43,7 @@ Use `zero skills get <name>` to load only what is relevant to the task. Common
 inner skills include `agent`, `language`, `graph`, `diagnostics`, `packages`,
 `builds`, `testing`, and `stdlib`.
 
-Agents author through graph patches or direct `.0` source edits; package
-commands refresh `zero.graph` from edited source automatically. Read one
-function with `zero view --fn <name>` instead of whole files. Prefer concise
-text output during interactive agent work; use `--json` only for automation,
-exact spans, contracts, or machine-readable diagnostics.
+Agents author through graph patches or direct `.0` source edits; package commands refresh `zero.graph` from edited source automatically. Read one function with `zero view --fn <name>` instead of whole files. Prefer concise text output during interactive agent work; use `--json` only for automation, exact spans, contracts, or machine-readable diagnostics.
 
 ## Common Entry Points
 
