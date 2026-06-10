@@ -4297,6 +4297,31 @@ static void command_apply_current_directory_default(Command *command) {
   if (command_defaults_to_current_directory(command)) command->input = ".";
 }
 
+static bool query_argument_looks_like_symbol(const char *arg) {
+  if (!arg || !arg[0]) return false;
+  if (!isalpha((unsigned char)arg[0]) && arg[0] != '_') return false;
+  for (const char *c = arg; *c; c++) {
+    if (!isalnum((unsigned char)*c) && *c != '_' && *c != '.') return false;
+  }
+  static const char *const input_extensions[] = {".0", ".graph", ".toml", ".json"};
+  size_t len = strlen(arg);
+  for (size_t i = 0; i < sizeof(input_extensions) / sizeof(input_extensions[0]); i++) {
+    size_t ext_len = strlen(input_extensions[i]);
+    if (len > ext_len && strcmp(arg + len - ext_len, input_extensions[i]) == 0) return false;
+  }
+  return true;
+}
+
+static void command_apply_query_bare_argument(Command *command) {
+  if (!command || !command->kind || !cli_arg_is(command->kind, "query")) return;
+  if (!command->input || path_exists(command->input)) return;
+  if (command->query_find || command->query_function || command->query_refs || command->query_calls || command->query_node) return;
+  if (!query_argument_looks_like_symbol(command->input)) return;
+  command->query_find = command->input;
+  command->query_bare_argument = command->input;
+  command->input = NULL;
+}
+
 static bool parse_command(int argc, char **argv, Command *command) {
   if (argc < 2) return false;
   command->command = argv[1];
@@ -13742,6 +13767,7 @@ int main(int argc, char **argv) {
   if (!command.input && command.graph_patch_command && (command.patch_op_len > 0 || command.patch_text || command.patch_file)) {
     command.input = ".";
   }
+  command_apply_query_bare_argument(&command);
   command_apply_current_directory_default(&command);
   if (!command.input) {
     z_cli_print_command_help(command.command);
