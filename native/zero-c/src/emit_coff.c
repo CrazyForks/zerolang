@@ -155,12 +155,15 @@ static void coff_emit_store_field_from_eax(ZBuf *text, const IrFunction *fun, un
 
 static void coff_emit_array_base_rdx(ZBuf *text, const IrFunction *fun, unsigned local_index) { z_x64_emit_rbp_disp_reg(text, 0x8d, 2, coff_local_offset(fun, local_index), true); }
 
-static void coff_emit_u8_array_bounds_check(ZBuf *text, const IrLocal *local) {
+static bool coff_emit_trap(ZBuf *text, CoffEmitContext *ctx, ZDiag *diag, ZDirectTrapKind kind);
+
+static bool coff_emit_u8_array_bounds_check(ZBuf *text, const IrLocal *local, CoffEmitContext *ctx, ZDiag *diag) {
   z_x64_append_u8(text, 0x3d);
   z_x64_append_u32(text, local ? local->array_len : 0);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!coff_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
+  return true;
 }
 
 static void coff_emit_epilogue(ZBuf *text) { z_x64_emit_epilogue(text); }
@@ -237,16 +240,51 @@ static bool coff_emit_rodata_ptr_rax(ZBuf *text, unsigned data_offset, CoffEmitC
   return z_coff_record_rodata_patch(ctx, patch, data_offset, value, diag);
 }
 
+static bool coff_emit_trap(ZBuf *text, CoffEmitContext *ctx, ZDiag *diag, ZDirectTrapKind kind) {
+  /* Cold path: branch to the shared per-binary trap stub that prints a diagnostic. */
+  if (ctx && ctx->trap_messages.lens[kind] > 0) {
+    size_t patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
+    if (z_direct_trap_branches_record(&ctx->trap_branches[kind], patch)) return true;
+    return coff_diag_at(diag, "direct COFF backend ran out of memory while recording a trap branch", 1, 1, "allocation failed");
+  }
+  z_x64_emit_ud2(text);
+  return true;
+}
+
+static bool coff_emit_trap_stubs(ZBuf *text, CoffEmitContext *ctx, bool *emitted, ZDiag *diag) {
+  if (emitted) *emitted = false;
+  for (unsigned kind = 0; ctx && kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    ZDirectTrapBranchList *branches = &ctx->trap_branches[kind];
+    if (branches->len == 0) continue;
+    if (emitted) *emitted = true;
+    size_t stub_offset = text->len;
+    if (!coff_emit_rodata_ptr_rax(text, ctx->trap_messages.offsets[kind], ctx, NULL, diag)) return false;
+    z_x64_emit_mov_reg_from_reg(text, 2, 0, true);
+    z_x64_emit_mov_reg_u32(text, 8, ctx->trap_messages.lens[kind]);
+    z_x64_emit_mov_reg_u32(text, 1, 2u);
+    z_x64_emit_align_rsp_16(text);
+    z_x64_emit_sub_rsp(text, 32);
+    size_t patch = z_x64_emit_call32_placeholder(text);
+    z_x64_emit_add_rsp(text, 32);
+    if (!z_coff_record_instr_runtime_patch(ctx, COFF_RUNTIME_WORLD_WRITE, patch, NULL, diag)) return false;
+    z_x64_emit_ud2(text);
+    for (size_t i = 0; i < branches->len; i++) z_x64_patch_rel32(text, branches->items[i], stub_offset);
+    branches->len = 0;
+  }
+  return true;
+}
+
 static bool coff_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *value, CoffEmitContext *ctx, ZDiag *diag);
 static bool coff_emit_byte_view_ptr(ZBuf *text, const IrFunction *fun, const IrValue *view, CoffEmitContext *ctx, ZDiag *diag);
 static bool coff_emit_byte_view_len(ZBuf *text, const IrFunction *fun, const IrValue *view, CoffEmitContext *ctx, ZDiag *diag);
 static bool coff_emit_byte_view_pair(ZBuf *text, const IrFunction *fun, const IrValue *view, unsigned ptr_reg, unsigned len_reg, CoffEmitContext *ctx, ZDiag *diag);
 
-static void coff_emit_u64_upper_bound_check(ZBuf *text, unsigned value_reg, unsigned limit_reg) {
+static bool coff_emit_u64_upper_bound_check(ZBuf *text, unsigned value_reg, unsigned limit_reg, CoffEmitContext *ctx, ZDiag *diag) {
   z_x64_emit_cmp_reg_reg(text, value_reg, limit_reg, true);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x86);
-  z_x64_emit_ud2(text);
+  if (!coff_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_VALUE_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
+  return true;
 }
 
 static bool coff_emit_byte_view_len(ZBuf *text, const IrFunction *fun, const IrValue *view, CoffEmitContext *ctx, ZDiag *diag) {
@@ -366,12 +404,12 @@ static bool coff_emit_byte_view_pair(ZBuf *text, const IrFunction *fun, const Ir
       if (!coff_emit_value(text, fun, view->right, ctx, diag)) return false;
       z_x64_emit_pop_reg64(text, 1);
       z_x64_emit_pop_reg64(text, 10);
-      coff_emit_u64_upper_bound_check(text, 1, 0);
-      coff_emit_u64_upper_bound_check(text, 0, 10);
+      if (!coff_emit_u64_upper_bound_check(text, 1, 0, ctx, diag)) return false;
+      if (!coff_emit_u64_upper_bound_check(text, 0, 10, ctx, diag)) return false;
       z_x64_emit_sub_reg_reg(text, 0, 1, true);
     } else {
       z_x64_emit_pop_reg64(text, 10);
-      coff_emit_u64_upper_bound_check(text, 1, 10);
+      if (!coff_emit_u64_upper_bound_check(text, 1, 10, ctx, diag)) return false;
       z_x64_emit_mov_reg_from_reg(text, 0, 10, true);
       z_x64_emit_sub_reg_reg(text, 0, 1, true);
     }
@@ -545,7 +583,7 @@ static bool coff_emit_byte_view_index_load_value(ZBuf *text, const IrFunction *f
   z_x64_emit_pop_rax(text);
   z_x64_emit_cmp_rax_rcx(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!coff_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   z_x64_emit_mov_rcx_from_rax(text, false);
   z_x64_emit_mov_reg_from_reg(text, 0, 8, true);
@@ -725,7 +763,7 @@ static bool coff_emit_index_load_value(ZBuf *text, const IrFunction *fun, const 
   }
   if (local->is_array && coff_type_is_array_element(local->element_type)) {
     if (!value->index || !coff_emit_value(text, fun, value->index, ctx, diag)) return false;
-    coff_emit_u8_array_bounds_check(text, local);
+    if (!coff_emit_u8_array_bounds_check(text, local, ctx, diag)) return false;
     z_x64_emit_push_rax(text);
     coff_emit_array_base_rdx(text, fun, value->array_index);
     z_x64_emit_pop_reg64(text, 1);
@@ -1332,7 +1370,7 @@ static bool coff_emit_world_write(ZBuf *text, const IrFunction *fun, const IrIns
   z_x64_emit_add_rsp(text, 32);
   z_x64_emit_test_rax_rax(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
-  z_x64_emit_ud2(text); // ud2 on runtime write failure
+  if (!coff_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_WRITE_FAILED)) return false; // trap on runtime write failure
   z_x64_patch_rel32(text, ok_patch, text->len);
   return z_coff_record_instr_runtime_patch(ctx, COFF_RUNTIME_WORLD_WRITE, patch, instr, diag);
 }
@@ -1498,7 +1536,7 @@ static bool coff_emit_byte_view_index_store_instr(ZBuf *text, const IrFunction *
   z_x64_emit_pop_rax(text);
   z_x64_emit_cmp_rax_rcx(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!coff_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   z_x64_emit_push_rax(text);
   coff_emit_load_local_slot_rax(text, fun, instr->array_index, 0);
@@ -1522,7 +1560,7 @@ static bool coff_emit_index_store_instr(ZBuf *text, const IrFunction *fun, const
   }
   if (local->is_array && coff_type_is_array_element(local->element_type)) {
     if (!instr->index || !coff_emit_value(text, fun, instr->index, ctx, diag)) return false;
-    coff_emit_u8_array_bounds_check(text, local);
+    if (!coff_emit_u8_array_bounds_check(text, local, ctx, diag)) return false;
     z_x64_emit_push_rax(text);
     if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
     z_x64_emit_pop_reg64(text, 1);
@@ -1745,6 +1783,25 @@ static void coff_append_rodata(ZBuf *rodata, const IrProgram *program, unsigned 
   }
 }
 
+static void coff_append_trap_messages(ZBuf *rodata, unsigned base_offset, ZDirectTrapMessages *messages) {
+  for (unsigned kind = 0; kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    const char *text = z_direct_trap_message((ZDirectTrapKind)kind);
+    size_t len = strlen(text);
+    messages->offsets[kind] = base_offset + (unsigned)rodata->len;
+    messages->lens[kind] = (unsigned)len;
+    for (size_t i = 0; i < len; i++) zbuf_append_char(rodata, text[i]);
+  }
+}
+
+static bool coff_object_emit_text(ZBuf *text, const IrProgram *program, size_t *offsets, CoffEmitContext *ctx, bool *trap_stubs_emitted, ZDiag *diag) {
+  for (size_t i = 0; i < program->function_len; i++) {
+    while (text->len % 16 != 0) z_x64_append_u8(text, 0x90);
+    offsets[i] = text->len;
+    if (!coff_emit_function_text(text, &program->functions[i], ctx, diag)) return false;
+  }
+  return coff_emit_trap_stubs(text, ctx, trap_stubs_emitted, diag);
+}
+
 bool z_emit_coff_x64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *diag) {
   if (!program || !out) return coff_diag(diag, "direct COFF backend received no program");
   if (!program->mir_valid) {
@@ -1768,7 +1825,9 @@ bool z_emit_coff_x64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *
   zbuf_init(&relocs);
   bool has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
   unsigned rodata_base_offset = coff_rodata_base_offset(program);
-  if (has_rodata) coff_append_rodata(&rodata, program, rodata_base_offset);
+  ZDirectTrapMessages trap_messages = {0};
+  coff_append_rodata(&rodata, program, rodata_base_offset);
+  coff_append_trap_messages(&rodata, rodata_base_offset, &trap_messages);
   size_t *offsets = z_checked_calloc(program->function_len, sizeof(size_t));
   if (!offsets) {
     zbuf_free(&relocs);
@@ -1780,21 +1839,19 @@ bool z_emit_coff_x64_object_from_ir(const IrProgram *program, ZBuf *out, ZDiag *
     .program = program,
     .function_offsets = offsets,
     .function_count = program->function_len,
-    .rodata_base_offset = rodata_base_offset
+    .rodata_base_offset = rodata_base_offset,
+    .trap_messages = trap_messages
   };
-  for (size_t i = 0; i < program->function_len; i++) {
-    while (text.len % 16 != 0) z_x64_append_u8(&text, 0x90);
-    offsets[i] = text.len;
-    if (!coff_emit_function_text(&text, &program->functions[i], &ctx, diag)) {
-      z_coff_emit_context_free(&ctx);
-      free(offsets);
-      zbuf_free(&relocs);
-      zbuf_free(&rodata);
-      zbuf_free(&text);
-      return false;
-    }
+  bool trap_stubs_emitted = false;
+  if (!coff_object_emit_text(&text, program, offsets, &ctx, &trap_stubs_emitted, diag)) {
+    z_coff_emit_context_free(&ctx);
+    free(offsets);
+    zbuf_free(&relocs);
+    zbuf_free(&rodata);
+    zbuf_free(&text);
+    return false;
   }
-
+  has_rodata = has_rodata || trap_stubs_emitted;
   unsigned section_symbol_count = has_rodata ? 2u : 1u;
   size_t runtime_symbol_count = 0;
   for (unsigned helper = 0; helper < COFF_RUNTIME_HELPER_COUNT; helper++) {
@@ -1957,9 +2014,10 @@ bool z_emit_coff_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *dia
   ZBuf rdata;
   zbuf_init(&text);
   zbuf_init(&rdata);
-  bool has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
   unsigned rodata_base_offset = coff_rodata_base_offset(program);
-  if (has_rodata) coff_append_rodata(&rdata, program, rodata_base_offset);
+  ZDirectTrapMessages trap_messages = {0};
+  coff_append_rodata(&rdata, program, rodata_base_offset);
+  coff_append_trap_messages(&rdata, rodata_base_offset, &trap_messages);
 
   size_t *offsets = z_checked_calloc(program->function_len, sizeof(size_t));
   if (!offsets) {
@@ -1972,7 +2030,8 @@ bool z_emit_coff_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *dia
     .program = program,
     .function_offsets = offsets,
     .function_count = program->function_len,
-    .rodata_base_offset = rodata_base_offset
+    .rodata_base_offset = rodata_base_offset,
+    .trap_messages = trap_messages
   };
   ZCoffImportPatch import_patches[8];
   size_t import_patch_len = 0;
@@ -1988,6 +2047,13 @@ bool z_emit_coff_x64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag *dia
       zbuf_free(&text);
       return false;
     }
+  }
+  if (!coff_emit_trap_stubs(&text, &ctx, NULL, diag)) {
+    z_coff_emit_context_free(&ctx);
+    free(offsets);
+    zbuf_free(&rdata);
+    zbuf_free(&text);
+    return false;
   }
   size_t world_write_offset = 0;
   if (z_coff_runtime_patch_count(&ctx, COFF_RUNTIME_WORLD_WRITE) > 0) {

@@ -83,6 +83,7 @@ void z_macho_emit_context_free(MachOEmitContext *ctx) {
   }
   free(ctx->data_patches);
   free(ctx->call_patches);
+  z_direct_trap_branches_free(ctx->trap_branches, Z_DIRECT_TRAP_KIND_COUNT);
 }
 
 bool z_macho_record_call_patch(MachOEmitContext *ctx, size_t patch_offset, unsigned callee_index, const IrValue *value, ZDiag *diag) {

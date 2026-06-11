@@ -953,7 +953,7 @@ grep -q '"path":"direct-coff-x64-object"' .zero/native-test/direct-hello-win.jso
 grep -q '"generatedCBytes": 0' .zero/native-test/direct-hello-win.json
 rm -f .zero/native-test/coff-maybe-byte-view.obj .zero/native-test/coff-maybe-byte-view.obj.c
 bin/zero build --json --emit obj --target win32-x64.exe conformance/native/pass/coff-maybe-byte-view-buildable.graph --out .zero/native-test/coff-maybe-byte-view.obj > .zero/native-test/coff-maybe-byte-view.json
-node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/coff-maybe-byte-view.json","utf8")); const b=fs.readFileSync(".zero/native-test/coff-maybe-byte-view.obj"); if (report.objectBackend.objectEmission.path!=="direct-coff-x64-object" || b.readUInt16LE(0)!==0x8664 || b.readUInt16LE(2)!==1 || !b.includes(Buffer.from("main"))) process.exit(1);'
+node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/coff-maybe-byte-view.json","utf8")); const b=fs.readFileSync(".zero/native-test/coff-maybe-byte-view.obj"); if (report.objectBackend.objectEmission.path!=="direct-coff-x64-object" || b.readUInt16LE(0)!==0x8664 || b.readUInt16LE(2)!==2 || !b.includes(Buffer.from("main")) || !b.includes(Buffer.from("trap: index out of bounds"))) process.exit(1);'
 test ! -f .zero/native-test/coff-maybe-byte-view.obj.c
 rm -f .zero/native-test/direct-array-fill.o .zero/native-test/direct-array-fill.o.c
 bin/zero build --json --emit obj --target linux-musl-x64 examples/direct-array-fill.graph --out .zero/native-test/direct-array-fill.o > .zero/native-test/direct-array-fill-obj.json

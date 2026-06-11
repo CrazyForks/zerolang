@@ -403,7 +403,7 @@ async function assertBoundsTrap(fixture, name) {
   if (!canRunLinuxMuslX64) return;
   const failedRun = await execFileAsync(out, []).catch((error) => error);
   assert.notEqual(failedRun.code ?? (failedRun.signal ? 1 : 0), 0);
-  if (failedRun.stderr) assert.match(failedRun.stderr, /zero bounds check failed/);
+  if (failedRun.stderr) assert.match(failedRun.stderr, /zero bounds check failed|trap: index out of bounds/);
 }
 
 async function assertDirectRuntimeOrUnsupported(fixture, name, expected) {
@@ -1761,6 +1761,26 @@ await execFileAsync(zero, [
 const machoOpenSliceBoundsBytes = await assertMachOArm64Object(`${outDir}/macho-open-byte-slice-bounds.o`, "main");
 assert(hasAarch64CondBranch(machoOpenSliceBoundsBytes, 9));
 assert(hasAarch64Instruction(machoOpenSliceBoundsBytes, 0xd4200000));
+
+const trapMessageFixture = `${outDir}/trap-index-message.0`;
+const trapMessageGraph = await writeGraphFixture(trapMessageFixture, `pub fn main(world: World) -> Void raises {
+    var values: [4]u32 = [1, 2, 3, 4]
+    var index: usize = 4
+    index = index + 1000
+    let v: u32 = values[index]
+    if v == 1 {
+        check world.out.write("unreachable\\n")
+    }
+}
+`);
+if (runnableDirectTarget) {
+  const trapMessageOut = `${outDir}/trap-index-message`;
+  await execFileAsync(zero, ["build", "--json", "--emit", "exe", "--target", runnableDirectTarget, trapMessageGraph, "--out", trapMessageOut]);
+  const trapMessageRun = await execFileAsync(trapMessageOut, []).catch((error) => error);
+  assert.notEqual(trapMessageRun.code ?? (trapMessageRun.signal ? 1 : 0), 0, "deliberate out-of-bounds index must abort");
+  assert.match(trapMessageRun.stderr ?? "", /trap: index out of bounds/);
+  assert.equal(trapMessageRun.stdout ?? "", "");
+}
 
 const x64OpenSliceBoundsFixture = `${outDir}/x64-open-u16-slice-bounds.0`;
 await writeGraphFixture(x64OpenSliceBoundsFixture, `export c fn main() -> u32 {

@@ -818,6 +818,13 @@ void z_x64_emit_mov_eax_u32(ZBuf *buf, uint32_t value) {
   z_x64_append_u32(buf, value);
 }
 
+void z_x64_emit_align_rsp_16(ZBuf *buf) {
+  z_x64_append_u8(buf, 0x48); // and rsp, -16
+  z_x64_append_u8(buf, 0x83);
+  z_x64_append_u8(buf, 0xe4);
+  z_x64_append_u8(buf, 0xf0);
+}
+
 void z_x64_emit_ud2(ZBuf *buf) {
   z_x64_append_u8(buf, 0x0f);
   z_x64_append_u8(buf, 0x0b);

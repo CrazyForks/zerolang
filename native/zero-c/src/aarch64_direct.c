@@ -193,18 +193,22 @@ static bool a64_emit_load_scratch(ZBuf *text, unsigned reg, IrTypeKind type, uns
   return true;
 }
 
-static void a64_emit_u32_bounds_check(ZBuf *text, unsigned index_reg, unsigned len_reg) {
+static bool a64_emit_trap(ZBuf *text, ZAArch64DirectContext *ctx, ZDiag *diag, ZDirectTrapKind kind);
+
+static bool a64_emit_u32_bounds_check(ZBuf *text, unsigned index_reg, unsigned len_reg, ZAArch64DirectContext *ctx, ZDiag *diag) {
   z_aarch64_emit_cmp_w(text, index_reg, len_reg);
   size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 3);
-  z_aarch64_emit_brk(text);
+  if (!a64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_aarch64_patch_cond19(text, ok_patch, text->len);
+  return true;
 }
 
-static void a64_emit_u32_upper_bound_check(ZBuf *text, unsigned value_reg, unsigned max_reg) {
+static bool a64_emit_u32_upper_bound_check(ZBuf *text, unsigned value_reg, unsigned max_reg, ZAArch64DirectContext *ctx, ZDiag *diag) {
   z_aarch64_emit_cmp_w(text, value_reg, max_reg);
   size_t ok_patch = z_aarch64_emit_b_cond_placeholder(text, 9);
-  z_aarch64_emit_brk(text);
+  if (!a64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_VALUE_BOUNDS)) return false;
   z_aarch64_patch_cond19(text, ok_patch, text->len);
+  return true;
 }
 
 static bool a64_scaled_index_imm12(unsigned start, IrTypeKind element_type, unsigned *out) {
@@ -277,6 +281,35 @@ static bool a64_emit_rodata_ptr_literal(ZBuf *text, unsigned reg, unsigned data_
   size_t patch_offset = text->len;
   z_aarch64_append_u64(text, 0);
   return a64_record_data_patch(ctx, patch_offset, data_offset, diag, value);
+}
+
+static bool a64_emit_trap(ZBuf *text, ZAArch64DirectContext *ctx, ZDiag *diag, ZDirectTrapKind kind) {
+  /* Cold path: branch to the shared per-binary trap stub that prints a diagnostic. */
+  if (ctx && ctx->emit_world_write && ctx->record_data_patch && ctx->trap_messages.lens[kind] > 0) {
+    size_t patch = z_aarch64_emit_b_placeholder(text);
+    if (z_direct_trap_branches_record(&ctx->trap_branches[kind], patch)) return true;
+    return a64_diag(diag, "direct AArch64 backend ran out of memory while recording a trap branch", 1, 1, "allocation failed");
+  }
+  z_aarch64_emit_brk(text);
+  return true;
+}
+
+bool z_aarch64_direct_emit_trap_stubs(ZBuf *text, ZAArch64DirectContext *ctx, ZDiag *diag) {
+  for (unsigned kind = 0; ctx && kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    ZDirectTrapBranchList *branches = &ctx->trap_branches[kind];
+    if (branches->len == 0) continue;
+    while ((text->len % 4) != 0) zbuf_append_char(text, 0);
+    size_t stub_offset = text->len;
+    if (!a64_emit_rodata_ptr_literal(text, 1, ctx->trap_messages.offsets[kind], ctx, NULL, diag)) return false;
+    z_aarch64_emit_movz_w(text, 2, ctx->trap_messages.lens[kind]);
+    z_aarch64_emit_movz_w(text, 0, 2u);
+    if (!ctx->emit_world_write(text, NULL, ctx, diag)) return false;
+    z_aarch64_emit_brk(text);
+    for (size_t i = 0; i < branches->len; i++) z_aarch64_patch_branch26(text, branches->items[i], stub_offset);
+    branches->len = 0;
+  }
+  if (ctx) z_direct_trap_branches_free(ctx->trap_branches, Z_DIRECT_TRAP_KIND_COUNT);
+  return true;
 }
 
 static bool a64_emit_byte_view_ptr_at(ZBuf *text, const IrFunction *fun, const IrValue *view, unsigned reg, unsigned frame_size, unsigned scratch_slot, ZAArch64DirectContext *ctx, ZDiag *diag);
@@ -412,13 +445,13 @@ static bool a64_emit_byte_view_pair_at(ZBuf *text, const IrFunction *fun, const 
       if (!a64_emit_value_to_reg_at(text, fun, view->right, 9, frame_size, scratch_slot + 3, ctx, diag)) return false;
       if (!a64_emit_load_scratch(text, 8, view->index ? view->index->type : IR_TYPE_U32, scratch_slot + 2, view->index, diag)) return false;
       if (!a64_emit_load_scratch(text, 12, IR_TYPE_U32, scratch_slot + 1, view->left, diag)) return false;
-      a64_emit_u32_upper_bound_check(text, 8, 9);
-      a64_emit_u32_upper_bound_check(text, 9, 12);
+      if (!a64_emit_u32_upper_bound_check(text, 8, 9, ctx, diag)) return false;
+      if (!a64_emit_u32_upper_bound_check(text, 9, 12, ctx, diag)) return false;
       a64_emit_binary_reg(text, IR_BIN_SUB, 10, 9, 8, false);
     } else {
       if (!a64_emit_load_scratch(text, 10, IR_TYPE_U32, scratch_slot + 1, view->left, diag)) return false;
       if (!a64_emit_load_scratch(text, 8, view->index ? view->index->type : IR_TYPE_U32, scratch_slot + 2, view->index, diag)) return false;
-      a64_emit_u32_upper_bound_check(text, 8, 10);
+      if (!a64_emit_u32_upper_bound_check(text, 8, 10, ctx, diag)) return false;
       a64_emit_binary_reg(text, IR_BIN_SUB, 10, 10, 8, false);
     }
     if (!a64_emit_load_scratch(text, 11, IR_TYPE_U64, scratch_slot, view->left, diag)) return false;
@@ -1071,7 +1104,7 @@ static bool a64_emit_byte_view_index_load_to_reg_at(ZBuf *text, const IrFunction
   if (!a64_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
   if (!a64_emit_byte_view_pair_at(text, fun, value->left, 9, 10, frame_size, scratch_slot + 1, ctx, diag)) return false;
   if (!a64_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
-  a64_emit_u32_bounds_check(text, 8, 10);
+  if (!a64_emit_u32_bounds_check(text, 8, 10, ctx, diag)) return false;
   if (!a64_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
   IrTypeKind element_type = a64_view_element_type(value->left);
   a64_emit_add_scaled_index(text, 9, 9, 8, element_type);
@@ -1093,7 +1126,7 @@ static bool a64_emit_index_load_to_reg_at(ZBuf *text, const IrFunction *fun, con
     if (!value->index || !a64_emit_value_to_reg_at(text, fun, value->index, 8, frame_size, scratch_slot, ctx, diag)) return false;
     if (!a64_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
     z_aarch64_emit_movz_w(text, 9, local->array_len);
-    a64_emit_u32_bounds_check(text, 8, 9);
+    if (!a64_emit_u32_bounds_check(text, 8, 9, ctx, diag)) return false;
     if (!a64_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
     z_aarch64_emit_add_x_sp_imm(text, 9, a64_local_slot_offset(fun, value->array_index, 0, frame_size));
     a64_emit_add_scaled_index(text, 9, 9, 8, local->element_type);
@@ -1104,7 +1137,7 @@ static bool a64_emit_index_load_to_reg_at(ZBuf *text, const IrFunction *fun, con
   if (!value->index || !a64_emit_value_to_reg_at(text, fun, value->index, 8, frame_size, scratch_slot, ctx, diag)) return false;
   if (!a64_emit_store_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
   z_aarch64_emit_movz_w(text, 9, local->array_len);
-  a64_emit_u32_bounds_check(text, 8, 9);
+  if (!a64_emit_u32_bounds_check(text, 8, 9, ctx, diag)) return false;
   if (!a64_emit_load_scratch(text, 8, value->index ? value->index->type : IR_TYPE_U32, scratch_slot, value->index, diag)) return false;
   z_aarch64_emit_add_x_sp_imm(text, 9, a64_local_slot_offset(fun, value->array_index, 0, frame_size));
   z_aarch64_emit_add_x_reg(text, 9, 9, 8);
@@ -1386,7 +1419,7 @@ static bool a64_emit_index_store(ZBuf *text, const IrFunction *fun, const IrInst
     if (!a64_emit_store_scratch(text, 8, instr->index ? instr->index->type : IR_TYPE_U32, 1, instr->index, diag)) return false;
     a64_emit_load_local_w(text, fun, 9, instr->array_index, 8, frame_size);
     if (!a64_emit_load_scratch(text, 8, instr->index ? instr->index->type : IR_TYPE_U32, 1, instr->index, diag)) return false;
-    a64_emit_u32_bounds_check(text, 8, 9);
+    if (!a64_emit_u32_bounds_check(text, 8, 9, ctx, diag)) return false;
     a64_emit_load_local_x(text, fun, 9, instr->array_index, 0, frame_size);
     if (!a64_emit_load_scratch(text, 8, instr->index ? instr->index->type : IR_TYPE_U32, 1, instr->index, diag)) return false;
     a64_emit_add_scaled_index(text, 9, 9, 8, element_type);
@@ -1407,7 +1440,7 @@ static bool a64_emit_index_store(ZBuf *text, const IrFunction *fun, const IrInst
     if (!a64_emit_store_scratch(text, 10, instr->value ? instr->value->type : local->element_type, 0, instr->value, diag)) return false;
     if (!instr->index || !a64_emit_value_to_reg_at(text, fun, instr->index, 8, frame_size, 1, ctx, diag)) return false;
     z_aarch64_emit_movz_w(text, 9, local->array_len);
-    a64_emit_u32_bounds_check(text, 8, 9);
+    if (!a64_emit_u32_bounds_check(text, 8, 9, ctx, diag)) return false;
     z_aarch64_emit_add_x_sp_imm(text, 9, a64_local_slot_offset(fun, instr->array_index, 0, frame_size));
     a64_emit_add_scaled_index(text, 9, 9, 8, local->element_type);
     if (!a64_emit_load_scratch(text, 10, instr->value ? instr->value->type : local->element_type, 0, instr->value, diag)) return false;
@@ -1419,7 +1452,7 @@ static bool a64_emit_index_store(ZBuf *text, const IrFunction *fun, const IrInst
   if (!a64_emit_store_scratch(text, 10, instr->value ? instr->value->type : local->element_type, 0, instr->value, diag)) return false;
   if (!instr->index || !a64_emit_value_to_reg_at(text, fun, instr->index, 8, frame_size, 1, ctx, diag)) return false;
   z_aarch64_emit_movz_w(text, 9, local->array_len);
-  a64_emit_u32_bounds_check(text, 8, 9);
+  if (!a64_emit_u32_bounds_check(text, 8, 9, ctx, diag)) return false;
   z_aarch64_emit_add_x_sp_imm(text, 9, a64_local_slot_offset(fun, instr->array_index, 0, frame_size));
   z_aarch64_emit_add_x_reg(text, 9, 9, 8);
   if (!a64_emit_load_scratch(text, 10, instr->value ? instr->value->type : local->element_type, 0, instr->value, diag)) return false;
@@ -1668,4 +1701,14 @@ unsigned z_aarch64_direct_rodata_base_offset(const IrProgram *program) {
 
 void z_aarch64_direct_append_rodata(ZBuf *rodata, const IrProgram *program, unsigned base_offset) {
   a64_append_rodata(rodata, program, base_offset);
+}
+
+void z_aarch64_direct_append_trap_messages(ZBuf *rodata, unsigned base_offset, ZDirectTrapMessages *messages) {
+  for (unsigned kind = 0; kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    const char *text = z_direct_trap_message((ZDirectTrapKind)kind);
+    size_t len = strlen(text);
+    messages->offsets[kind] = base_offset + (unsigned)rodata->len;
+    messages->lens[kind] = (unsigned)len;
+    for (size_t i = 0; i < len; i++) zbuf_append_char(rodata, text[i]);
+  }
 }

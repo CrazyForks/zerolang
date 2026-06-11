@@ -974,6 +974,28 @@ typedef enum {
 } ZDirectBackend;
 
 typedef enum {
+  Z_DIRECT_TRAP_INDEX_BOUNDS = 0,
+  Z_DIRECT_TRAP_VALUE_BOUNDS,
+  Z_DIRECT_TRAP_WRITE_FAILED,
+  Z_DIRECT_TRAP_KIND_COUNT
+} ZDirectTrapKind;
+
+typedef struct {
+  unsigned offsets[Z_DIRECT_TRAP_KIND_COUNT];
+  unsigned lens[Z_DIRECT_TRAP_KIND_COUNT];
+} ZDirectTrapMessages;
+
+typedef struct {
+  size_t *items;
+  size_t len;
+  size_t cap;
+} ZDirectTrapBranchList;
+
+Z_RET_BORROWED const char *z_direct_trap_message(ZDirectTrapKind kind);
+bool z_direct_trap_branches_record(Z_INOUT ZDirectTrapBranchList *list, size_t patch_offset);
+void z_direct_trap_branches_free(Z_INOUT ZDirectTrapBranchList *lists, size_t count);
+
+typedef enum {
   Z_BACKEND_FAMILY_UNKNOWN,
   Z_BACKEND_FAMILY_DIRECT,
   Z_BACKEND_FAMILY_LLVM

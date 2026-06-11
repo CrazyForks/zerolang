@@ -49,7 +49,9 @@ const suites: Record<string, Suite> = {
     ],
   },
   "command-contracts": {
-    setup: [],
+    setup: [
+      { name: "native-build", command: "make", args: ["-C", "native/zero-c"], setup: true },
+    ],
     phases: [
       { name: "graph-input-policy", command: process.execPath, args: [...nodeArgs, "scripts/graph-input-policy.mts"] },
       { name: "snapshot-command-contracts", command: process.execPath, args: [...nodeArgs, "scripts/snapshot-command-contracts.mts"] },

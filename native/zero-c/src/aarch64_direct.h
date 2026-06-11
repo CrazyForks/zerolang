@@ -51,6 +51,8 @@ struct ZAArch64DirectContext {
   ZAArch64DirectCallPatchFn record_call_patch;
   ZAArch64DirectRuntimePatchFn record_runtime_patch;
   ZAArch64DirectWorldWriteFn emit_world_write;
+  ZDirectTrapMessages trap_messages;
+  ZDirectTrapBranchList trap_branches[Z_DIRECT_TRAP_KIND_COUNT];
   ZDirectLoopFrame *loop;
 };
 
@@ -58,6 +60,8 @@ bool z_aarch64_direct_emit_function_text(ZBuf *text, const IrFunction *fun, ZAAr
 bool z_aarch64_direct_validate_function(const IrFunction *fun, ZDiag *diag);
 const IrFunction *z_aarch64_direct_find_main(const IrProgram *program, unsigned *out_index, ZDiag *diag);
 unsigned z_aarch64_direct_rodata_base_offset(const IrProgram *program);
+void z_aarch64_direct_append_trap_messages(ZBuf *rodata, unsigned base_offset, ZDirectTrapMessages *messages);
+bool z_aarch64_direct_emit_trap_stubs(ZBuf *text, ZAArch64DirectContext *ctx, ZDiag *diag);
 void z_aarch64_direct_append_rodata(ZBuf *rodata, const IrProgram *program, unsigned base_offset);
 size_t z_aarch64_direct_stack_bytes_from_ir(const IrProgram *program);
 size_t z_aarch64_direct_max_frame_bytes_from_ir(const IrProgram *program);

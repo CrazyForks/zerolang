@@ -346,13 +346,16 @@ static void elf_emit_close_rax_fd(ZBuf *code) {
   z_x64_emit_syscall(code);
 }
 
+static bool elf_emit_rodata_ptr_rax(ZBuf *code, unsigned data_offset, ElfEmitContext *ctx, ZDiag *diag, const IrValue *value);
+static bool elf_emit_trap(ZBuf *code, ElfEmitContext *ctx, ZDiag *diag, ZDirectTrapKind kind);
+
 static bool elf_emit_bounds_checked_address(ZBuf *code, const IrFunction *fun, const IrLocal *local, const IrValue *index, ElfEmitContext *ctx, ZDiag *diag) {
   if (!local || !local->is_array) return elf_diag(diag, "direct ELF64 indexed access requires fixed array local", index ? index->line : 1, index ? index->column : 1, "non-array local");
   if (!elf_emit_value(code, fun, index, ctx, diag)) return false;
   z_x64_append_u8(code, 0x3d);
   z_x64_append_u32(code, local->array_len);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(code, 0x82);
-  z_x64_emit_ud2(code);
+  if (!elf_emit_trap(code, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(code, ok_patch, code->len);
   z_x64_emit_mov_rcx_from_rax(code, false);
   elf_emit_lea_array_base_rax(code, local, 0);
@@ -440,6 +443,35 @@ static bool elf_emit_rodata_ptr_rax(ZBuf *code, unsigned data_offset, ElfEmitCon
   return z_elf_record_rodata_patch(ctx, imm_offset, data_offset, diag, value);
 }
 
+static bool elf_emit_trap(ZBuf *code, ElfEmitContext *ctx, ZDiag *diag, ZDirectTrapKind kind) {
+  /* Cold path: branch to the shared per-binary trap stub that prints a diagnostic. */
+  if (ctx && ctx->trap_messages.lens[kind] > 0) {
+    size_t patch = z_x64_emit_jmp32_placeholder(code, 0xe9);
+    if (z_direct_trap_branches_record(&ctx->trap_branches[kind], patch)) return true;
+    return elf_diag(diag, "direct ELF64 backend ran out of memory while recording a trap branch", 1, 1, "allocation failed");
+  }
+  z_x64_emit_ud2(code);
+  return true;
+}
+
+static bool elf_emit_trap_stubs(ZBuf *text, ElfEmitContext *ctx, ZDiag *diag) {
+  for (unsigned kind = 0; ctx && kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    ZDirectTrapBranchList *branches = &ctx->trap_branches[kind];
+    if (branches->len == 0) continue;
+    size_t stub_offset = text->len;
+    if (!elf_emit_rodata_ptr_rax(text, ctx->trap_messages.offsets[kind], ctx, diag, NULL)) return false;
+    z_x64_emit_mov_reg_from_reg(text, 6, 0, true);
+    z_x64_emit_mov_reg_u32(text, 2, ctx->trap_messages.lens[kind]);
+    z_x64_emit_mov_reg_u32(text, 7, 2u);
+    z_x64_emit_mov_eax_u32(text, 1);
+    z_x64_emit_syscall(text);
+    z_x64_emit_ud2(text);
+    for (size_t i = 0; i < branches->len; i++) z_x64_patch_rel32(text, branches->items[i], stub_offset);
+    branches->len = 0;
+  }
+  return true;
+}
+
 static void elf_emit_store_local_slot_rax(ZBuf *code, const IrLocal *local, unsigned slot_offset) {
   unsigned disp = local && local->frame_offset >= slot_offset ? local->frame_offset - slot_offset : 0;
   z_x64_emit_rbp_disp_reg(code, 0x89, 0, disp, true);
@@ -474,11 +506,12 @@ static bool elf_emit_json_parse_bytes_call(ZBuf *code, const IrFunction *fun, co
   return z_elf_record_value_runtime_patch(ctx, ELF_RUNTIME_JSON_PARSE_BYTES, patch, diag, value);
 }
 
-static void elf_emit_u64_upper_bound_check(ZBuf *code, unsigned value_reg, unsigned limit_reg) {
+static bool elf_emit_u64_upper_bound_check(ZBuf *code, unsigned value_reg, unsigned limit_reg, ElfEmitContext *ctx, ZDiag *diag) {
   z_x64_emit_cmp_reg_reg(code, value_reg, limit_reg, true);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(code, 0x86);
-  z_x64_emit_ud2(code);
+  if (!elf_emit_trap(code, ctx, diag, Z_DIRECT_TRAP_VALUE_BOUNDS)) return false;
   z_x64_patch_rel32(code, ok_patch, code->len);
+  return true;
 }
 
 static void elf_emit_move_byte_view_pair(ZBuf *code, unsigned ptr_reg, unsigned len_reg, unsigned src_ptr_reg, unsigned src_len_reg) {
@@ -658,12 +691,12 @@ static bool elf_emit_byte_view_pair(ZBuf *code, const IrFunction *fun, const IrV
       if (!elf_emit_value(code, fun, view->right, ctx, diag)) return false;
       z_x64_emit_pop_reg64(code, 1);
       z_x64_emit_pop_reg64(code, 10);
-      elf_emit_u64_upper_bound_check(code, 1, 0);
-      elf_emit_u64_upper_bound_check(code, 0, 10);
+      if (!elf_emit_u64_upper_bound_check(code, 1, 0, ctx, diag)) return false;
+      if (!elf_emit_u64_upper_bound_check(code, 0, 10, ctx, diag)) return false;
       z_x64_emit_sub_reg_reg(code, 0, 1, true);
     } else {
       z_x64_emit_pop_reg64(code, 10);
-      elf_emit_u64_upper_bound_check(code, 1, 10);
+      if (!elf_emit_u64_upper_bound_check(code, 1, 10, ctx, diag)) return false;
       z_x64_emit_mov_reg_from_reg(code, 0, 10, true);
       z_x64_emit_sub_reg_reg(code, 0, 1, true);
     }
@@ -2139,7 +2172,7 @@ static bool elf_emit_byte_index_value(ZBuf *code, const IrFunction *fun, const I
       z_x64_emit_pop_rax(code);
       z_x64_emit_cmp_rax_rcx(code, false);
       size_t ok_patch = z_x64_emit_jcc32_placeholder(code, 0x82);
-      z_x64_emit_ud2(code);
+      if (!elf_emit_trap(code, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
       z_x64_patch_rel32(code, ok_patch, code->len);
       z_x64_emit_mov_rcx_from_rax(code, false);
       z_x64_emit_mov_reg_from_reg(code, 0, 8, true);
@@ -2374,7 +2407,7 @@ static bool elf_emit_world_write(ZBuf *text, const IrFunction *fun, const IrInst
   z_x64_emit_syscall(text);
   z_x64_emit_test_rax_rax(text, true);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x89);
-  z_x64_emit_ud2(text);
+  if (!elf_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_WRITE_FAILED)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   return true;
 }
@@ -2830,7 +2863,7 @@ static bool elf_emit_byte_view_index_store(ZBuf *text, const IrFunction *fun, co
   z_x64_emit_pop_rax(text);
   z_x64_emit_cmp_rax_rcx(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!elf_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   z_x64_emit_push_rax(text);
   elf_emit_load_local_slot_rax(text, local, 0);
@@ -3084,6 +3117,16 @@ static void elf_append_rodata(ZBuf *rodata, const IrProgram *ir, unsigned base_o
   }
 }
 
+static void elf_append_trap_messages(ZBuf *rodata, unsigned base_offset, ZDirectTrapMessages *messages) {
+  for (unsigned kind = 0; kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    const char *text = z_direct_trap_message((ZDirectTrapKind)kind);
+    size_t len = strlen(text);
+    messages->offsets[kind] = base_offset + (unsigned)rodata->len;
+    messages->lens[kind] = (unsigned)len;
+    z_elf_append_bytes(rodata, (const unsigned char *)text, len);
+  }
+}
+
 typedef struct {
   ZBuf text, rodata, rela_text, strtab, symtab;
   size_t *function_offsets, *function_sizes;
@@ -3092,6 +3135,7 @@ typedef struct {
   uint32_t local_symbol_count;
   bool has_rodata;
   unsigned rodata_base_offset;
+  ZDirectTrapMessages trap_messages;
 } ElfObjectBuild;
 
 static bool elf_validate_object_ir(const IrProgram *ir, ZDiag *diag) {
@@ -3109,13 +3153,12 @@ static bool elf_validate_object_ir(const IrProgram *ir, ZDiag *diag) {
 static void elf_object_build_init(ElfObjectBuild *build, const IrProgram *ir) {
   zbuf_init(&build->text); zbuf_init(&build->rodata); zbuf_init(&build->rela_text); zbuf_init(&build->strtab); zbuf_init(&build->symtab);
   z_elf_append_u8(&build->strtab, 0); z_elf_append_zeros(&build->symtab, 24);
-  build->has_rodata = ir->readonly_data_bytes > 0 || ir->data_segment_len > 0;
+  build->has_rodata = true;
   build->rodata_base_offset = elf_rodata_base_offset(ir);
-  build->local_symbol_count = build->has_rodata ? 2 : 1;
-  if (build->has_rodata) {
-    elf_append_rodata(&build->rodata, ir, build->rodata_base_offset);
-    z_elf_append_symbol(&build->symtab, 0, 0x03, 2, 0, 0);
-  }
+  build->local_symbol_count = 2;
+  elf_append_rodata(&build->rodata, ir, build->rodata_base_offset);
+  elf_append_trap_messages(&build->rodata, build->rodata_base_offset, &build->trap_messages);
+  z_elf_append_symbol(&build->symtab, 0, 0x03, 2, 0, 0);
 }
 
 static void elf_object_build_free(ElfObjectBuild *build) {
@@ -3133,7 +3176,7 @@ static bool elf_object_build_alloc_tables(ElfObjectBuild *build, const IrProgram
 }
 
 static void elf_object_build_start_context(ElfObjectBuild *build, const IrProgram *ir) {
-  build->ctx = (ElfEmitContext){.ir = ir, .function_offsets = build->function_offsets, .function_count = ir->function_len, .emit_rodata_relocations = true, .seed_main_process_args = true, .rodata_base_offset = build->rodata_base_offset};
+  build->ctx = (ElfEmitContext){.ir = ir, .function_offsets = build->function_offsets, .function_count = ir->function_len, .emit_rodata_relocations = true, .seed_main_process_args = true, .rodata_base_offset = build->rodata_base_offset, .trap_messages = build->trap_messages};
 }
 
 static bool elf_emit_object_functions(ElfObjectBuild *build, const IrProgram *ir, ZDiag *diag) {
@@ -3145,7 +3188,7 @@ static bool elf_emit_object_functions(ElfObjectBuild *build, const IrProgram *ir
     build->symbol_names[i] = (uint32_t)build->strtab.len;
     zbuf_append(&build->strtab, ir->functions[i].name); z_elf_append_u8(&build->strtab, 0);
   }
-  return true;
+  return elf_emit_trap_stubs(&build->text, &build->ctx, diag);
 }
 
 static void elf_append_object_runtime_names(ElfObjectBuild *build) {
@@ -3279,6 +3322,7 @@ typedef struct {
   ElfEmitContext ctx;
   bool has_rodata;
   unsigned rodata_base_offset, main_index;
+  ZDirectTrapMessages trap_messages;
 } ElfExeBuild;
 
 static bool elf_validate_executable_ir(const IrProgram *ir, ElfExeBuild *build, ZDiag *diag) {
@@ -3294,9 +3338,10 @@ static bool elf_validate_executable_ir(const IrProgram *ir, ElfExeBuild *build, 
 
 static void elf_exe_build_init(ElfExeBuild *build, const IrProgram *ir) {
   zbuf_init(&build->text); zbuf_init(&build->rodata);
-  build->has_rodata = ir->readonly_data_bytes > 0 || ir->data_segment_len > 0;
+  build->has_rodata = true;
   build->rodata_base_offset = elf_rodata_base_offset(ir);
-  if (build->has_rodata) elf_append_rodata(&build->rodata, ir, build->rodata_base_offset);
+  elf_append_rodata(&build->rodata, ir, build->rodata_base_offset);
+  elf_append_trap_messages(&build->rodata, build->rodata_base_offset, &build->trap_messages);
 }
 
 static void elf_exe_build_free(ElfExeBuild *build) {
@@ -3311,7 +3356,7 @@ static bool elf_exe_build_alloc_tables(ElfExeBuild *build, const IrProgram *ir, 
 }
 
 static void elf_exe_build_start_context(ElfExeBuild *build, const IrProgram *ir) {
-  build->ctx = (ElfEmitContext){.ir = ir, .function_offsets = build->function_offsets, .function_count = ir->function_len, .rodata_base_offset = build->rodata_base_offset};
+  build->ctx = (ElfEmitContext){.ir = ir, .function_offsets = build->function_offsets, .function_count = ir->function_len, .rodata_base_offset = build->rodata_base_offset, .trap_messages = build->trap_messages};
 }
 
 static bool elf_emit_executable_functions(ElfExeBuild *build, const IrProgram *ir, size_t first_function_offset, ZDiag *diag) {
@@ -3321,7 +3366,7 @@ static bool elf_emit_executable_functions(ElfExeBuild *build, const IrProgram *i
     build->function_offsets[i] = build->text.len;
     if (!elf_emit_function_text(&build->text, &ir->functions[i], &build->ctx, diag)) return false;
   }
-  return true;
+  return elf_emit_trap_stubs(&build->text, &build->ctx, diag);
 }
 
 static bool elf_finish_executable_image(ElfExeBuild *build, ZBuf *out, size_t start_call_patch, size_t text_offset, uint64_t base_addr, uint64_t entry_addr, ZDiag *diag) {

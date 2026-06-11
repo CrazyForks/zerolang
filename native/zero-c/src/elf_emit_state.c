@@ -82,6 +82,7 @@ void z_elf_emit_context_free(ElfEmitContext *ctx) {
   for (unsigned i = 0; i < ELF_RUNTIME_HELPER_COUNT; i++) {
     free(ctx->runtime_patches[i].items);
   }
+  z_direct_trap_branches_free(ctx->trap_branches, Z_DIRECT_TRAP_KIND_COUNT);
 }
 
 bool z_elf_record_call_patch(ElfEmitContext *ctx, size_t patch_offset, unsigned callee_index, ZDiag *diag, const IrValue *value) {
