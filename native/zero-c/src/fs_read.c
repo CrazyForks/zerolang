@@ -7,10 +7,15 @@
 #include <string.h>
 #include <sys/stat.h>
 
+void z_diag_set_path_copy(ZDiag *diag, const char *path) {
+  if (!diag) return;
+  diag->path = path ? z_strdup(path) : NULL;
+}
+
 static void read_diag_io(ZDiag *diag, const char *path, const char *action) {
   if (!diag) return;
   diag->code = 1;
-  diag->path = path;
+  z_diag_set_path_copy(diag, path);
   diag->line = 1;
   diag->column = 1;
   diag->length = 1;

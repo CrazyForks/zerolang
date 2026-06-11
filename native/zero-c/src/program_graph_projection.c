@@ -69,7 +69,7 @@ static char *projection_dirname(const char *path) {
 static void projection_set_io_diag(ZDiag *diag, const char *path, const char *action) {
   if (!diag) return;
   diag->code = 1;
-  diag->path = path;
+  z_diag_set_path_copy(diag, path);
   diag->line = 1;
   diag->column = 1;
   diag->length = 1;
@@ -124,7 +124,7 @@ static bool projection_existing_path_is_dir(const char *path, ZDiag *diag) {
   if (!S_ISDIR(st.st_mode)) {
     if (diag) {
       diag->code = 1;
-      diag->path = path;
+      z_diag_set_path_copy(diag, path);
       diag->line = 1;
       diag->column = 1;
       diag->length = 1;

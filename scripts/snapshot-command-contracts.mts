@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types --disable-warning=ExperimentalWarning
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createAggregateAssert, finishAggregateAssert } from "./aggregate-assert.mjs";
@@ -6627,6 +6627,24 @@ assert.equal(depTime.interfaceFingerprints.algorithm, "fnv1a64-zero-interface-v1
 assert.match(depTime.interfaceFingerprints.targetFactsHash, /^[0-9a-f]{16}$/);
 assert(depTime.cacheSummary.entries >= 5);
 assert(depTime.incrementalInvalidation.changedInputs.sourceFiles.some((item) => item.endsWith("src/main.0")));
+if (process.getuid?.() !== 0) {
+  const unreadableDepRoot = join("/tmp", `zero-unreadable-dep-manifest-${process.pid}`);
+  const unreadableDepManifest = join(unreadableDepRoot, "dep-lib", "zero.toml");
+  rmSync(unreadableDepRoot, { force: true, recursive: true });
+  cpSync("conformance/packages/dep-app", join(unreadableDepRoot, "dep-app"), { recursive: true });
+  cpSync("conformance/packages/dep-lib", join(unreadableDepRoot, "dep-lib"), { recursive: true });
+  rmSync(join(unreadableDepRoot, "dep-app", ".zero"), { force: true, recursive: true });
+  rmSync(join(unreadableDepRoot, "dep-lib", ".zero"), { force: true, recursive: true });
+  chmodSync(unreadableDepManifest, 0o000);
+  const unreadableDepCheck = json(["check", "--json", join(unreadableDepRoot, "dep-app")], { allowFailure: true });
+  assert.equal(unreadableDepCheck.code, 1);
+  assert.equal(unreadableDepCheck.body.ok, false);
+  assert.equal(unreadableDepCheck.body.diagnostics[0].code, "PAR100");
+  assert.equal(unreadableDepCheck.body.diagnostics[0].path, unreadableDepManifest);
+  assert.match(unreadableDepCheck.body.diagnostics[0].message, /failed to read '.*dep-lib\/zero\.toml'/);
+  chmodSync(unreadableDepManifest, 0o644);
+  rmSync(unreadableDepRoot, { force: true, recursive: true });
+}
 const zeroHashSize = json(["size", "--json", "--target", "linux-musl-x64", "examples/zero-hash", "--out", join(outDir, "zero-hash-sized")]).body;
 assert.equal(zeroHashSize.generatedCBytes, 0);
 assert(zeroHashSize.usedStdlibHelpers.some((helper) => helper.name === "std.codec.crc32Bytes"));

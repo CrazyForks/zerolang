@@ -671,7 +671,7 @@ static bool runtime_make_dir(const char *path, ZDiag *diag) {
   if (rc == 0 || errno == EEXIST) return true;
   if (diag) {
     diag->code = 2002;
-    diag->path = path;
+    z_diag_set_path_copy(diag, path);
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
@@ -702,10 +702,6 @@ static bool write_runtime_chunks_file(const char *path, const char *const *chunk
   return ok;
 }
 
-static void runtime_diag_preserve_path(ZDiag *diag) {
-  if (diag && diag->path) diag->path = z_strdup(diag->path);
-}
-
 static bool write_runtime_compile_inputs(
   const char *runtime_object_file,
   const char *source_suffix,
@@ -725,7 +721,6 @@ static bool write_runtime_compile_inputs(
   if (!runtime_make_dir(out->include_dir, diag) ||
       !write_runtime_chunks_file(out->header_file, zero_embedded_zero_runtime_h, diag) ||
       !write_runtime_chunks_file(out->source_file, source_chunks, diag)) {
-    runtime_diag_preserve_path(diag);
     runtime_compile_inputs_free(out);
     return false;
   }
@@ -7209,7 +7204,7 @@ static bool graph_init_reject_existing(const char *root, ZDiag *diag) {
   bool exists = path_exists(toml_manifest) || path_exists(json_manifest) || path_exists(store);
   if (exists) {
     diag->code = 2002;
-    diag->path = path_exists(toml_manifest) ? toml_manifest : (path_exists(json_manifest) ? json_manifest : store);
+    z_diag_set_path_copy(diag, path_exists(toml_manifest) ? toml_manifest : (path_exists(json_manifest) ? json_manifest : store));
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
@@ -7217,9 +7212,9 @@ static bool graph_init_reject_existing(const char *root, ZDiag *diag) {
     snprintf(diag->expected, sizeof(diag->expected), "project path without zero.toml, zero.json, or zero.graph");
     snprintf(diag->actual, sizeof(diag->actual), "%s", diag->path);
     snprintf(diag->help, sizeof(diag->help), "choose a new project path or remove the existing graph project files");
-    if (diag->path != toml_manifest) free(toml_manifest);
-    if (diag->path != json_manifest) free(json_manifest);
-    if (diag->path != store) free(store);
+    free(toml_manifest);
+    free(json_manifest);
+    free(store);
     return false;
   }
   free(toml_manifest);
@@ -12043,7 +12038,11 @@ static bool validate_repository_graph_patch_output(const Command *command, const
   if (ok) ok = z_program_graph_name_contracts_ok(graph, command->input, diag);
   if (ok) ok = z_program_graph_collect_resolution_facts(graph, &resolution);
   if (ok) ok = graph_native_compiler_input_ok(graph, &resolution, &input, target, command->input, diag);
-  if (!ok && !diag->path) diag->path = input.source_file ? input.source_file : command->input;
+  if (!ok) {
+    if (diag->path) z_diag_set_path_copy(diag, diag->path);
+    else if (input.source_file) z_diag_set_path_copy(diag, input.source_file);
+    else diag->path = command->input;
+  }
   z_program_graph_resolution_facts_free(&resolution);
   z_free_source(&input);
   return ok;

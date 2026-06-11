@@ -1073,6 +1073,7 @@ bool z_read_file_prefix(Z_IN const char *path, Z_OUT void *bytes, size_t len, Z_
 bool z_write_file(Z_IN const char *path, Z_IN const char *text, Z_OUT ZDiag *diag);
 bool z_write_binary_file(Z_IN const char *path, Z_IN const unsigned char *data, size_t len, Z_OUT ZDiag *diag);
 bool z_map_source_diag(Z_IN const SourceInput *input, Z_INOUT ZDiag *diag);
+void z_diag_set_path_copy(Z_INOUT ZDiag *diag, Z_OPTIONAL Z_IN const char *path);
 void z_free_source(Z_INOUT SourceInput *input);
 bool z_parse_manifest_json(Z_IN const char *manifest, Z_OUT ZManifest *out, Z_OUT ZDiag *diag);
 bool z_resolve_package_metadata(Z_IN const char *manifest_path, Z_IN const char *manifest, Z_IN const ZManifest *parsed_manifest, Z_OUT SourceInput *out, Z_OUT ZDiag *diag);
