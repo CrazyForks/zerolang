@@ -44,7 +44,7 @@ jobs:
 
       - name: Conformance suite
         env:
-          ZERO_VALIDATION_PHASES: graph-input-policy,native-contracts,provenance-guardrails,type-core-smoke,mir-verifier-smoke,program-graph-smoke,canonical-text-smoke,conformance-run
+          ZERO_VALIDATION_PHASES: graph-input-policy,native-contracts,provenance-guardrails,type-core-smoke,mir-verifier-smoke,program-graph-smoke,canonical-text-smoke,examples-gate,conformance-run
           ZERO_VALIDATION_JOBS: "4"
           ZERO_CONFORMANCE_CHECK_JOBS: "4"
         run: pnpm run conformance:local

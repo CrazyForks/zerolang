@@ -113,9 +113,9 @@ These examples are the small native workflow set used by docs and tests:
 | Example | What it teaches | Try it |
 | --- | --- | --- |
 | `config-shape.graph` | `extern c`, `extern type`, C-shaped data | `bin/zero check examples/config-shape.graph` |
-| `systems-package/` | `zero.toml`, multiple source files, `defer`, std helpers | `bin/zero check examples/systems-package` |
+| `systems-package/` | `zero.toml`, multiple source files, `std.codec`/`std.parse`/`std.time` helpers | `bin/zero check examples/systems-package` |
 | `readall-cli/` | package-local imports, named errors, `std.fs.readAll`, explicit fixed-buffer allocation | `bin/zero check examples/readall-cli` |
-| `batch3-cli/` | module graph metadata, local `rescue`, path helpers, named fs errors, explicit allocation | `bin/zero check examples/batch3-cli` |
+| `batch3-cli/` | module graph metadata, args fallbacks, path helpers, named fs errors, explicit allocation | `bin/zero check examples/batch3-cli` |
 | `resource-cli/` | args/env fallback, path joins, `std.mem.copy`/`fill`, named-error owned-file resources | `bin/zero check examples/resource-cli` |
 | `memory-package/` | target-neutral package imports and byte-span helper checks without hosted file I/O | `bin/zero build --target linux-musl-x64 examples/memory-package --out .zero/out/memory-package` |
 | `crm-api/` | binary repository graph multi-module HTTP API package with 10+ CRM routes over request envelopes | `bin/zero build --emit exe --profile debug --out /tmp/zero-crm-api examples/crm-api` |

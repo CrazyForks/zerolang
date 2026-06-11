@@ -44,6 +44,7 @@ const suites: Record<string, Suite> = {
       { name: "program-graph-smoke", command: process.execPath, args: [...nodeArgs, "scripts/program-graph-smoke.mts"] },
       { name: "program-graph-parity", command: process.execPath, args: [...nodeArgs, "scripts/program-graph-parity.mts"] },
       { name: "canonical-text-smoke", command: process.execPath, args: [...nodeArgs, "scripts/canonical-text-smoke.mts"] },
+      { name: "examples-gate", command: process.execPath, args: [...nodeArgs, "scripts/examples-gate.mts"] },
       { name: "conformance-run", command: process.execPath, args: ["conformance/run.mjs"] },
     ],
   },

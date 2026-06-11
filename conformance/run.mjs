@@ -3199,7 +3199,7 @@ assert(callResolutionFsReadFacts.calls.some((item) => item.kind === "stdlib" && 
 
 const callResolutionPackageGraph = await execFileAsync(zero, ["inspect", "--json", "examples/systems-package"]);
 const callResolutionPackageFacts = JSON.parse(callResolutionPackageGraph.stdout).callResolution;
-assert(callResolutionPackageFacts.calls.some((item) => item.calleeName === "cleanup" && item.path === "src/main.0" && item.line === 12));
+assert(callResolutionPackageFacts.calls.some((item) => item.calleeName === "cleanup" && item.path === "src/main.0" && item.line === 18));
 
 const callResolutionEdgeGraph = await execFileAsync(zero, ["inspect", "--json", "conformance/check/pass/call-resolution-edge-cases.0"]);
 const callResolutionEdgeFacts = JSON.parse(callResolutionEdgeGraph.stdout).callResolution;
