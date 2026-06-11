@@ -8757,6 +8757,7 @@ static const char *helper_module_name(const ZStdHelperInfo *helper) {
   if (strncmp(name, "std.regex.", strlen("std.regex.")) == 0) return "std.regex";
   if (strncmp(name, "std.proc.", strlen("std.proc.")) == 0) return "std.proc";
   if (strncmp(name, "std.crypto.", strlen("std.crypto.")) == 0) return "std.crypto";
+  if (strncmp(name, "std.inet.", strlen("std.inet.")) == 0) return "std.inet";
   if (strncmp(name, "std.net.", strlen("std.net.")) == 0) return "std.net";
   if (strncmp(name, "std.http.", strlen("std.http.")) == 0) return "std.http";
   if (strncmp(name, "std.fs.", strlen("std.fs.")) == 0) return "std.fs";
@@ -8805,6 +8806,7 @@ static const char *helper_example_path(const ZStdHelperInfo *helper) {
   if (strcmp(module, "std.parse") == 0) return "examples/parse-cursor.0";
   if (strcmp(module, "std.regex") == 0) return "conformance/native/pass/std-regex.0";
   if (strcmp(module, "std.time") == 0 || strcmp(module, "std.rand") == 0 || strcmp(module, "std.proc") == 0 || strcmp(module, "std.crypto") == 0) return "examples/std-platform.0";
+  if (strcmp(module, "std.inet") == 0) return "conformance/native/pass/std-inet.0";
   if (strcmp(module, "std.net") == 0) return "conformance/native/pass/std-net-http-breadth.0";
   if (strcmp(module, "std.http") == 0) return "conformance/native/pass/std-http-fetch.0";
   return "examples/README.md";

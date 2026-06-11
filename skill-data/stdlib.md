@@ -39,6 +39,7 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.codec`: byte reads, endian reads/writes, varint sizing/encode/decode, base64/hex encode/decode, CRC helpers, and byte checksums.
 - `std.parse`: byte scanners and integer/bool parsers returning `Maybe<T>`.
 - `std.regex`: compile-once regular expression matching for a documented ECMA-262-leaning subset (literals, classes, anchors, word boundaries, greedy quantifiers, alternation, groups); unsupported constructs fail with structured status codes.
+- `std.inet`: target-neutral IPv4/IPv6/hostname literal validation and parsing; no network capability needed.
 - `std.time`: duration construction, conversion, comparison, elapsed-window helpers, and target-gated clock helpers.
 - `std.rand`: explicit deterministic random sources, random bits, target entropy helpers, and caller-buffer entropy IDs.
 - `std.crypto`: small hash, fixed-width hash text, byte-oriented crypto helpers, and caller-buffer IDs.
@@ -514,6 +515,24 @@ nextLine(arg0: Span<u8>, arg1: usize) -> Maybe<Span<u8>>
 nextLineStart(arg0: Span<u8>, arg1: usize) -> usize
 countLines(arg0: Span<u8>) -> usize
 ```
+
+### std.inet
+
+```text
+isIpv4(text: Span<u8>) -> Bool
+parseIpv4(text: Span<u8>) -> Maybe<u32>
+isIpv6(text: Span<u8>) -> Bool
+parseIpv6(buffer: MutSpan<u8>, text: Span<u8>) -> Maybe<Span<u8>>
+isHostname(text: Span<u8>) -> Bool
+```
+
+Internet address literal helpers, kept separate from `std.net` so they stay
+usable on targets without the Net capability. `isIpv4`/`parseIpv4` accept
+strict dotted quads (four 0-255 octets, no leading zeros; the parse packs
+big-endian). `isIpv6`/`parseIpv6` accept RFC 4291 forms including `::`
+compression and embedded IPv4, writing 16 network-order bytes into the caller
+buffer. `isHostname` enforces RFC 1123: dot-separated labels of 1-63
+alphanumeric/hyphen bytes, no leading/trailing hyphens, 253 bytes total.
 
 ### std.json
 

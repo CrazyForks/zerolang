@@ -207,6 +207,14 @@ export const docs: Doc[] = [
     section: "Text And Data",
   },
   {
+    slug: "module-inet",
+    title: "std.inet",
+    description: "Target-neutral IPv4, IPv6, and RFC 1123 hostname literal validation and parsing.",
+    path: "/modules/inet",
+    sourcePath: "/articles/modules/inet.md",
+    section: "Text And Data",
+  },
+  {
     slug: "module-codec",
     title: "std.codec",
     description: "Little-endian integer helpers, unsigned varints, and CRC-32 primitives.",

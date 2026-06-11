@@ -54,6 +54,7 @@ Core data and memory:
 - `std.unicode`: strict UTF-8 codepoint decode/encode iteration and codepoint classes.
 - `std.parse`, `std.fmt`, `std.codec`, `std.math`: parsers, formatters, codecs, and numeric helpers.
 - `std.regex`: compile-once regular expression matching for a documented subset.
+- `std.inet`: IPv4, IPv6, and hostname literal validation and parsing.
 
 Program surfaces:
 
