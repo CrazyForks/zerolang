@@ -978,7 +978,7 @@ assert.match(graphHelp, /zero import \[--json\] \[--format text\|binary\] \[proj
 assert.match(graphHelp, /zero export \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero size \[--json\] \[--target <target>\] \[--out <artifact>\] \[graph-input\]/);
-assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\)/);
+assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
 assert.match(graphHelp, /Patch operation help: zero patch --op help/);
 assert.match(graphHelp, /binary is the default zero\.graph encoding/);
 assert.match(graphHelp, /--format text writes readable repository stores when explicitly requested/);
@@ -1001,7 +1001,7 @@ assert.match(rootHelp, /zero build \[--json\] \[--emit exe\|obj\|llvm-ir\].*\[gr
 assert.match(rootHelp, /zero test \[graph-input\]/);
 assert.match(rootHelp, /zero check \[--json\] \[--target <target>\] \[--emit exe\|obj\|llvm-ir\] \[graph-input\]/);
 assert.match(rootHelp, /zero fix --plan --json \[graph-input\]/);
-assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\)/);
+assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
 assert.match(rootHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\]/);
 assert.match(rootHelp, /zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(rootHelp, /zero diff \[graph-input\]/);
@@ -1023,6 +1023,8 @@ assert.match(graphPatchHelp, /replace node="#id" expect="nodehash:abc123"/);
 assert.doesNotMatch(graphPatchHelp, /setMain[A-Za-z]+Cli/);
 assert.match(graphPatchHelp, /replaceFunctionBody main/);
 assert.match(graphPatchHelp, /replaceBlockBody #block_id/);
+assert.match(graphPatchHelp, /use --replace-fn with --body-file/);
+assert.match(graphPatchHelp, /zero patch \. --replace-fn greet --body-file \/tmp\/greet\.body/);
 assert.match(graphPatchHelp, /addLetLiteral fn="main" name="count" type="u32" value="0"/);
 assert.match(graphPatchHelp, /addReturnValue fn="identity" value="input" type="i32"/);
 const graphPatchHelpJson = json(["patch", "--op", "help", "--json"]).body;
@@ -3116,6 +3118,52 @@ const repositoryInvalidBodyPatch = json(["patch", "--json", graphRepositoryPatch
 assert.notEqual(repositoryInvalidBodyPatch.code, 0);
 assert.equal(repositoryInvalidBodyPatch.body.diagnostics[0].code, "ERR003");
 assert.equal(json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash, repositorySyncedQueryJson.graphHash);
+const replaceFnBodyPath = join(outDir, "repository-graph.replace-fn.body");
+writeFileSync(replaceFnBodyPath, [
+  "  let name: Maybe<String> = std.args.get(1)",
+  "  if name.has {",
+  "    check world.out.write(\"hi \")",
+  "    check world.out.write(name.value)",
+  "    check world.out.write(\"\\n\")",
+  "  } else {",
+  "    check world.out.write(\"hi anonymous\\n\")",
+  "  }",
+  "",
+].join("\n"));
+const replaceFnPatchJson = json(["patch", "--json", graphRepositoryPatchPackageDir, "--expect-graph-hash", repositorySyncedQueryJson.graphHash, "--replace-fn", "main", "--body-file", replaceFnBodyPath]).body;
+assert.equal(replaceFnPatchJson.ok, true);
+assert.equal(replaceFnPatchJson.patch, replaceFnBodyPath);
+assert.equal(replaceFnPatchJson.operationCount, 1);
+assert.equal(replaceFnPatchJson.operations[0].op, "replaceFunctionBody");
+assert.equal(replaceFnPatchJson.saved.path, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.match(zero(["view", "--fn", "main", graphRepositoryPatchPackageDir]).stdout, /check world\.out\.write\("hi "\)/);
+assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "hi Ada\n");
+const replaceFnStaleHash = json(["patch", "--json", graphRepositoryPatchPackageDir, "--expect-graph-hash", repositorySyncedQueryJson.graphHash, "--replace-fn", "main", "--body-file", replaceFnBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnStaleHash.code, 0);
+assert.equal(replaceFnStaleHash.body.diagnostic.code, "GPH002");
+const replaceFnInvalidBodyPath = join(outDir, "repository-graph.replace-fn.invalid.body");
+writeFileSync(replaceFnInvalidBodyPath, "  let same Bool = std.mem.eql (std.mem.span name \"Ada\"\n");
+const replaceFnInvalidText = zero(["patch", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", replaceFnInvalidBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnInvalidText.code, 0);
+assert.match(replaceFnInvalidText.stderr, /replaceFunctionBody rows did not parse as a Zero function body/);
+assert.match(replaceFnInvalidText.stderr, /row 1: let same Bool = std\.mem\.eql \(std\.mem\.span name "Ada"/);
+const replaceFnInvalidJson = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", replaceFnInvalidBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnInvalidJson.code, 0);
+assert.equal(replaceFnInvalidJson.body.diagnostic.code, "GPH001");
+assert.match(replaceFnInvalidJson.body.diagnostic.actual, /row 1: let same Bool = std\.mem\.eql/);
+const replaceFnEmptyBodyPath = join(outDir, "repository-graph.replace-fn.empty.body");
+writeFileSync(replaceFnEmptyBodyPath, "\n");
+const replaceFnEmptyJson = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", replaceFnEmptyBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnEmptyJson.code, 0);
+assert.equal(replaceFnEmptyJson.body.diagnostic.code, "GPH001");
+assert.equal(replaceFnEmptyJson.body.diagnostic.message, "function body file is empty");
+const replaceFnMissingBodyFlag = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main"], { allowFailure: true });
+assert.notEqual(replaceFnMissingBodyFlag.code, 0);
+assert.match(replaceFnMissingBodyFlag.body.diagnostics[0].message, /needs both --replace-fn and --body-file/);
+assert.equal(replaceFnMissingBodyFlag.body.diagnostics[0].actual, "missing --body-file");
+const replaceFnAmbiguousSource = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryBodyPatchPath, "--replace-fn", "main", "--body-file", replaceFnBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnAmbiguousSource.code, 0);
+assert.match(replaceFnAmbiguousSource.body.diagnostics[0].message, /graph patch source is ambiguous/);
 const genericPatchRoot = join(outDir, "repository-graph-generic-patch");
 rmSync(genericPatchRoot, { recursive: true, force: true });
 mkdirSync(join(genericPatchRoot, "src"), { recursive: true });

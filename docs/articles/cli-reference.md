@@ -117,6 +117,14 @@ Apply it:
 zero patch /tmp/main.patch
 ```
 
+To replace one function body without patch syntax, put only the new body rows
+in a file (exactly what `zero view --fn <name>` prints between the signature
+braces) and run:
+
+```sh
+zero patch --replace-fn main --body-file /tmp/main.body
+```
+
 The patch step validates graph shape and repository metadata. A stale graph
 hash, missing required edge, sparse ordered child group, or invalid row body
 fails before the package store is updated.

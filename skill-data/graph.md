@@ -67,6 +67,8 @@ replaceFunctionBody main
 end
 ```
 
+To replace one function body without patch syntax or shell quoting, run `zero patch --replace-fn <name> --body-file <file>`; the file holds only the new body rows, exactly what `zero view --fn <name>` prints between the signature braces (no header, no `end`).
+
 To patch one branch instead of rewriting the whole function, find the block handle first:
 
 ```sh
