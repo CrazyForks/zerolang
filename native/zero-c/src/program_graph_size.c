@@ -1,4 +1,5 @@
 #include "program_graph_size.h"
+#include "program_graph_adjacency.h"
 #include "program_graph_c_import_metadata.h"
 #include <stdlib.h>
 #include <string.h>
@@ -173,11 +174,10 @@ static void graph_size_clear_symbol_metadata(SourceInput *input) {
   input->symbol_count = 0;
 }
 
-static const ZProgramGraphNode *graph_size_find_node(const ZProgramGraph *graph, const char *id) {
-  for (size_t i = 0; graph && id && i < graph->node_len; i++) {
-    if (graph_size_text_eq(graph->nodes[i].id, id)) return &graph->nodes[i];
-  }
-  return NULL;
+static const ZProgramGraphNode *graph_size_indexed_node(const ZProgramGraph *graph, const ZProgramGraphAdjacencyNodeEntry *index, const char *id) {
+  if (!graph || !id) return NULL;
+  size_t node_index = z_program_graph_id_index_find(index, graph->node_len, id);
+  return node_index < graph->node_len ? &graph->nodes[node_index] : NULL;
 }
 
 static const char *graph_size_owned_symbol_kind(const ZProgramGraphEdge *edge, const ZProgramGraphNode *node) {
@@ -195,15 +195,22 @@ static const char *graph_size_owned_symbol_kind(const ZProgramGraphEdge *edge, c
 }
 
 static void graph_size_seed_from_graph(SourceInput *input, const ZProgramGraph *graph) {
+  const char **node_ids = NULL;
+  ZProgramGraphAdjacencyNodeEntry *node_index = NULL;
+  if (graph && graph->node_len > 0) {
+    node_ids = z_checked_calloc(graph->node_len, sizeof(const char *));
+    for (size_t i = 0; i < graph->node_len; i++) node_ids[i] = graph->nodes[i].id;
+    node_index = z_program_graph_id_index_build(node_ids, graph->node_len);
+  }
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
     if (node->kind == Z_PROGRAM_GRAPH_NODE_MODULE) graph_size_record_module(input, node->name && node->name[0] ? node->name : "main", node->path);
   }
   for (size_t i = 0; graph && i < graph->edge_len; i++) {
     const ZProgramGraphEdge *edge = &graph->edges[i];
-    const ZProgramGraphNode *module = graph_size_find_node(graph, edge->from);
+    const ZProgramGraphNode *module = graph_size_indexed_node(graph, node_index, edge->from);
     if (!module || module->kind != Z_PROGRAM_GRAPH_NODE_MODULE) continue;
-    const ZProgramGraphNode *node = graph_size_find_node(graph, edge->to);
+    const ZProgramGraphNode *node = graph_size_indexed_node(graph, node_index, edge->to);
     if (!node) continue;
     const char *module_name = module->name && module->name[0] ? module->name : "main";
 
@@ -218,6 +225,8 @@ static void graph_size_seed_from_graph(SourceInput *input, const ZProgramGraph *
     const char *kind = graph_size_owned_symbol_kind(edge, node);
     if (kind) graph_size_record_symbol(input, module_name, kind, node->name, node->is_public);
   }
+  free(node_index);
+  free(node_ids);
 }
 
 void z_program_graph_seed_source_metadata(SourceInput *input, const ZProgramGraph *graph) {

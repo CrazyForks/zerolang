@@ -11,6 +11,7 @@
 #include "cli_help.h"
 #include "http_listen_runner.h"
 #include "init_template.h"
+#include "mir_binary.h"
 #include "program_graph_build.h"
 #include "program_graph_command.h"
 #include "program_graph_compare.h"
@@ -2596,7 +2597,8 @@ static void append_compile_time_json(ZBuf *buf, const Program *program, const So
 
 static void append_program_graph_artifact_source_json(ZBuf *buf, const ZProgramGraphArtifactSource *source);
 static void append_safety_facts_json(ZBuf *buf, const char *profile);
-static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, long long *lower_ms_out, bool *graph_mir_used_out);
+typedef struct RepositoryGraphCheckReadiness RepositoryGraphCheckReadiness;
+static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, RepositoryGraphCheckReadiness *readiness, long long *lower_ms_out, bool *graph_mir_used_out);
 static bool validate_package_dependencies_for_target(const SourceInput *input, const ZTargetInfo *target, ZDiag *diag);
 
 static bool graph_check_text_eq(const char *left, const char *right) {
@@ -2743,13 +2745,13 @@ static void append_repository_graph_default_readiness_json(ZBuf *buf, const char
   zbuf_append(buf, "}");
 }
 
-static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetInfo *target, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, long long load_ms, long long validate_ms, long long resolve_ms, long long check_ms, long long lower_ms, long long cache_ms, bool validation_in_load, bool target_ready, bool graph_mir_used) {
+static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetInfo *target, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const char *projection_state, long long load_ms, long long validate_ms, long long resolve_ms, long long check_ms, long long lower_ms, long long cache_ms, bool validation_in_load, bool target_ready, bool graph_mir_used) {
   ZProgramGraphStoreTableCounts tables;
   z_program_graph_store_table_counts_for_graph(store ? &store->graph : NULL,
                                                store ? store->source_path_len : 0,
                                                store ? store->projection_len : 0,
                                                &tables);
-  const char *projection_state = z_program_graph_projection_state_label(store, target, NULL, NULL, NULL);
+  (void)target;
   zbuf_append(buf, "{\"schemaVersion\":1,\"input\":\"repository-graph-store\",\"graphStoreLoaded\":true");
   zbuf_append(buf, ",\"sourceProjectionRequiredForCompilerInput\":false,\"sourceProjectionState\":");
   append_json_string(buf, projection_state);
@@ -2772,22 +2774,23 @@ static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetI
   zbuf_append(buf, "}");
 }
 
-static void print_repository_graph_check_json_success(const Command *command, const ZTargetInfo *target, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, long long load_ms, long long resolve_ms, long long check_ms, long long cache_ms) {
+static void print_repository_graph_check_json_success(const Command *command, const ZTargetInfo *target, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, RepositoryGraphCheckReadiness *readiness, long long load_ms, long long resolve_ms, long long check_ms, long long cache_ms) {
   ZBuf target_readiness;
   zbuf_init(&target_readiness);
   long long lower_ms = 0;
   bool graph_mir_used = false;
-  bool target_ready = append_repository_graph_target_readiness_json(&target_readiness, input, store, resolution, target, command, &lower_ms, &graph_mir_used);
+  bool target_ready = append_repository_graph_target_readiness_json(&target_readiness, input, store, resolution, target, command, readiness, &lower_ms, &graph_mir_used);
   ZBuf buf;
   zbuf_init(&buf);
   zbuf_append(&buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": true,\n  \"sourceFile\": ");
   append_json_string(&buf, store && store->path ? store->path : (command ? command->input : ""));
+  const char *projection_state = z_program_graph_projection_state_label(store, target, NULL, NULL, NULL);
   ZProgramGraphArtifactSource graph_source = {
     .artifact = store && store->path ? store->path : "",
     .graph_hash = store && store->graph.graph_hash ? store->graph.graph_hash : "",
     .module_identity = store && store->graph.module_identity ? store->graph.module_identity : "",
     .lowering = "graph-native-check",
-    .source_projection_state = z_program_graph_projection_state_label(store, target, NULL, NULL, NULL),
+    .source_projection_state = projection_state,
     .canonical_source = false,
   };
   append_program_graph_artifact_source_json(&buf, &graph_source);
@@ -2803,7 +2806,7 @@ static void print_repository_graph_check_json_success(const Command *command, co
   zbuf_append(&buf, ",\n  \"safetyFacts\": ");
   append_safety_facts_json(&buf, profile);
   zbuf_append(&buf, ",\n  \"graphCompiler\": ");
-  append_repository_graph_compiler_path_json(&buf, target, store, resolution, load_ms, 0, resolve_ms, check_ms, lower_ms, cache_ms, true, target_ready, graph_mir_used);
+  append_repository_graph_compiler_path_json(&buf, target, store, resolution, projection_state, load_ms, 0, resolve_ms, check_ms, lower_ms, cache_ms, true, target_ready, graph_mir_used);
   zbuf_append(&buf, ",\n  \"compilerPhases\": ");
   append_compiler_phases_json(&buf, input);
   zbuf_append(&buf, ",\n  \"compilerCaches\": ");
@@ -11001,6 +11004,100 @@ static bool repository_graph_target_readiness_select_diag(const Command *command
   return false;
 }
 
+/*
+ * Check-time buildability gate: `zero check` and `zero import` fail with the
+ * same BLD004 diagnostics `zero build`/`zero run` would report when the typed
+ * graph cannot lower to MIR or the lowered MIR is outside the selected
+ * backend's buildable subset for the checked target. Target/backend
+ * availability and toolchain readiness stay target-readiness facts only.
+ */
+static bool check_diag_is_buildability_blocker(const ZDiag *diag) {
+  if (!diag) return false;
+  if (diag->code != 2004 && diag->code != 4004) return false;
+  if (!diag->backend_blocker.present) return false;
+  return strcmp(diag->backend_blocker.stage, "lower") == 0 || strcmp(diag->backend_blocker.stage, "buildability") == 0;
+}
+
+static bool graph_check_buildability_gate_applies(const ZProgramGraph *graph) {
+  if (!z_program_graph_has_direct_entry_function(graph)) return false;
+  HttpListenSpec listen = {0};
+  ZDiag listen_diag = {0};
+  if (find_http_listen_graph_program(graph, &listen, &listen_diag)) return false;
+  return true;
+}
+
+static bool check_gate_buildability_blocked(const Command *command, const SourceInput *input, const ZTargetInfo *target, const ZProgramGraph *graph, const IrProgram *ir, ZDiag *out_diag) {
+  if (!ir || !graph || !graph_check_buildability_gate_applies(graph)) return false;
+  ZDiag diag = {0};
+  if (!ir->mir_valid) {
+    init_lowering_backend_diag(&diag, input, target, command, ir);
+  } else {
+    EmitKind emit = command ? command->emit : EMIT_EXE;
+    const char *request_emit_kind = emit_kind_name(emit);
+    bool llvm_request = z_backend_request_is_llvm(command ? command->backend : NULL, request_emit_kind) ||
+                        command_uses_llvm_native_exe(command, request_emit_kind);
+    if (llvm_request) {
+      ZBuf scratch;
+      if (z_emit_llvm_ir_from_ir(ir, &scratch, &diag)) {
+        zbuf_free(&scratch);
+        return false;
+      }
+    } else {
+      if (emit != EMIT_EXE && emit != EMIT_OBJ) return false;
+      const char *emit_kind = emit == EMIT_OBJ ? "obj" : (z_program_graph_has_hosted_world_main(graph) ? "exe" : "obj");
+      if (strcmp(emit_kind, "exe") == 0 && ir_needs_linked_executable_object(ir)) emit_kind = "obj";
+      ZDirectBackend backend = strcmp(emit_kind, "exe") == 0 ? z_direct_exe_backend(target) : z_direct_object_backend(target);
+      if (backend == Z_DIRECT_BACKEND_NONE) return false;
+      if (z_direct_buildability_check(ir, target, emit_kind, &diag)) return false;
+      complete_backend_blocker_diag(&diag, target, command, emit_kind, "buildability");
+    }
+  }
+  if (!check_diag_is_buildability_blocker(&diag)) return false;
+  if (input) {
+    if (diag.code != 8003 && diag.code != 8005) z_map_source_diag(input, &diag);
+    if (!diag.path) diag.path = input->source_file;
+  }
+  /* The diagnostic path may point into the transient MIR program; own it. */
+  z_diag_set_path_copy(&diag, diag.path);
+  if (out_diag) *out_diag = diag;
+  return true;
+}
+
+/*
+ * Plain-mode check gate: reuse the final-MIR cache before paying the stdlib
+ * graph merge, then lower once and memoize the result for the next check or
+ * build of the same graph hash.
+ */
+static bool repository_graph_check_gate_blocked(const Command *command, SourceInput *input, ZProgramGraphStore *store, const ZTargetInfo *target, long long *lower_ms_out, ZDiag *diag) {
+  if (!store || !store->path) return false;
+  const char *emit_kind = emit_kind_name(command ? command->emit : EMIT_EXE);
+  const char *requested_backend = command ? command->backend : NULL;
+  long long phase_started = now_ms();
+  IrProgram ir = {0};
+  bool have_ir = false;
+  char *cache_path = z_mir_binary_cache_path_for_graph_store(store->path, store->graph.graph_hash, target, emit_kind, requested_backend);
+  ZMirBinaryCacheFacts cache_facts = {0};
+  if (cache_path && z_mir_binary_load_path(cache_path, store->graph.graph_hash, target, emit_kind, requested_backend, &ir, &cache_facts, NULL)) {
+    have_ir = true;
+  } else {
+    ZDiag merge_diag = {0};
+    if (z_program_graph_merge_embedded_std_graph_modules_timed(&store->graph, input, &merge_diag)) {
+      ir = z_lower_program_graph_with_source(&store->graph, input, target);
+      have_ir = true;
+      if (ir.mir_valid && cache_path) {
+        ZDiag cache_diag = {0};
+        (void)z_mir_binary_write_path(cache_path, &ir, store->graph.graph_hash, target, emit_kind, requested_backend, &cache_diag);
+      }
+    }
+  }
+  free(cache_path);
+  if (lower_ms_out) *lower_ms_out = now_ms() - phase_started;
+  if (input) input->lower_ms = lower_ms_out ? *lower_ms_out : input->lower_ms;
+  bool blocked = have_ir && check_gate_buildability_blocked(command, input, target, &store->graph, &ir, diag);
+  if (have_ir) z_free_ir_program(&ir);
+  return blocked;
+}
+
 static void init_repository_graph_missing_store_diag(ZDiag *diag, SourceInput *input) {
   memset(diag, 0, sizeof(*diag));
   diag->code = 2002;
@@ -11014,61 +11111,77 @@ static void init_repository_graph_missing_store_diag(ZDiag *diag, SourceInput *i
   snprintf(diag->help, sizeof(diag->help), "run zero status to inspect the repository graph store");
 }
 
-static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, long long *lower_ms_out, bool *graph_mir_used_out) {
-  (void)resolution;
-  ZDiag diag = {0};
-  IrProgram ir = {0};
-  Program readiness_program = {0};
-  SourceInput readiness_input = {0};
-  bool ready = true;
-  if (lower_ms_out) *lower_ms_out = 0;
-  if (graph_mir_used_out) *graph_mir_used_out = false;
+struct RepositoryGraphCheckReadiness {
+  bool ran;
+  bool ready;
+  bool prepared;
+  bool graph_mir_used;
+  long long lower_ms;
+  ZDiag diag;
+  IrProgram ir;
+  Program program;
+};
+
+static void repository_graph_check_readiness_free(RepositoryGraphCheckReadiness *readiness) {
+  if (!readiness) return;
+  z_free_ir_program(&readiness->ir);
+  z_free_program(&readiness->program);
+}
+
+static bool repository_graph_check_readiness_compute(const Command *command, SourceInput *input, const ZProgramGraphStore *store, const ZTargetInfo *target, RepositoryGraphCheckReadiness *out) {
+  out->ran = true;
+  out->ready = true;
   const char *emit_kind = emit_kind_name(command ? command->emit : EMIT_EXE);
 
   if (!store || !store->path) {
-    ready = false;
-    init_repository_graph_missing_store_diag(&diag, input);
-  } else if (!validate_c_libraries_for_target(input, target, command, &diag)) {
-    ready = false;
+    out->ready = false;
+    init_repository_graph_missing_store_diag(&out->diag, input);
+  } else if (!validate_c_libraries_for_target(input, target, command, &out->diag)) {
+    out->ready = false;
   } else {
-    ZProgramGraphArtifactSource graph_source = {0};
     long long phase_started = now_ms();
-    bool prepared = z_program_graph_prepare_repository_store_mir_input(store->path,
+    out->prepared = z_program_graph_prepare_repository_store_mir_input(store->path,
                                                                        target,
                                                                        emit_kind,
                                                                        command ? command->backend : NULL,
                                                                        false,
-                                                                       &readiness_program,
-                                                                       &readiness_input,
-                                                                       &ir,
-                                                                       &graph_source,
-                                                                       &diag);
-    long long lower_ms = now_ms() - phase_started;
-    if (lower_ms_out) *lower_ms_out = lower_ms;
-    if (graph_mir_used_out) *graph_mir_used_out = true;
-    if (input) input->lower_ms = lower_ms;
-    if (prepared) apply_ir_metrics_to_input(input, &ir, target);
+                                                                       &out->program,
+                                                                       input,
+                                                                       &out->ir,
+                                                                       NULL,
+                                                                       &out->diag);
+    out->lower_ms = now_ms() - phase_started;
+    out->graph_mir_used = true;
+    if (input) input->lower_ms = out->lower_ms;
+    if (out->prepared) apply_ir_metrics_to_input(input, &out->ir, target);
 
-    if (!prepared) {
-      ready = false;
-    }
-
-    if (ready) {
-      if (!target_readiness_select_emit_target(command, input, target, &diag)) {
-        ready = false;
-      } else if (!ir.mir_valid) {
-        init_lowering_backend_diag(&diag, input, target, command, &ir);
-        ready = false;
-      } else if (!repository_graph_target_readiness_select_diag(command, input, target, &ir, &diag)) {
-        ready = false;
-      }
+    if (!out->prepared) {
+      out->ready = false;
+    } else if (!target_readiness_select_emit_target(command, input, target, &out->diag)) {
+      out->ready = false;
+    } else if (!out->ir.mir_valid) {
+      init_lowering_backend_diag(&out->diag, input, target, command, &out->ir);
+      out->ready = false;
+    } else if (!repository_graph_target_readiness_select_diag(command, input, target, &out->ir, &out->diag)) {
+      out->ready = false;
     }
   }
 
-  if (!ready && input) {
-    if (diag.code != 8003 && diag.code != 8005) z_map_source_diag(input, &diag);
-    if (!diag.path) diag.path = input->source_file;
+  if (!out->ready && input) {
+    if (out->diag.code != 8003 && out->diag.code != 8005) z_map_source_diag(input, &out->diag);
+    if (!out->diag.path) out->diag.path = input->source_file;
   }
+  return out->ready;
+}
+
+static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, RepositoryGraphCheckReadiness *readiness, long long *lower_ms_out, bool *graph_mir_used_out) {
+  (void)resolution;
+  if (!readiness->ran) repository_graph_check_readiness_compute(command, input, store, target, readiness);
+  bool ready = readiness->ready;
+  const ZDiag *diag = &readiness->diag;
+  if (lower_ms_out) *lower_ms_out = readiness->lower_ms;
+  if (graph_mir_used_out) *graph_mir_used_out = readiness->graph_mir_used;
+  const char *emit_kind = emit_kind_name(command ? command->emit : EMIT_EXE);
 
   zbuf_append(buf, "{\"schemaVersion\":1,\"ok\":");
   zbuf_append(buf, ready ? "true" : "false");
@@ -11085,22 +11198,15 @@ static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput
   const char *ready_backend = requested_llvm_backend
     ? "llvm"
     : z_direct_backend_name_for_emit_kind(target, emit_kind, z_backend_direct_request_name(command ? command->backend : NULL));
-  append_json_string(buf, ready || !diag.backend_blocker.present ? ready_backend : diag.backend_blocker.backend);
+  append_json_string(buf, ready || !diag->backend_blocker.present ? ready_backend : diag->backend_blocker.backend);
   if (requested_llvm_backend) {
     z_append_llvm_backend_lifecycle_field_json(buf);
   }
   zbuf_append(buf, ",\"stage\":");
-  append_json_string(buf, ready ? "ready" : (diag.backend_blocker.present && diag.backend_blocker.stage[0] ? diag.backend_blocker.stage : "select"));
+  append_json_string(buf, ready ? "ready" : (diag->backend_blocker.present && diag->backend_blocker.stage[0] ? diag->backend_blocker.stage : "select"));
   zbuf_append(buf, ",\"diagnostics\":[");
-  if (!ready) append_target_readiness_diagnostic_json(buf, input ? input->source_file : NULL, &diag);
+  if (!ready) append_target_readiness_diagnostic_json(buf, input ? input->source_file : NULL, diag);
   zbuf_append(buf, "]}");
-  /*
-   * The prepared graph MIR and checked projection may share short-lived graph
-   * preparation storage. Keep it alive through JSON assembly.
-   */
-  (void)ir;
-  (void)readiness_program;
-  (void)readiness_input;
   return ready;
 }
 
@@ -13072,9 +13178,10 @@ static const char *graph_check_phase_name(GraphCheckPhase phase) {
   return "unknown";
 }
 
-static bool append_graph_artifact_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraph *graph, const ZTargetInfo *target, const Command *command, ZDiag *diag, long long *lower_ms_out, bool *graph_mir_used_out) {
+static bool append_graph_artifact_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraph *graph, const ZTargetInfo *target, const Command *command, ZDiag *diag, long long *lower_ms_out, bool *graph_mir_used_out, ZDiag *blocked_diag, bool *blocked_out) {
   if (lower_ms_out) *lower_ms_out = 0;
   if (graph_mir_used_out) *graph_mir_used_out = false;
+  if (blocked_out) *blocked_out = false;
   ZDiag readiness_diag = {0};
   long long phase_started = now_ms();
   IrProgram ir = z_lower_program_graph_with_source(graph, input, target);
@@ -13089,6 +13196,7 @@ static bool append_graph_artifact_target_readiness_json(ZBuf *buf, SourceInput *
   if (ready && !ir.mir_valid) { init_lowering_backend_diag(&readiness_diag, input, target, command, &ir); ready = false; }
   if (ready && !repository_graph_target_readiness_select_diag(command, input, target, &ir, &readiness_diag)) ready = false;
   if (!ready && diag) *diag = readiness_diag;
+  if (!ready && blocked_out && blocked_diag) *blocked_out = check_gate_buildability_blocked(command, input, target, graph, &ir, blocked_diag);
   append_target_readiness_result_json(buf, input, NULL, target, command, &ir, &readiness_diag, ready);
   z_free_ir_program(&ir); return ready;
 }
@@ -13123,8 +13231,16 @@ static int run_graph_check_command(const Command *command, const ZTargetInfo *ta
   long long lower_ms = 0;
   bool graph_mir_used = false;
   ZDiag readiness_diag = {0};
-  if (ok) (void)append_graph_artifact_target_readiness_json(&target_readiness, &checked_input, &graph, target, command, &readiness_diag, &lower_ms, &graph_mir_used);
-  if (!ok) {
+  ZDiag blocked_diag = {0};
+  bool buildability_blocked = false;
+  if (ok) (void)append_graph_artifact_target_readiness_json(&target_readiness, &checked_input, &graph, target, command, &readiness_diag, &lower_ms, &graph_mir_used, &blocked_diag, &buildability_blocked);
+  if (ok && buildability_blocked) {
+    ok = false;
+    phase = GRAPH_CHECK_PHASE_TARGET_READINESS;
+    *diag = blocked_diag;
+    /* The gate already mapped this diagnostic to projection source locations. */
+    if (!diag->path) diag->path = graph_check_diagnostic_path(command);
+  } else if (!ok) {
     if (phase == GRAPH_CHECK_PHASE_TYPECHECK || phase == GRAPH_CHECK_PHASE_TARGET_READINESS) graph_check_map_diag_path(command, &checked_input, diag);
     else if (!diag->path) diag->path = command->input;
   }
@@ -13476,18 +13592,41 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   bool ok = collected_resolution &&
             graph_stored_compiler_input_ok(&store.graph, &resolution, &input, target, store.path ? store.path : command->input, &diag);
   input.check_ms = now_ms() - check_started;
+
+  /*
+   * Check-time buildability: lower the stored typed graph for the checked
+   * target and fail the check with the same BLD004 diagnostics that
+   * zero build or zero run would report later.
+   */
+  RepositoryGraphCheckReadiness readiness = {0};
+  bool gate_applies = ok && graph_check_buildability_gate_applies(&store.graph);
+  if (ok && command->json) {
+    repository_graph_check_readiness_compute(command, &input, &store, target, &readiness);
+    if (gate_applies && !readiness.ready) {
+      if (!readiness.prepared && readiness.graph_mir_used && check_diag_is_buildability_blocker(&readiness.diag)) {
+        diag = readiness.diag;
+        ok = false;
+      } else if (readiness.prepared && check_gate_buildability_blocked(command, &input, target, &store.graph, &readiness.ir, &diag)) {
+        ok = false;
+      }
+    }
+  } else if (ok && gate_applies) {
+    long long gate_lower_ms = 0;
+    if (repository_graph_check_gate_blocked(command, &input, &store, target, &gate_lower_ms, &diag)) ok = false;
+  }
   long long cache_started = now_ms();
   touch_program_graph_compiler_caches(&input, target, command->profile, store.graph.graph_hash);
   long long cache_ms = now_ms() - cache_started;
 
   if (ok) {
-    if (command->json) print_repository_graph_check_json_success(command, target, &input, &store, &resolution, load_ms, resolve_ms, input.check_ms, cache_ms);
+    if (command->json) print_repository_graph_check_json_success(command, target, &input, &store, &resolution, &readiness, load_ms, resolve_ms, input.check_ms, cache_ms);
     else printf("ok\n");
   } else {
     if (command->json) print_command_diag_json(command, diag.path ? diag.path : command->input, &diag);
     else print_diag(diag.path ? diag.path : command->input, &diag);
   }
 
+  repository_graph_check_readiness_free(&readiness);
   z_program_graph_resolution_facts_free(&resolution);
   z_free_source(&input);
   z_program_graph_store_free(&store);
@@ -13527,6 +13666,25 @@ static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *ta
     z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
     free(repo_package_input);
     return 1;
+  }
+  /*
+   * zero import typechecks the source projection before refreshing the
+   * store; extend the same contract to buildability so the store never
+   * accepts programs that zero build or zero run would reject with BLD004.
+   */
+  if (repo_has_source_graph && repository_graph_command_loads_checked_source(&repo_graph_load_command) &&
+      graph_check_buildability_gate_applies(&repo_source_graph)) {
+    IrProgram import_ir = z_lower_program_graph_with_source(&repo_source_graph, &repo_graph_input, target);
+    ZDiag import_gate_diag = {0};
+    bool import_blocked = check_gate_buildability_blocked(&repo_graph_load_command, &repo_graph_input, target, &repo_source_graph, &import_ir, &import_gate_diag);
+    z_free_ir_program(&import_ir);
+    if (import_blocked) {
+      if (command->json) print_command_diag_json(command, import_gate_diag.path ? import_gate_diag.path : command->input, &import_gate_diag);
+      else print_diag(import_gate_diag.path ? import_gate_diag.path : command->input, &import_gate_diag);
+      z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
+      free(repo_package_input);
+      return 1;
+    }
   }
   RepositoryGraphSourceGraphLoader repo_graph_loader = {.command = &repo_graph_load_command, .target = target};
   int repo_graph_rc = z_repository_graph_maybe_command(command->kind, repo_graph_load_command.input, target, command->json, command->graph_export_from_graph, command->graph_import_from_source, command->merge_base, command->merge_left, command->merge_right, command->store_format, command->out, repo_has_source_graph ? &repo_source_graph : NULL, command->graph_export_from_graph ? load_repository_graph_checked_source_graph : NULL, &repo_graph_loader, &repo_graph_command);
