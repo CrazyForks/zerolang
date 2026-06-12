@@ -117,9 +117,18 @@ Apply it:
 zero patch /tmp/main.patch
 ```
 
-To replace one function body without patch syntax, put only the new body rows
-in a file (exactly what `zero view --fn <name>` prints between the signature
-braces) and run:
+To replace one function body without patch syntax, pass only the new body rows
+(exactly what `zero view --fn <name>` prints between the signature braces).
+`--body-file -` reads them from stdin, so a heredoc does the whole edit in one
+call:
+
+```sh
+zero patch --replace-fn main --body-file - <<'EOF'
+  check world.out.write("hello agent\n")
+EOF
+```
+
+A file path works as the alternative:
 
 ```sh
 zero patch --replace-fn main --body-file /tmp/main.body

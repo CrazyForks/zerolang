@@ -42,6 +42,16 @@ function zeroWithStderr(args, options: { cwd?: string } = {}) {
   return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+function zeroWithInput(args, input: string, options: { allowFailure?: boolean } = {}) {
+  const result = spawnSync(zeroBin, args, { encoding: "utf8", maxBuffer: execMaxBuffer, input, stdio: ["pipe", "pipe", "pipe"] });
+  if (result.error) throw result.error;
+  const code = result.status ?? 1;
+  if (code !== 0 && !options.allowFailure) {
+    throw new Error(`zero ${args.join(" ")} exited ${code}: ${result.stderr ?? ""}`);
+  }
+  return { code, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
 function zeroRaw(args, options: { allowFailure?: boolean; env?: Record<string, string> } = {}) {
   try {
     const stdout = execFileSync(zeroBin, args, { encoding: "utf8", maxBuffer: execMaxBuffer, stdio: ["ignore", "pipe", "pipe"], env: options.env ? { ...process.env, ...options.env } : process.env });
@@ -1003,7 +1013,7 @@ assert.match(graphHelp, /zero import \[--json\] \[--format text\|binary\] \[proj
 assert.match(graphHelp, /zero export \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero size \[--json\] \[--target <target>\] \[--out <artifact>\] \[graph-input\]/);
-assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
+assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file\|->\)/);
 assert.match(graphHelp, /Patch operation help: zero patch --op help/);
 assert.match(graphHelp, /binary is the default zero\.graph encoding/);
 assert.match(graphHelp, /--format text writes readable repository stores when explicitly requested/);
@@ -1026,7 +1036,7 @@ assert.match(rootHelp, /zero build \[--json\] \[--emit exe\|obj\|llvm-ir\].*\[gr
 assert.match(rootHelp, /zero test \[graph-input\]/);
 assert.match(rootHelp, /zero check \[--json\] \[--target <target>\] \[--emit exe\|obj\|llvm-ir\] \[graph-input\]/);
 assert.match(rootHelp, /zero fix --plan --json \[graph-input\]/);
-assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
+assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file\|->\)/);
 assert.match(rootHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\]/);
 assert.match(rootHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(rootHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
@@ -1049,7 +1059,11 @@ assert.doesNotMatch(graphPatchHelp, /setMain[A-Za-z]+Cli/);
 assert.match(graphPatchHelp, /replaceFunctionBody main/);
 assert.match(graphPatchHelp, /replaceBlockBody #block_id/);
 assert.match(graphPatchHelp, /use --replace-fn with --body-file/);
+assert.match(graphPatchHelp, /--body-file - reads the body rows from stdin, so a heredoc does the whole edit in one call/);
+assert.match(graphPatchHelp, /zero patch \. --replace-fn greet --body-file - <<'EOF'/);
+assert.match(graphPatchHelp, /Alternative: write the rows to a file and pass its path/);
 assert.match(graphPatchHelp, /zero patch \. --replace-fn greet --body-file \/tmp\/greet\.body/);
+assert(graphPatchHelp.indexOf("--body-file - <<'EOF'") < graphPatchHelp.indexOf("/tmp/greet.body"), "patch help should show the stdin heredoc form before the temp-file form");
 assert.match(graphPatchHelp, /addLetLiteral fn="main" name="count" type="u32" value="0"/);
 assert.match(graphPatchHelp, /addReturnValue fn="identity" value="input" type="i32"/);
 const graphPatchHelpJson = json(["patch", "--op", "help", "--json"]).body;
@@ -1681,7 +1695,8 @@ writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return
 const staleMultiCheck = zeroWithStderr(["check"], { cwd: staleMultiRoot });
 assert.equal(staleMultiCheck.code, 0);
 assert.equal(staleMultiCheck.stdout, "ok\n");
-assert.match(staleMultiCheck.stderr, /note: zero check refreshed zero\.graph from the edited package source projection/);
+assert.match(staleMultiCheck.stderr, /note: zero check refreshed zero\.graph from the edited package source projection; tip: zero patch --replace-fn <fn> --body-file - edits the graph directly and skips this reconcile/);
+assert.equal((staleMultiCheck.stderr.match(/\n/g) ?? []).length, 1, "graph refresh note plus tip should stay on one stderr line");
 assert.equal(json(["status", "--json", staleMultiRoot]).body.repositoryGraph.projectionState, "clean");
 assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi two\n");
 writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
@@ -3510,6 +3525,27 @@ assert.equal(replaceFnMissingBodyFlag.body.diagnostics[0].actual, "missing --bod
 const replaceFnAmbiguousSource = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryBodyPatchPath, "--replace-fn", "main", "--body-file", replaceFnBodyPath], { allowFailure: true });
 assert.notEqual(replaceFnAmbiguousSource.code, 0);
 assert.match(replaceFnAmbiguousSource.body.diagnostics[0].message, /graph patch source is ambiguous/);
+const replaceFnStdinHash = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceFnStdinBody = '  check world.out.write("quoted \\"rows\\" with $HOME and C:\\\\path\\n")\n';
+const replaceFnStdinText = zeroWithInput(["patch", graphRepositoryPatchPackageDir, "--expect-graph-hash", replaceFnStdinHash, "--replace-fn", "main", "--body-file", "-"], replaceFnStdinBody);
+assertPatchOkOutput(replaceFnStdinText.stdout, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.match(zero(["view", "--fn", "main", graphRepositoryPatchPackageDir]).stdout, /quoted \\"rows\\" with \$HOME and C:\\\\path/);
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, 'quoted "rows" with $HOME and C:\\path\n');
+const replaceFnStdinJsonHash = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceFnStdinJsonRun = zeroWithInput(["patch", "--json", graphRepositoryPatchPackageDir, "--expect-graph-hash", replaceFnStdinJsonHash, "--replace-fn", "main", "--body-file", "-"], '  check world.out.write("stdin body update\\n")\n');
+const replaceFnStdinJson = JSON.parse(replaceFnStdinJsonRun.stdout);
+assert.equal(replaceFnStdinJson.ok, true);
+assert.equal(replaceFnStdinJson.patch, "<stdin>");
+assert.equal(replaceFnStdinJson.operationCount, 1);
+assert.equal(replaceFnStdinJson.operations[0].op, "replaceFunctionBody");
+assert.equal(replaceFnStdinJson.saved.path, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, "stdin body update\n");
+const replaceFnStdinEmpty = zeroWithInput(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", "-"], "\n", { allowFailure: true });
+assert.notEqual(replaceFnStdinEmpty.code, 0);
+const replaceFnStdinEmptyBody = JSON.parse(replaceFnStdinEmpty.stdout);
+assert.equal(replaceFnStdinEmptyBody.diagnostic.code, "GPH001");
+assert.equal(replaceFnStdinEmptyBody.diagnostic.message, "function body file is empty");
+assert.equal(replaceFnStdinEmptyBody.diagnostic.actual, "<stdin>");
 const genericPatchRoot = join(outDir, "repository-graph-generic-patch");
 rmSync(genericPatchRoot, { recursive: true, force: true });
 mkdirSync(join(genericPatchRoot, "src"), { recursive: true });
