@@ -209,6 +209,85 @@ static bool projection_append_path_source(const ZProgramGraphStore *store, Sourc
   return true;
 }
 
+/*
+ * Verifying that a store's source projection matches its graph re-parses and
+ * re-typechecks the projected program, which dominates warm graph compiles.
+ * The verdict is a pure function of the store contents (graph hash plus the
+ * projection table), the check target, the embedded stdlib, and the compiler
+ * version, so positive verdicts are memoized in-process and persisted under
+ * .zero/cache/native. Stores with C imports stay uncached because resolved
+ * header paths depend on the surrounding filesystem.
+ */
+#define PROJECTION_MATCH_MEMO_SLOTS 8
+
+static uint64_t projection_match_memo[PROJECTION_MATCH_MEMO_SLOTS];
+static size_t projection_match_memo_len;
+static size_t projection_match_memo_next;
+
+static bool projection_match_verdict_cacheable(const ZProgramGraphStore *store) {
+  for (size_t i = 0; store && i < store->graph.node_len; i++) {
+    if (store->graph.nodes[i].kind == Z_PROGRAM_GRAPH_NODE_C_IMPORT) return false;
+  }
+  return true;
+}
+
+static uint64_t projection_match_fingerprint(const ZProgramGraphStore *store, const ZTargetInfo *target) {
+  uint64_t state = z_program_graph_store_source_hash_seed();
+  state = z_program_graph_store_source_hash_fold(state, "compiler-version", ZERO_VERSION);
+  char stdlib_fingerprint[32];
+  snprintf(stdlib_fingerprint, sizeof(stdlib_fingerprint), "%016llx", (unsigned long long)z_std_source_graph_fingerprint());
+  state = z_program_graph_store_source_hash_fold(state, "stdlib", stdlib_fingerprint);
+  state = z_program_graph_store_source_hash_fold(state, "target", target && target->name ? target->name : "");
+  state = z_program_graph_store_source_hash_fold(state, "graph-hash", store->graph.graph_hash);
+  for (size_t i = 0; i < store->projection_len; i++) {
+    state = z_program_graph_store_source_hash_fold(state, store->projection_paths[i], store->projection_texts[i] ? store->projection_texts[i] : "");
+  }
+  return state;
+}
+
+static char *projection_match_cache_path(const ZProgramGraphStore *store, uint64_t fingerprint) {
+  const char *override = getenv("ZERO_CACHE_DIR");
+  ZBuf path;
+  zbuf_init(&path);
+  if (override && override[0]) {
+    zbuf_append(&path, override);
+  } else {
+    char *dir = projection_dirname_of(store->path ? store->path : "zero.graph");
+    zbuf_append(&path, dir);
+    free(dir);
+    if (path.len > 0 && path.data[path.len - 1] != '/') zbuf_append_char(&path, '/');
+    zbuf_append(&path, ".zero/cache/native");
+  }
+  if (path.len > 0 && path.data[path.len - 1] != '/') zbuf_append_char(&path, '/');
+  zbuf_appendf(&path, "projection-%016llx.ok", (unsigned long long)fingerprint);
+  return path.data;
+}
+
+static bool projection_match_verdict_known(const ZProgramGraphStore *store, uint64_t fingerprint) {
+  for (size_t i = 0; i < projection_match_memo_len; i++) {
+    if (projection_match_memo[i] == fingerprint) return true;
+  }
+  char *path = projection_match_cache_path(store, fingerprint);
+  bool known = z_program_graph_store_file_exists(path);
+  free(path);
+  return known;
+}
+
+static void projection_match_verdict_remember(const ZProgramGraphStore *store, uint64_t fingerprint) {
+  projection_match_memo[projection_match_memo_next] = fingerprint;
+  projection_match_memo_next = (projection_match_memo_next + 1) % PROJECTION_MATCH_MEMO_SLOTS;
+  if (projection_match_memo_len < PROJECTION_MATCH_MEMO_SLOTS) projection_match_memo_len++;
+  /* Persist only when the cache directory already exists so read-only
+   * commands such as status never create workspace state. */
+  char *path = projection_match_cache_path(store, fingerprint);
+  FILE *file = fopen(path, "wb");
+  if (file) {
+    fputs("ok\n", file);
+    fclose(file);
+  }
+  free(path);
+}
+
 static bool projection_source_input_from_store(const ZProgramGraphStore *store, SourceInput *input, ZDiag *diag) {
   if (!store || store->projection_len == 0) return projection_diag(store, diag, "repository graph store has no source projections", "empty projection table");
   *input = (SourceInput){0};
@@ -280,6 +359,9 @@ bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *st
     if (!stored) return projection_diag(store, diag, "repository graph projection table is missing a source path", path);
   }
   if (projection_store_is_embedded_std_library(store)) return true;
+  bool verdict_cacheable = projection_match_verdict_cacheable(store);
+  uint64_t verdict_fingerprint = verdict_cacheable ? projection_match_fingerprint(store, target) : 0;
+  if (verdict_cacheable && projection_match_verdict_known(store, verdict_fingerprint)) return true;
   bool generated_ok = true;
   bool generated_matches = true;
   for (size_t i = 0; i < store->projection_len; i++) {
@@ -300,7 +382,10 @@ bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *st
       break;
     }
   }
-  if (generated_ok && generated_matches) return true;
+  if (generated_ok && generated_matches) {
+    if (verdict_cacheable) projection_match_verdict_remember(store, verdict_fingerprint);
+    return true;
+  }
 
   ZProgramGraph projection_graph = {0};
   ZDiag projection_diag_value = {0};
@@ -310,6 +395,9 @@ bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *st
   }
   bool matches = z_program_graph_store_graph_matches_source(store, &projection_graph);
   z_program_graph_free(&projection_graph);
-  if (matches) return true;
+  if (matches) {
+    if (verdict_cacheable) projection_match_verdict_remember(store, verdict_fingerprint);
+    return true;
+  }
   return projection_diag(store, diag, "repository graph source projection does not match stored graph", "projection graph mismatch");
 }

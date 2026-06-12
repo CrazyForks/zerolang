@@ -4872,6 +4872,9 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
   long long phase_started = ir_graph_now_ms();
   if (!z_program_graph_store_load_path(store_path, &store, diag)) return false;
   if (input) input->graph_load_ms += ir_graph_now_ms() - phase_started;
+  /* Classify the source projection before the stdlib merge mutates the stored
+   * graph; classifying the merged graph would misreport the state as conflict. */
+  const char *source_projection_state = source ? z_program_graph_projection_state_label(&store, target, NULL, NULL, NULL) : NULL;
   phase_started = ir_graph_now_ms();
   if (!z_program_graph_merge_embedded_std_graph_modules_timed(&store.graph, input, diag)) {
     if (input) input->graph_stdlib_merge_ms += ir_graph_now_ms() - phase_started;
@@ -4909,7 +4912,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
       source->graph_hash = input ? input->program_graph_hash : "";
       source->module_identity = input ? input->program_graph_module_identity : "";
       source->lowering = "mapped-final-mir";
-      source->source_projection_state = z_program_graph_projection_state_label(&store, target, NULL, NULL, NULL);
+      source->source_projection_state = source_projection_state;
       source->canonical_source = false;
     }
     free(mir_cache_path);
@@ -4973,7 +4976,7 @@ bool z_program_graph_prepare_repository_store_mir_input(const char *store_path, 
     source->graph_hash = input ? input->program_graph_hash : "";
     source->module_identity = input ? input->program_graph_module_identity : "";
     source->lowering = mir_cache.hit ? "mapped-final-mir" : "typed-program-graph-mir";
-    source->source_projection_state = z_program_graph_projection_state_label(&store, target, NULL, NULL, NULL);
+    source->source_projection_state = source_projection_state;
     source->canonical_source = false;
   }
   free(mir_cache_path);
