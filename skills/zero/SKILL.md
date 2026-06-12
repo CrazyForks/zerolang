@@ -51,7 +51,7 @@ approximate served sizes:
 - `packages` (~5 KB): manifests, package layout, creation and repair
 - `builds` (~5 KB): build/run, targets, profiles, emitted artifacts
 - `testing` (~3 KB): test blocks, filters, runtime checks
-- `stdlib` (~39 KB): full standard library signature and capability reference; fetch only when you need exact signatures
+- `stdlib` (~39 KB): full signature reference, including ready-made validators: `std.time` (RFC 3339 incl. the exact leap-second rule), `std.inet` (IPv4/IPv6/hostname), `std.regex` (ECMA subset), `std.unicode` (strict UTF-8). Check here before hand-writing any parsing or validation logic.
 
 Agents author through graph patches or direct `.0` source edits; package commands refresh `zero.graph` from edited source automatically. Read one function with `zero view --fn <name>` instead of whole files. Prefer concise text output during interactive agent work; use `--json` only for automation, exact spans, contracts, or machine-readable diagnostics.
 

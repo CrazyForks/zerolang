@@ -63,3 +63,4 @@ If behavior changed, add or update a `test` block. When a diagnostic appears, ru
 - Use `Maybe<T>`, explicit `raises` / `raises [...]`, and `check` / `rescue` instead of hidden failure.
 - Prefer explicit types at public boundaries and when inference is unclear.
 - Do not invent syntax or CLI fields. Load `language` when unsure; run the command with `--json` when automation needs fields.
+- Do not hand-write parsing or validation logic before checking the `stdlib` topic: it ships ready-made validators such as `std.time` (RFC 3339 incl. the exact leap-second rule), `std.inet` (IPv4/IPv6/hostname), `std.regex` (ECMA subset), and `std.unicode` (strict UTF-8).

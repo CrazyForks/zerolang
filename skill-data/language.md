@@ -164,7 +164,7 @@ type FixedVec<T: Type, static N: usize> {
 
 ## Standard Library Call Shapes
 
-Load `zero skills get stdlib` for the full signature catalog. Target-neutral helpers follow these shapes:
+Load `zero skills get stdlib` for the full signature catalog. Beyond the `std.mem`/`std.parse`/`std.rand`/`std.json` helpers shown below, it ships ready-made validators: `std.time` (RFC 3339 date/time incl. the exact leap-second rule), `std.inet` (IPv4/IPv6/hostname), `std.regex` (ECMA subset), and `std.unicode` (strict UTF-8). Check the catalog before hand-writing parsing or validation logic. Target-neutral helpers follow these shapes:
 
 ```zero
 pub fn main() -> Void {
