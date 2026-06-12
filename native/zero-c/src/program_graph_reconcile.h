@@ -15,6 +15,7 @@ typedef struct {
   size_t identity_changed;
 } ZProgramGraphReconcileSummary;
 
+bool z_program_graph_identity_refresh_compatible(const char *store_identity, const char *source_identity);
 void z_program_graph_reconcile_summary(const ZProgramGraph *base, const ZProgramGraph *edited, ZProgramGraphReconcileSummary *out);
 void z_program_graph_append_reconcile_json(ZBuf *buf,
                                            const ZProgramGraph *base,

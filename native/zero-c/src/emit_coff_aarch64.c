@@ -417,9 +417,10 @@ bool z_emit_coff_aarch64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag 
   zbuf_init(&text);
   zbuf_init(&rdata);
 
-  bool has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
   unsigned rodata_base_offset = z_aarch64_direct_rodata_base_offset(program);
-  if (has_rodata) z_aarch64_direct_append_rodata(&rdata, program, rodata_base_offset);
+  ZDirectTrapMessages trap_messages = {0};
+  z_aarch64_direct_append_rodata(&rdata, program, rodata_base_offset);
+  z_aarch64_direct_append_trap_messages(&rdata, rodata_base_offset, &trap_messages);
 
   size_t *offsets = z_checked_calloc(program->function_len, sizeof(size_t));
   if (!offsets) {
@@ -438,7 +439,8 @@ bool z_emit_coff_aarch64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag 
     .record_data_patch = coff_a64_record_data_patch,
     .record_call_patch = coff_a64_record_call_patch,
     .record_runtime_patch = coff_a64_record_runtime_patch,
-    .emit_world_write = coff_a64_emit_world_write_call
+    .emit_world_write = coff_a64_emit_world_write_call,
+    .trap_messages = trap_messages
   };
 
   ZCoffImportPatch import_patches[8];
@@ -449,12 +451,20 @@ bool z_emit_coff_aarch64_exe_from_ir(const IrProgram *program, ZBuf *out, ZDiag 
     z_aarch64_pad_to(&text, z_aarch64_align(text.len, 16));
     offsets[i] = text.len;
     if (!z_aarch64_direct_emit_function_text(&text, &program->functions[i], &ctx, diag)) {
+      z_direct_trap_branches_free(ctx.trap_branches, Z_DIRECT_TRAP_KIND_COUNT);
       coff_a64_emit_state_free(&state);
       free(offsets);
       zbuf_free(&rdata);
       zbuf_free(&text);
       return false;
     }
+  }
+  if (!z_aarch64_direct_emit_trap_stubs(&text, &ctx, diag)) {
+    coff_a64_emit_state_free(&state);
+    free(offsets);
+    zbuf_free(&rdata);
+    zbuf_free(&text);
+    return false;
   }
   z_aarch64_patch_branch26(&text, start_main_patch, offsets[main_index]);
   coff_a64_patch_call_branches(&text, &state.calls, offsets, program->function_len);

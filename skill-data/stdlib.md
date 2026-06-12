@@ -33,11 +33,14 @@ Call functions with their module path, such as `std.mem.len(value)`.
 - `std.ascii`: ASCII byte predicates, case conversion, and digit value helpers.
 - `std.fmt`: caller-buffer formatting for booleans and integer text.
 - `std.text`: ASCII and UTF-8 byte-backed text validation.
+- `std.unicode`: strict UTF-8 codepoint decode/encode iteration and codepoint-class helpers; pair with `std.text.utf8Valid`/`std.text.utf8Len` for whole-span validation and counting.
 - `std.math`: fixed-width min/max/clamp, checked and saturating integer arithmetic, GCD/LCM, powers, modular power, roots, combinatorics, primality, and divisor routines.
 - `std.path`: target-neutral lexical path basename, dirname, extension, join, normalize, and relative helpers.
 - `std.codec`: byte reads, endian reads/writes, varint sizing/encode/decode, base64/hex encode/decode, CRC helpers, and byte checksums.
 - `std.parse`: byte scanners and integer/bool parsers returning `Maybe<T>`.
-- `std.time`: duration construction, conversion, comparison, elapsed-window helpers, and target-gated clock helpers.
+- `std.regex`: compile-once regular expression matching for a documented ECMA-262-leaning subset (literals, classes, anchors, word boundaries, greedy quantifiers, alternation, groups); unsupported constructs fail with structured status codes.
+- `std.inet`: target-neutral IPv4/IPv6/hostname literal validation and parsing; no network capability needed.
+- `std.time`: duration construction, conversion, comparison, elapsed-window helpers, RFC 3339 date/time validation and epoch parsing, and target-gated clock helpers.
 - `std.rand`: explicit deterministic random sources, random bits, target entropy helpers, and caller-buffer entropy IDs.
 - `std.crypto`: small hash, fixed-width hash text, byte-oriented crypto helpers, and caller-buffer IDs.
 - `std.json`: explicit-buffer JSON validation, structured status codes, shallow field lookup, typed scalar decode, parsing, and string/object writing helpers.
@@ -513,6 +516,24 @@ nextLineStart(arg0: Span<u8>, arg1: usize) -> usize
 countLines(arg0: Span<u8>) -> usize
 ```
 
+### std.inet
+
+```text
+isIpv4(text: Span<u8>) -> Bool
+parseIpv4(text: Span<u8>) -> Maybe<u32>
+isIpv6(text: Span<u8>) -> Bool
+parseIpv6(buffer: MutSpan<u8>, text: Span<u8>) -> Maybe<Span<u8>>
+isHostname(text: Span<u8>) -> Bool
+```
+
+Internet address literal helpers, kept separate from `std.net` so they stay
+usable on targets without the Net capability. `isIpv4`/`parseIpv4` accept
+strict dotted quads (four 0-255 octets, no leading zeros; the parse packs
+big-endian). `isIpv6`/`parseIpv6` accept RFC 4291 forms including `::`
+compression and embedded IPv4, writing 16 network-order bytes into the caller
+buffer. `isHostname` enforces RFC 1123: dot-separated labels of 1-63
+alphanumeric/hyphen bytes, no leading/trailing hyphens, 253 bytes total.
+
 ### std.json
 
 ```text
@@ -722,6 +743,27 @@ entropySeed() -> RandSource
 entropyHex32(arg0: MutSpan<u8>) -> Maybe<Span<u8>>
 ```
 
+### std.regex
+
+```text
+compile(buffer: MutSpan<u8>, pattern: Span<u8>) -> Maybe<Span<u8>>
+compileStatus(buffer: MutSpan<u8>, pattern: Span<u8>) -> u32
+statusName(status: u32) -> String
+isMatch(program: Span<u8>, text: Span<u8>) -> Bool
+matches(pattern: Span<u8>, text: Span<u8>) -> Maybe<Bool>
+```
+
+Supported pattern subset (ECMA-262-leaning, matching by codepoint, unanchored
+search like `RegExp.prototype.test`): literals, `.`, classes with negation,
+ranges, and `\d \D \w \W \s \S`, anchors `^` `$`, word boundaries `\b` `\B`,
+greedy quantifiers `* + ? {m} {m,} {m,n}`, alternation `|`, capturing and
+`(?:...)` groups (matching only). Compile once into a caller buffer, then call
+`isMatch` repeatedly. Unsupported constructs are compile errors with status
+codes: 1 backreference, 2 lookahead, 3 lookbehind, 4 named group, 5 lazy
+quantifier, 6 group modifier, 7 unicode property escape, 8 syntax, 9 quantifier
+range, 10 over buffer/2048-byte program limit, 11 pattern not UTF-8, 12 nesting
+depth over 32. `statusName` names a code for diagnostics.
+
 ### std.search
 
 ```text
@@ -818,7 +860,39 @@ isZero(arg0: Duration) -> Bool
 abs(arg0: Duration) -> Duration
 between(arg0: Duration, arg1: Duration) -> Duration
 hasElapsed(arg0: Duration, arg1: Duration, arg2: Duration) -> Bool
+isRfc3339Date(text: Span<u8>) -> Bool
+isRfc3339Time(text: Span<u8>) -> Bool
+isRfc3339DateTime(text: Span<u8>) -> Bool
+parseRfc3339DateTimeOr(text: Span<u8>, fallback: i64) -> i64
+isLeapYear(year: u32) -> Bool
+daysInMonth(year: u32, month: u32) -> u32
 ```
+
+The RFC 3339 helpers are target-neutral and validate calendar dates (leap
+years, days-in-month), times with fractional seconds and numeric offsets, and
+date-times joined by `T` or `t`. The leap-second rule is exact: seconds `60`
+is valid only when the time normalized by its offset equals `23:59:60` UTC,
+wrapping modulo 24 hours (`00:29:60+00:30` is valid; `23:59:60-01:00` is not).
+`parseRfc3339DateTimeOr` returns UTC epoch seconds, truncating fractions and
+mapping a valid leap second to the same epoch second as `:59`; it returns the
+fallback for invalid text.
+
+### std.unicode
+
+```text
+decodeAt(text: Span<u8>, index: usize) -> Maybe<u32>
+widthAt(text: Span<u8>, index: usize) -> Maybe<usize>
+encode(buffer: MutSpan<u8>, cp: u32) -> Maybe<Span<u8>>
+encodedWidth(cp: u32) -> Maybe<usize>
+isDigit(cp: u32) -> Bool
+isWord(cp: u32) -> Bool
+isSpace(cp: u32) -> Bool
+```
+
+Decoding is strict UTF-8 (overlong encodings, surrogates, values above
+U+10FFFF, and truncated sequences return `null`). Iterate codepoints by
+advancing a byte index with `widthAt`. The class helpers use ECMA-262 regex
+semantics by codepoint (`\d` `\w` `\s`).
 
 ### std.url
 

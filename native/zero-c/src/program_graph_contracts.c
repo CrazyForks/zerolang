@@ -165,10 +165,8 @@ static bool import_contract_ok(const ZProgramGraph *graph, const ZProgramGraphNo
   return true;
 }
 
-bool z_program_graph_name_contracts_ok(const ZProgramGraph *graph, const char *path, ZDiag *diag) {
-  for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    switch (node->kind) {
+static bool name_contract_node_ok(const ZProgramGraph *graph, const ZProgramGraphNode *node, const char *path, ZDiag *diag) {
+  switch (node->kind) {
       case Z_PROGRAM_GRAPH_NODE_IMPORT:
         if (!import_contract_ok(graph, node, path, diag)) return false;
         break;
@@ -237,13 +235,31 @@ bool z_program_graph_name_contracts_ok(const ZProgramGraph *graph, const char *p
         break;
       default:
         break;
-    }
   }
   return true;
+}
+
+bool z_program_graph_name_contracts_ok(const ZProgramGraph *graph, const char *path, ZDiag *diag) {
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    if (!name_contract_node_ok(graph, &graph->nodes[i], path, diag)) return false;
+  }
+  return true;
+}
+
+size_t z_program_graph_name_contract_violations(const ZProgramGraph *graph, const char *path, ZDiag *out, size_t cap) {
+  size_t found = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    ZDiag diag = {0};
+    if (name_contract_node_ok(graph, &graph->nodes[i], path, &diag)) continue;
+    if (out && found < cap) out[found] = diag;
+    found++;
+  }
+  return found;
 }
 
 bool z_program_graph_semantic_contracts_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *diag) {
   if (!z_program_graph_effect_contracts_ok(graph, resolution, path, diag)) return false;
   if (!z_program_graph_memory_contracts_ok(graph, resolution, path, diag)) return false;
+  if (!z_program_graph_fixed_array_length_contracts_ok(graph, resolution, path, diag)) return false;
   return z_program_graph_borrow_contracts_ok(graph, path, diag);
 }

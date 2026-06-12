@@ -5,7 +5,8 @@ OUT := $(ROOT)/.zero/bin/zero
 NODE_TS := node --experimental-strip-types --disable-warning=ExperimentalWarning
 BUILD_STAMP := $(OUT).build
 HOST_ID := $(shell uname -s 2>/dev/null || echo unknown)-$(shell uname -m 2>/dev/null || echo unknown)
-BUILD_ID := $(HOST_ID)|$(CC)|$(CFLAGS)
+ZERO_BUILD_HASH := $(shell git -C $(ROOT) rev-parse --short HEAD 2>/dev/null || echo unknown)
+BUILD_ID := $(HOST_ID)|$(CC)|$(CFLAGS)|$(ZERO_BUILD_HASH)
 SRC := $(wildcard src/*.c)
 INCLUDES := $(wildcard include/*.h) $(wildcard src/*.h) $(wildcard src/*.inc)
 EMBEDDED_SKILLS := src/embedded_skills.inc
@@ -37,7 +38,7 @@ $(EMBEDDED_RUNTIME_SOURCES): $(ROOT)/scripts/embed-runtime-sources.mts $(RUNTIME
 
 $(OUT): $(BUILD_STAMP) $(SRC) $(INCLUDES) $(EMBEDDED_SKILLS) $(EMBEDDED_STDLIB_GRAPH) $(EMBEDDED_RUNTIME_SOURCES)
 	@mkdir -p $(dir $(OUT))
-	$(CC) $(CFLAGS) -Iinclude $(SRC) -o $(OUT)
+	$(CC) $(CFLAGS) -DZERO_BUILD_HASH='"$(ZERO_BUILD_HASH)"' -Iinclude $(SRC) -o $(OUT)
 
 clean:
 	rm -f $(OUT) $(BUILD_STAMP)

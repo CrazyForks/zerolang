@@ -65,6 +65,7 @@ void z_coff_emit_context_free(CoffEmitContext *ctx) {
   for (unsigned i = 0; i < COFF_RUNTIME_HELPER_COUNT; i++) {
     free(ctx->runtime_patches[i].items);
   }
+  z_direct_trap_branches_free(ctx->trap_branches, Z_DIRECT_TRAP_KIND_COUNT);
 }
 
 bool z_coff_record_call_patch(CoffEmitContext *ctx, size_t patch_offset, unsigned callee_index, const IrValue *value, ZDiag *diag) {

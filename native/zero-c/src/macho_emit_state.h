@@ -93,6 +93,8 @@ typedef struct {
   unsigned rodata_base_offset;
   bool pie_relative_data;
   bool seed_main_process_args;
+  ZDirectTrapMessages trap_messages;
+  ZDirectTrapBranchList trap_branches[Z_DIRECT_TRAP_KIND_COUNT];
   ZDirectLoopFrame *loop;
 } MachOEmitContext;
 

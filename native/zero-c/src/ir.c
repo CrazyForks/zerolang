@@ -2792,12 +2792,27 @@ static bool ir_lower_expr(const Program *program, IrProgram *ir, const IrFunctio
     case EXPR_IDENT: {
       const IrLocal *local = ir_function_find_local(fun, expr->text);
       if (!local) {
+        const ConstDecl *const_decl = NULL;
+        for (size_t i = 0; expr->text && i < program->consts.len; i++) {
+          if (program->consts.items[i].name && strcmp(program->consts.items[i].name, expr->text) == 0) { const_decl = &program->consts.items[i]; break; }
+        }
+        if (const_decl && const_decl->expr) {
+          if (ir->const_lower_depth >= 16) {
+            ir_mark_unsupported(ir, "direct backend const reference chain is too deep", expr->line, expr->column, expr->text);
+            return false;
+          }
+          ir->const_lower_depth++;
+          bool lowered = ir_lower_expr(program, ir, fun, const_decl->expr, out);
+          ir->const_lower_depth--;
+          return lowered;
+        }
         ir_mark_unsupported(ir, "direct backend identifier is not a local", expr->line, expr->column, expr->text);
         return false;
       }
       if (local->type == IR_TYPE_BYTE_VIEW) return ir_lower_byte_view(program, ir, fun, expr, out);
       IrValue *value = ir_new_value(ir, IR_VALUE_LOCAL, local->type, expr->line, expr->column);
       value->local_index = local->index;
+      value->element_type = local->element_type;
       *out = value;
       return true;
     }
@@ -4410,6 +4425,12 @@ static bool ir_lower_array_initializer(const Program *program, IrProgram *ir, Ir
       ir_mark_unsupported(ir, "direct backend fixed array repeat literal requires value and count", line, column, local->name);
       return false;
     }
+    const Expr *count_expr = expr->args.items[1];
+    unsigned long long repeat_count = 0;
+    if (count_expr && count_expr->kind == EXPR_NUMBER && ir_parse_integer_literal(count_expr->text ? count_expr->text : "", &repeat_count) && repeat_count != (unsigned long long)local->array_len) {
+      ir_mark_unsupported(ir, "direct backend fixed array repeat count must match local type", count_expr->line, count_expr->column, local->name);
+      return false;
+    }
     const Expr *value_expr = expr->args.items[0];
     for (size_t i = 0; i < local->array_len; i++) {
       IrValue *index = ir_new_index_literal(ir, (unsigned)i, value_expr->line, value_expr->column);
@@ -4498,6 +4519,13 @@ static bool ir_lower_shape_initializer(const Program *program, IrProgram *ir, Ir
         if (field_expr->args.len != 2) {
           ir_type_arg_vec_free(&shape_args);
           ir_mark_unsupported(ir, "direct backend record array field repeat literal requires value and count", field_expr->line, field_expr->column, field->name);
+          return false;
+        }
+        const Expr *field_count_expr = field_expr->args.items[1];
+        unsigned long long field_repeat_count = 0;
+        if (field_count_expr && field_count_expr->kind == EXPR_NUMBER && ir_parse_integer_literal(field_count_expr->text ? field_count_expr->text : "", &field_repeat_count) && field_repeat_count != (unsigned long long)field_array_len) {
+          ir_type_arg_vec_free(&shape_args);
+          ir_mark_unsupported(ir, "direct backend record array field repeat count must match field type", field_count_expr->line, field_count_expr->column, field->name);
           return false;
         }
       } else if (field_expr->args.len != field_array_len) {
@@ -4924,6 +4952,11 @@ static bool ir_collect_stmt_locals(const Program *program, IrProgram *ir, IrFunc
         continue;
       }
       if (!ir_type_is_direct_local(type)) {
+        if (stmt_type && (strcmp(stmt_type, "PageAlloc") == 0 || strcmp(stmt_type, "GeneralAlloc") == 0 || strcmp(stmt_type, "NullAlloc") == 0)) {
+          ir_mark_unsupported(ir, "direct backend allocator local requires FixedBufAlloc", stmt->line, stmt->column, stmt_type);
+          snprintf(ir->mir_help, sizeof(ir->mir_help), "allocate from a fixed array with std.mem.fixedBufAlloc, or split large buffers across helper functions with smaller frames; PageAlloc, GeneralAlloc, and NullAlloc locals do not lower to direct backends yet");
+          return false;
+        }
         ir_mark_unsupported(ir, "direct backend local type is unsupported", stmt->line, stmt->column, stmt_type ? stmt_type : "inferred unknown");
         return false;
       }
@@ -4938,6 +4971,62 @@ static bool ir_collect_stmt_locals(const Program *program, IrProgram *ir, IrFunc
     }
   }
   return true;
+}
+
+static size_t ir_estimate_local_bytes(const Program *program, const char *type_text, unsigned *out_align) {
+  unsigned array_len = 0;
+  IrTypeKind element_type = IR_TYPE_UNSUPPORTED;
+  if (out_align) *out_align = 8;
+  if (ir_parse_fixed_array_type_for_program(program, type_text, &array_len, &element_type)) {
+    if (out_align) *out_align = ir_type_alignment(element_type);
+    return (size_t)ir_type_byte_size(element_type) * (size_t)array_len;
+  }
+  unsigned record_size = 0;
+  unsigned record_align = 0;
+  if (ir_shape_layout(program, type_text, &record_size, &record_align)) {
+    if (out_align) *out_align = record_align ? record_align : 8;
+    return record_size;
+  }
+  IrTypeKind kind = ir_type_kind_for_program(program, type_text);
+  if (kind == IR_TYPE_BYTE_VIEW || kind == IR_TYPE_ALLOC || kind == IR_TYPE_VEC || kind == IR_TYPE_MAYBE_SCALAR) return 16;
+  if (kind == IR_TYPE_MAYBE_BYTE_VIEW) return 24;
+  return 8;
+}
+
+static size_t ir_estimate_stmt_frame_bytes(const Program *program, const StmtVec *body, size_t offset, size_t limit, const Stmt **out_over) {
+  for (size_t i = 0; body && i < body->len; i++) {
+    const Stmt *stmt = body->items[i];
+    if (stmt->kind == STMT_LET) {
+      unsigned align = 8;
+      size_t byte_size = ir_estimate_local_bytes(program, stmt->resolved_type ? stmt->resolved_type : stmt->type, &align);
+      offset = ir_align_to(offset, align) + byte_size;
+      if (offset > limit && out_over && !*out_over) *out_over = stmt;
+    } else if (stmt->kind == STMT_IF) {
+      offset = ir_estimate_stmt_frame_bytes(program, &stmt->then_body, offset, limit, out_over);
+      offset = ir_estimate_stmt_frame_bytes(program, &stmt->else_body, offset, limit, out_over);
+    } else if (stmt->kind == STMT_WHILE) {
+      offset = ir_estimate_stmt_frame_bytes(program, &stmt->then_body, offset, limit, out_over);
+    }
+  }
+  return offset;
+}
+
+bool z_function_frame_locals_within_limit(const Program *program, const Function *fun, size_t limit, size_t *out_total, const Stmt **out_over) {
+  if (out_total) *out_total = 0;
+  if (out_over) *out_over = NULL;
+  if (!fun || fun->type_params.len > 0) return true;
+  size_t offset = 0;
+  for (size_t i = 0; i < fun->params.len; i++) {
+    const Param *param = &fun->params.items[i];
+    if (param->type && strcmp(param->type, "World") == 0) continue;
+    unsigned align = 8;
+    size_t byte_size = ir_estimate_local_bytes(program, param->type, &align);
+    offset = ir_align_to(offset, align) + byte_size;
+  }
+  offset = ir_estimate_stmt_frame_bytes(program, &fun->body, offset, limit, out_over);
+  size_t total = ir_align_to(offset, 16);
+  if (out_total) *out_total = total;
+  return total <= limit;
 }
 
 static bool ir_lower_function_body(const Program *program, IrProgram *ir, IrFunction *mir_fun, const Function *source) {
@@ -5261,8 +5350,7 @@ static void ir_lower_direct_backend_subset(IrProgram *ir, const Program *program
   snprintf(ir->mir_expected, sizeof(ir->mir_expected), "direct backend MVP subset");
   snprintf(ir->mir_help, sizeof(ir->mir_help), "restrict this program to exported primitive arithmetic functions or choose another supported direct target");
   ir->mir_bytes = sizeof(IrProgram);
-  if (program->choices.len > 0 || program->interfaces.len > 0 || program->aliases.len > 0 ||
-      program->consts.len > 0) {
+  if (program->choices.len > 0 || program->interfaces.len > 0 || program->aliases.len > 0) {
     ir_mark_unsupported(ir, "direct backend MVP does not support declarations other than functions", 1, 1, "unsupported top-level declaration");
     return;
   }

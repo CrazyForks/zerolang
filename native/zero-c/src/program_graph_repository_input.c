@@ -195,13 +195,41 @@ static int input_manifest_identity_error(const RepositoryGraphInputState *state,
                          "repository graph store module identity does not match package manifest",
                          expected,
                          state && state->module_identity ? state->module_identity : "missing module identity",
-                         "check in the zero.graph generated for this package, or update the package manifest after reviewing the package identity",
-                         REPO_GRAPH_REPAIR_STATUS);
+                         "run zero import to refresh zero.graph from the package source projection, or update the package manifest after reviewing the package identity",
+                         REPO_GRAPH_REPAIR_FROM_SOURCE);
     free(expected);
     return rc;
   }
   free(expected);
   return 0;
+}
+
+int z_repository_graph_stale_compiler_input_error(const char *input, const ZTargetInfo *target, bool json) {
+  RepositoryGraphInputState state = input_state(input, target);
+  int rc = input_error(&state,
+                       json,
+                       "RGP008",
+                       "package source projection does not match the zero.graph compiler input",
+                       "zero.graph store matching the checked-in .0 source projection",
+                       "source-stale projection state",
+                       "run zero import to refresh zero.graph from the edited source, or unset ZERO_STALE=fail to let this command refresh automatically",
+                       REPO_GRAPH_REPAIR_FROM_SOURCE);
+  input_state_free(&state);
+  return rc;
+}
+
+int z_repository_graph_diverged_compiler_input_error(const char *input, const ZTargetInfo *target, bool json) {
+  RepositoryGraphInputState state = input_state(input, target);
+  int rc = input_error(&state,
+                       json,
+                       "RGP006",
+                       "package source projection and zero.graph have diverged",
+                       "checked-in .0 source text matching zero.graph projection",
+                       "source projection and zero.graph edited independently",
+                       "run zero status to inspect the drift, then run zero import if the .0 projection is authoritative or zero export if zero.graph is authoritative",
+                       REPO_GRAPH_REPAIR_IMPORT_OR_EXPORT);
+  input_state_free(&state);
+  return rc;
 }
 
 int z_repository_graph_verify_compiler_input(const char *input, const ZTargetInfo *target, bool json, char **out_store_path) {

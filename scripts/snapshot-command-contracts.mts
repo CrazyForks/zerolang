@@ -1,7 +1,7 @@
 #!/usr/bin/env -S node --experimental-strip-types --disable-warning=ExperimentalWarning
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createAggregateAssert, finishAggregateAssert } from "./aggregate-assert.mjs";
@@ -36,6 +36,12 @@ function zero(args, options: { allowFailure?: boolean; env?: Record<string, stri
   }
 }
 
+function zeroWithStderr(args, options: { cwd?: string } = {}) {
+  const result = spawnSync(zeroBin, args, { encoding: "utf8", maxBuffer: execMaxBuffer, stdio: ["ignore", "pipe", "pipe"], cwd: options.cwd });
+  if (result.error) throw result.error;
+  return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
 function zeroRaw(args, options: { allowFailure?: boolean; env?: Record<string, string> } = {}) {
   try {
     const stdout = execFileSync(zeroBin, args, { encoding: "utf8", maxBuffer: execMaxBuffer, stdio: ["ignore", "pipe", "pipe"], env: options.env ? { ...process.env, ...options.env } : process.env });
@@ -56,8 +62,7 @@ function assertPatchOkOutput(stdout: string, expectedSaved?: string) {
     assert.match(stdout, new RegExp(`saved: ${expectedSaved.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n`));
   }
   assert.match(stdout, /graphHash: graph:[0-9a-f]{16}\n/);
-  assert.match(stdout, /functions: /);
-  assert.match(stdout, /tests: /);
+  assert.match(stdout, /applied: \d+ ops?, \d+ nodes? touched\n/);
 }
 
 function json(args, options = {}) {
@@ -690,11 +695,14 @@ function assertMachOLoadCommand(bytes, expectedCommand, expectedSize) {
   assert.fail(`missing Mach-O load command 0x${expectedCommand.toString(16)}`);
 }
 
-function elfPackedErrorBytes(code) {
+function elfPackedErrorBytes(code, flagged = false) {
+  // Raises functions pack (code << 32); world-main envelopes fold the error
+  // flag into the same movabs as (code << 32) | 1, since a separate 32-bit
+  // flag mov would zero-extend over the code.
   const bytes = Buffer.alloc(10);
   bytes[0] = 0x48;
   bytes[1] = 0xb8;
-  bytes.writeBigUInt64LE(BigInt(code) << 32n, 2);
+  bytes.writeBigUInt64LE((BigInt(code) << 32n) | (flagged ? 1n : 0n), 2);
   return bytes;
 }
 
@@ -876,11 +884,12 @@ function directExeEmitterForTarget(target: string) {
 
 const generatedCBytesBeforeReadOnlyCommands = json(["size", "--json", "examples/memory-package"]).body.generatedCBytes;
 
-assert.equal(zero(["--version"]).stdout, "zero 0.3.2\n");
+assert.match(zero(["--version"]).stdout, /^zero 0\.3\.2 \(build (?:[0-9a-f]{7,40}|unknown)\)\n$/);
 
 const version = json(["--version", "--json"]).body;
 assert.equal(version.schemaVersion, 1);
 assert.equal(version.version, "0.3.2");
+assert.match(version.commit, /^(?:[0-9a-f]{7,40}|unknown)$/);
 assert.equal(version.backend, "zero-c");
 assert.equal(typeof version.host, "string");
 assert(version.targets.includes("darwin-arm64"));
@@ -917,8 +926,9 @@ for (const [command, expected] of [
   [["targets", "--help"], /Usage: zero targets/],
   [["tokens", "--help"], /Usage: zero tokens/],
   [["parse", "--help"], /Usage: zero parse/],
-  [["query", "--help"], /Usage: zero init \[--template cli\|lib\|package\] \[project-path\]; zero query\|view\|diff\|dump\|inspect\|validate\|source-map\|roundtrip \[--json\] \[graph-input\]/],
-  [["diff", "--help"], /Diff textconv usage: zero diff \[graph-input\]/],
+  [["query", "--help"], /Usage: zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/],
+  [["inspect", "--help"], /Usage: zero init \[--template cli\|lib\|package\] \[project-path\]; zero query\|view\|diff\|dump\|inspect\|validate\|source-map\|roundtrip \[--json\] \[graph-input\]/],
+  [["diff", "--help"], /Usage: zero diff \[--fn <name>\] \[graph-input\]/],
   [["size", "--help"], /Usage: zero size/],
   [["explain", "--help"], /Usage: zero explain/],
   [["fix", "--help"], /Usage: zero fix/],
@@ -966,19 +976,34 @@ for (const [code, goodExample, stalePattern] of [
   );
 }
 
-const graphHelp = zero(["query", "--help"]).stdout;
+// Every diagnostic code the compiler can emit must resolve in `zero explain`.
+const compilerSourceDir = "native/zero-c/src";
+const emittableDiagnosticCodes = new Set<string>();
+for (const entry of readdirSync(compilerSourceDir)) {
+  if (!entry.endsWith(".c")) continue;
+  const source = readFileSync(join(compilerSourceDir, entry), "utf8");
+  for (const match of source.matchAll(/"([A-Z]{3,4}[0-9]{3})"/g)) emittableDiagnosticCodes.add(match[1]);
+}
+assert(emittableDiagnosticCodes.size > 100, "expected to discover the compiler diagnostic code catalog");
+for (const code of [...emittableDiagnosticCodes].sort()) {
+  const explained = json(["explain", "--json", code], { allowFailure: true });
+  assert.equal(explained.code, 0, `zero explain ${code} must have an explain entry`);
+  assert.equal(explained.body.code, code, `zero explain ${code} must explain the requested code`);
+}
+
+const graphHelp = zero(["inspect", "--help"]).stdout;
 assert.match(graphHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[graph-input\]; zero import \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[project\|zero\.toml\|zero\.json\|file\.0\]/);
-assert.match(graphHelp, /zero view \[--json\] \[--out <file\.0>\] \[graph-input\]/);
-assert.match(graphHelp, /zero diff \[graph-input\]/);
+assert.match(graphHelp, /zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(graphHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(graphHelp, /zero source-map \[--json\] \[graph-input\]/);
-assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[graph-input\]/);
+assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/);
 assert.match(graphHelp, /zero reconcile \[--json\] <base-graph-input> --source <edited-file\.0\|project\|zero\.toml\|zero\.json>/);
-assert.match(graphHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
+assert.match(graphHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\|zero\.graph\]/);
 assert.match(graphHelp, /zero import \[--json\] \[--format text\|binary\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero export \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero size \[--json\] \[--target <target>\] \[--out <artifact>\] \[graph-input\]/);
-assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\)/);
+assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
 assert.match(graphHelp, /Patch operation help: zero patch --op help/);
 assert.match(graphHelp, /binary is the default zero\.graph encoding/);
 assert.match(graphHelp, /--format text writes readable repository stores when explicitly requested/);
@@ -1001,14 +1026,14 @@ assert.match(rootHelp, /zero build \[--json\] \[--emit exe\|obj\|llvm-ir\].*\[gr
 assert.match(rootHelp, /zero test \[graph-input\]/);
 assert.match(rootHelp, /zero check \[--json\] \[--target <target>\] \[--emit exe\|obj\|llvm-ir\] \[graph-input\]/);
 assert.match(rootHelp, /zero fix --plan --json \[graph-input\]/);
-assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\)/);
+assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
 assert.match(rootHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\]/);
-assert.match(rootHelp, /zero view \[--json\] \[--out <file\.0>\] \[graph-input\]/);
-assert.match(rootHelp, /zero diff \[graph-input\]/);
+assert.match(rootHelp, /zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(rootHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(rootHelp, /zero source-map \[--json\] \[graph-input\]/);
-assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[graph-input\]/);
+assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/);
 assert.match(rootHelp, /zero reconcile \[--json\] <base-graph-input> --source <edited-file\.0\|project\|zero\.toml\|zero\.json>/);
-assert.match(rootHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
+assert.match(rootHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\|zero\.graph\]/);
 assert.match(rootHelp, /zero import \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(rootHelp, /zero export \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(rootHelp, /zero merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] \[--format text\|binary\] <project\|zero\.toml\|zero\.json\|file\.0>/);
@@ -1023,6 +1048,8 @@ assert.match(graphPatchHelp, /replace node="#id" expect="nodehash:abc123"/);
 assert.doesNotMatch(graphPatchHelp, /setMain[A-Za-z]+Cli/);
 assert.match(graphPatchHelp, /replaceFunctionBody main/);
 assert.match(graphPatchHelp, /replaceBlockBody #block_id/);
+assert.match(graphPatchHelp, /use --replace-fn with --body-file/);
+assert.match(graphPatchHelp, /zero patch \. --replace-fn greet --body-file \/tmp\/greet\.body/);
 assert.match(graphPatchHelp, /addLetLiteral fn="main" name="count" type="u32" value="0"/);
 assert.match(graphPatchHelp, /addReturnValue fn="identity" value="input" type="i32"/);
 const graphPatchHelpJson = json(["patch", "--op", "help", "--json"]).body;
@@ -1083,6 +1110,90 @@ assert.equal(rootQueryHello.ok, true);
 assert.equal(rootQueryHello.query.function, "main");
 assert.equal(rootQueryHello.functions.some((fun: any) => fun.name === "main"), true);
 assert.equal(zero(["view", "examples/hello.0"]).stdout, readFileSync("examples/hello.0", "utf8"));
+
+const queryScopeRoot = join("/tmp", `zero-query-scope-${process.pid}`);
+rmSync(queryScopeRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", queryScopeRoot]).body.ok, true);
+mkdirSync(join(queryScopeRoot, "src"), { recursive: true });
+writeFileSync(
+  join(queryScopeRoot, "src", "main.0"),
+  'fn dealsTotal(amount: usize) -> usize {\n    return amount + 1\n}\n\npub fn main(world: World) -> Void raises {\n    let total: usize = dealsTotal(41)\n    if total == 42 {\n        check world.out.write("query scope\\n")\n    }\n}\n',
+);
+assert.equal(json(["import", "--json", join(queryScopeRoot, "src", "main.0")]).body.ok, true);
+const queryScopeFind = json(["query", "--json", "--find", "dealsTotal", queryScopeRoot]).body;
+assert.equal(queryScopeFind.ok, true);
+const queryScopeFunctionId = queryScopeFind.matches.find((match: any) => match.kind === "Function")?.id;
+assert(queryScopeFunctionId);
+const queryScopeWholeModule = zero(["query", "--json", queryScopeRoot]);
+const queryScopeNode = json(["query", "--json", "--node", queryScopeFunctionId, queryScopeRoot]);
+assert.equal(queryScopeNode.body.ok, true);
+assert.equal(queryScopeNode.body.query.scope, "node");
+assert.equal(queryScopeNode.body.query.depth, 1);
+assert.equal(queryScopeNode.body.node.selected.id, queryScopeFunctionId);
+assert.equal(queryScopeNode.body.node.span.path, "src/main.0");
+assert(queryScopeNode.body.node.parents.length >= 1);
+assert(queryScopeNode.body.node.children.length >= 1);
+assert.equal(queryScopeNode.body.node.children.every((edge: any) => edge.children === undefined), true);
+assert.match(queryScopeNode.body.hint, /--depth <n>.*--full.*zero view --fn <name>/);
+assert(queryScopeNode.stdout.length < 4096, `node-scoped query output should stay within a few KB, got ${queryScopeNode.stdout.length}`);
+assert(queryScopeNode.stdout.length < queryScopeWholeModule.stdout.length, "node-scoped query output should be smaller than the whole-module report");
+const queryScopeDepthTwo = json(["query", "--json", "--node", queryScopeFunctionId, "--depth", "2", queryScopeRoot]).body;
+assert.equal(queryScopeDepthTwo.query.depth, 2);
+assert.equal(queryScopeDepthTwo.node.children.some((edge: any) => Array.isArray(edge.children)), true);
+const queryScopeFullModule = json(["query", "--json", "--node", queryScopeFunctionId, "--full", queryScopeRoot]).body;
+assert.equal(queryScopeFullModule.ok, true);
+assert(queryScopeFullModule.counts.nodes > 0);
+assert.equal(queryScopeFullModule.node.selected.id, queryScopeFunctionId);
+assert(Array.isArray(queryScopeFullModule.functions));
+const queryScopeBadDepth = json(["query", "--json", "--node", queryScopeFunctionId, "--depth", "0", queryScopeRoot], { allowFailure: true });
+assert.notEqual(queryScopeBadDepth.code, 0);
+assert.match(queryScopeBadDepth.body.diagnostics[0].message, /invalid query depth '0'/);
+const queryBareName = JSON.parse(execFileSync(zeroBin, ["query", "--json", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer }));
+assert.equal(queryBareName.ok, true);
+assert.equal(queryBareName.query.find, "dealsTotal");
+assert.equal(queryBareName.argument.value, "dealsTotal");
+assert.equal(queryBareName.argument.resolvedAs, "find");
+assert.match(queryBareName.argument.hint, /zero view --fn <name>/);
+assert.equal(queryBareName.matches.some((match: any) => match.kind === "Function" && match.name === "dealsTotal"), true);
+const queryBareNameText = execFileSync(zeroBin, ["query", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(queryBareNameText, /argument: dealsTotal is not an existing path; treated as --find dealsTotal/);
+assert.match(queryBareNameText, /zero view --fn <name> prints one function's source/);
+const queryMissingPathInput = zero(["query", "no-such-dir/no-such-input"], { allowFailure: true });
+assert.notEqual(queryMissingPathInput.code, 0, "path-shaped query arguments must keep file input semantics");
+const viewFunction = zero(["view", "--fn", "dealsTotal", queryScopeRoot]).stdout;
+assert.match(viewFunction, /^fn dealsTotal\(amount: usize\) -> usize \{\n/);
+assert.match(viewFunction, /return amount \+ 1/);
+assert.doesNotMatch(viewFunction, /fn main/);
+const viewFunctionMiss = zero(["view", "--fn", "dealsTotle", queryScopeRoot], { allowFailure: true });
+assert.notEqual(viewFunctionMiss.code, 0);
+const viewFunctionMissOutput = `${viewFunctionMiss.stdout}${viewFunctionMiss.stderr}`;
+assert.match(viewFunctionMissOutput, /function 'dealsTotle' not found in graph view/);
+assert.match(viewFunctionMissOutput, /close matches: dealsTotal/);
+assert.match(viewFunctionMissOutput, /zero query --find dealsTotle/);
+const diffFunction = zero(["diff", "--fn", "dealsTotal", queryScopeRoot]).stdout;
+assert.equal(diffFunction, viewFunction);
+const diffFunctionMiss = zero(["diff", "--fn", "dealsTotle", queryScopeRoot], { allowFailure: true });
+assert.notEqual(diffFunctionMiss.code, 0);
+assert.match(`${diffFunctionMiss.stdout}${diffFunctionMiss.stderr}`, /close matches: dealsTotal/);
+const diffHelp = zero(["diff", "--help"]).stdout;
+assert.match(diffHelp, /Usage: zero diff \[--fn <name>\] \[graph-input\]/);
+assert.match(diffHelp, /zero diff --fn handleLine \./);
+assert.doesNotMatch(diffHelp, /Patch usage:/);
+const queryHelp = zero(["query", "--help"]).stdout;
+assert.match(queryHelp, /Usage: zero query .*\[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/);
+assert.match(queryHelp, /zero query userTotals/);
+assert.match(queryHelp, /zero query --json --node '#decl_12ab34cd' --depth 2/);
+assert.match(queryHelp, /zero view --fn <name>/);
+const reconcileHelp = zero(["reconcile", "--help"]).stdout;
+assert.match(reconcileHelp, /Usage: zero reconcile \[--json\] <base-graph-input> --source/);
+assert.match(reconcileHelp, /zero reconcile zero\.graph --source src\/main\.0/);
+assert.match(reconcileHelp, /zero reconcile --json \. --source src\/main\.0/);
+assert.match(reconcileHelp, /zero reconcile --json baseline\.graph --source \./);
+const viewHelp = zero(["view", "--help"]).stdout;
+assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(viewHelp, /zero view --fn handleLine \./);
+assert.match(viewHelp, /close matches/);
+rmSync(queryScopeRoot, { force: true, recursive: true });
 const repoGraphStatus = json(["status", "--json", "."]).body;
 assert.equal(repoGraphStatus.ok, true);
 assert.equal(repoGraphStatus.mode, "status");
@@ -1395,6 +1506,397 @@ assert.equal(relativePackageBrokenManifestStatus.body.repositoryGraph.projection
 assert.deepEqual(relativePackageBrokenManifestStatus.body.diagnostics, []);
 const relativePackageBrokenManifestVerify = json(["verify-projection", "--json", relativePackageRoot], { allowFailure: true });
 assert.notEqual(relativePackageBrokenManifestVerify.code, 0);
+const packageRefreshRoot = join("/tmp", `zero-repo-graph-package-refresh-${process.pid}`);
+const packageRefreshSource = join(packageRefreshRoot, "src", "main.0");
+const packageRefreshStore = join(packageRefreshRoot, "zero.graph");
+rmSync(packageRefreshRoot, { force: true, recursive: true });
+const packageRefreshInit = json(["init", "--json", packageRefreshRoot]);
+assert.equal(packageRefreshInit.body.ok, true);
+const packageRefreshName = readFileSync(join(packageRefreshRoot, "zero.toml"), "utf8").match(/^name = "([^"]+)"$/m)?.[1];
+assert(packageRefreshName);
+mkdirSync(join(packageRefreshRoot, "src"), { recursive: true });
+writeFileSync(packageRefreshSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("package refresh one\\n")\n}\n');
+const packageRefreshImport = json(["import", "--json", packageRefreshSource]);
+assert.equal(packageRefreshImport.code, 0);
+assert.equal(packageRefreshImport.body.ok, true);
+const packageRefreshQuery = json(["query", "--json", "--fn", "main", packageRefreshRoot]);
+assert.equal(packageRefreshQuery.body.moduleIdentity, `package:${packageRefreshName}@0.1.0`);
+const packageRefreshMainId = packageRefreshQuery.body.functions[0].id;
+assert(packageRefreshMainId);
+assert.equal(zero(["run", packageRefreshRoot]).stdout, "package refresh one\n");
+writeFileSync(packageRefreshSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("package refresh two\\n")\n}\n');
+const packageRefreshReimport = json(["import", "--json", packageRefreshSource]);
+assert.equal(packageRefreshReimport.body.ok, true);
+assert.equal(zero(["run", packageRefreshRoot]).stdout, "package refresh two\n");
+assert.equal(json(["query", "--json", "--fn", "main", packageRefreshRoot]).body.functions[0].id, packageRefreshMainId);
+writeFileSync(packageRefreshSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("package refresh three\\n")\n}\n');
+const packageRefreshRootReimport = json(["import", "--json", packageRefreshRoot]);
+assert.equal(packageRefreshRootReimport.body.ok, true);
+assert.equal(zero(["run", packageRefreshRoot]).stdout, "package refresh three\n");
+const packageRefreshStoreHash = sha256File(packageRefreshStore);
+const packageRefreshOutRejected = json(["import", "--json", "--format", "binary", "--out", packageRefreshStore, packageRefreshSource], { allowFailure: true });
+assert.notEqual(packageRefreshOutRejected.code, 0);
+assert.equal(packageRefreshOutRejected.body.diagnostics[0].code, "RGP002");
+assert.deepEqual(packageRefreshOutRejected.body.repairCommands, [`zero import ${packageRefreshSource}`]);
+assert.equal(sha256File(packageRefreshStore), packageRefreshStoreHash);
+const packageRefreshManifestText = readFileSync(join(packageRefreshRoot, "zero.toml"), "utf8");
+writeFileSync(join(packageRefreshRoot, "zero.toml"), packageRefreshManifestText.replace('version = "0.1.0"', 'version = "0.2.0"'));
+const packageRefreshBumpImport = json(["import", "--json", packageRefreshRoot]);
+assert.equal(packageRefreshBumpImport.body.ok, true);
+assert.equal(json(["query", "--json", packageRefreshRoot]).body.moduleIdentity, `package:${packageRefreshName}@0.2.0`);
+assert.equal(zero(["run", packageRefreshRoot]).stdout, "package refresh three\n");
+writeFileSync(join(packageRefreshRoot, "zero.toml"), packageRefreshManifestText);
+assert.equal(json(["import", "--json", packageRefreshRoot]).body.ok, true);
+const packageRefreshBareRoot = join("/tmp", `zero-repo-graph-package-refresh-bare-${process.pid}`);
+rmSync(packageRefreshBareRoot, { force: true, recursive: true });
+mkdirSync(packageRefreshBareRoot, { recursive: true });
+writeFileSync(join(packageRefreshBareRoot, "main.0"), readFileSync(packageRefreshSource, "utf8"));
+assert.equal(json(["import", "--json", "--format", "binary", join(packageRefreshBareRoot, "main.0")]).body.ok, true);
+writeFileSync(packageRefreshStore, readFileSync(join(packageRefreshBareRoot, "zero.graph")));
+const packageRefreshPoisonedCheck = json(["check", "--json", packageRefreshRoot], { allowFailure: true });
+assert.notEqual(packageRefreshPoisonedCheck.code, 0);
+assert.equal(packageRefreshPoisonedCheck.body.diagnostics[0].code, "RGP007");
+assert.equal(packageRefreshPoisonedCheck.body.diagnostics[0].actual, "module:main");
+assert.match(packageRefreshPoisonedCheck.body.diagnostics[0].help, /run zero import to refresh zero\.graph/);
+assert.deepEqual(packageRefreshPoisonedCheck.body.repairCommands, [`zero import ${packageRefreshRoot}`]);
+const packageRefreshHealImport = json(["import", "--json", packageRefreshRoot]);
+assert.equal(packageRefreshHealImport.body.ok, true);
+assert.equal(zero(["run", packageRefreshRoot]).stdout, "package refresh three\n");
+const packageForeignRoot = join("/tmp", `zero-repo-graph-package-foreign-${process.pid}`);
+rmSync(packageForeignRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", packageForeignRoot]).body.ok, true);
+mkdirSync(join(packageForeignRoot, "src"), { recursive: true });
+writeFileSync(join(packageForeignRoot, "src", "main.0"), readFileSync(packageRefreshSource, "utf8"));
+assert.equal(json(["import", "--json", packageForeignRoot]).body.ok, true);
+writeFileSync(packageRefreshStore, readFileSync(join(packageForeignRoot, "zero.graph")));
+const packageForeignStoreHash = sha256File(packageRefreshStore);
+const packageForeignImport = json(["import", "--json", packageRefreshRoot], { allowFailure: true });
+assert.notEqual(packageForeignImport.code, 0);
+assert.equal(packageForeignImport.body.diagnostics[0].code, "RGP007");
+assert.equal(packageForeignImport.body.diagnostics[0].message, "repository graph source identity has a different module identity");
+assert.equal(sha256File(packageRefreshStore), packageForeignStoreHash);
+const packageForeignCheck = json(["check", "--json", packageRefreshRoot], { allowFailure: true });
+assert.notEqual(packageForeignCheck.code, 0);
+assert.equal(packageForeignCheck.body.diagnostics[0].code, "RGP007");
+rmSync(packageRefreshStore, { force: true });
+assert.equal(json(["import", "--json", packageRefreshRoot]).body.ok, true);
+assert.equal(zero(["run", packageRefreshRoot]).stdout, "package refresh three\n");
+const staleRunRoot = join("/tmp", `zero-repo-graph-stale-run-${process.pid}`);
+const staleRunSource = join(staleRunRoot, "src", "main.0");
+const staleRunStore = join(staleRunRoot, "zero.graph");
+rmSync(staleRunRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", staleRunRoot]).body.ok, true);
+mkdirSync(join(staleRunRoot, "src"), { recursive: true });
+writeFileSync(staleRunSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("stale run one\\n")\n}\n');
+assert.equal(json(["import", "--json", staleRunRoot]).body.ok, true);
+assert.equal(zero(["run", staleRunRoot]).stdout, "stale run one\n");
+writeFileSync(staleRunSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("stale run two\\n")\n}\n');
+assert.equal(json(["status", "--json", staleRunRoot]).body.repositoryGraph.projectionState, "source-stale");
+const staleRunStoreHashBefore = sha256File(staleRunStore);
+assert.equal(zero(["run", staleRunRoot]).stdout, "stale run two\n");
+assert.notEqual(sha256File(staleRunStore), staleRunStoreHashBefore);
+assert.equal(json(["status", "--json", staleRunRoot]).body.repositoryGraph.projectionState, "clean");
+writeFileSync(staleRunSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("stale run three\\n")\n}\n');
+assert.equal(zero(["check", staleRunRoot]).stdout, "ok\n");
+assert.equal(json(["status", "--json", staleRunRoot]).body.repositoryGraph.projectionState, "clean");
+assert.equal(zero(["run", staleRunRoot]).stdout, "stale run three\n");
+const staleRunGoodSource = readFileSync(staleRunSource, "utf8");
+writeFileSync(staleRunSource, `${staleRunGoodSource}fn broken( {\n`);
+const staleRunBrokenCheck = zero(["check", staleRunRoot], { allowFailure: true });
+assert.notEqual(staleRunBrokenCheck.code, 0);
+const staleRunBrokenRun = zero(["run", staleRunRoot], { allowFailure: true });
+assert.notEqual(staleRunBrokenRun.code, 0);
+writeFileSync(staleRunSource, staleRunGoodSource);
+assert.equal(zero(["run", staleRunRoot]).stdout, "stale run three\n");
+writeFileSync(staleRunSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("stale run four\\n")\n}\n');
+const staleRunStrictHash = sha256File(staleRunStore);
+const staleRunStrict = json(["build", "--json", staleRunRoot], { allowFailure: true, env: { ZERO_STALE: "fail" } });
+assert.notEqual(staleRunStrict.code, 0);
+assert.equal(staleRunStrict.body.diagnostics[0].code, "RGP008");
+assert.deepEqual(staleRunStrict.body.repairCommands, [`zero import ${staleRunRoot}`]);
+assert.equal(sha256File(staleRunStore), staleRunStrictHash);
+const staleRunStrictRun = zero(["run", staleRunRoot], { allowFailure: true, env: { ZERO_STALE: "fail" } });
+assert.notEqual(staleRunStrictRun.code, 0);
+assert.equal(zero(["run", staleRunRoot]).stdout, "stale run four\n");
+assert.equal(zero(["run", staleRunSource]).stdout, "stale run four\n");
+assert.equal(zero(["check", staleRunSource]).stdout, "ok\n");
+writeFileSync(staleRunSource, 'pub fn main(world: World) -> Void raises {\n    check world.out.write("stale run five\\n")\n}\n');
+assert.equal(zero(["run", staleRunSource]).stdout, "stale run five\n");
+assert.equal(json(["status", "--json", staleRunRoot]).body.repositoryGraph.projectionState, "clean");
+const staleMultiRoot = join("/tmp", `zero-repo-graph-stale-multi-${process.pid}`);
+const staleMultiStore = join(staleMultiRoot, "zero.graph");
+const staleMultiHelper = join(staleMultiRoot, "src", "math.0");
+rmSync(staleMultiRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", staleMultiRoot]).body.ok, true);
+mkdirSync(join(staleMultiRoot, "src"), { recursive: true });
+writeFileSync(
+  join(staleMultiRoot, "src", "main.0"),
+  'use math\n\npub fn main(world: World) -> Void raises {\n    if add_one(41) == 42 {\n        check world.out.write("stale multi one\\n")\n    }\n    if add_one(41) == 43 {\n        check world.out.write("stale multi two\\n")\n    }\n}\n',
+);
+writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
+assert.equal(json(["import", "--json", staleMultiRoot]).body.ok, true);
+assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi one\n");
+writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 2\n}\n");
+const staleMultiCheck = zeroWithStderr(["check"], { cwd: staleMultiRoot });
+assert.equal(staleMultiCheck.code, 0);
+assert.equal(staleMultiCheck.stdout, "ok\n");
+assert.match(staleMultiCheck.stderr, /note: zero check refreshed zero\.graph from the edited package source projection/);
+assert.equal(json(["status", "--json", staleMultiRoot]).body.repositoryGraph.projectionState, "clean");
+assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi two\n");
+writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
+const staleMultiStoreCheck = zeroWithStderr(["check", staleMultiStore]);
+assert.equal(staleMultiStoreCheck.code, 0);
+assert.equal(staleMultiStoreCheck.stdout, "ok\n");
+assert.match(staleMultiStoreCheck.stderr, /note: zero check refreshed zero\.graph from the edited package source projection/);
+assert.equal(json(["status", "--json", staleMultiRoot]).body.repositoryGraph.projectionState, "clean");
+writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 2\n}\n");
+const staleMultiBuild = zeroWithStderr(["build", staleMultiStore]);
+assert.equal(staleMultiBuild.code, 0);
+assert.match(staleMultiBuild.stderr, /note: zero build refreshed zero\.graph from the edited package source projection/);
+assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi two\n");
+writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
+const staleMultiView = zeroWithStderr(["view", "--fn", "add_one", staleMultiRoot]);
+assert.equal(staleMultiView.code, 0);
+assert.match(staleMultiView.stdout, /return value \+ 1/);
+assert.match(staleMultiView.stderr, /note: zero view refreshed zero\.graph from the edited package source projection/);
+assert.equal(json(["status", "--json", staleMultiRoot]).body.repositoryGraph.projectionState, "clean");
+const staleMultiPatch = json(["patch", "--json", staleMultiRoot, "--op", 'addLetLiteral fn="main" name="patched" type="u32" value="7"']);
+assert.equal(staleMultiPatch.body.ok, true);
+const staleMultiGraphNewerBuild = zeroWithStderr(["build", staleMultiRoot]);
+assert.equal(staleMultiGraphNewerBuild.code, 0);
+assert.match(staleMultiGraphNewerBuild.stderr, /note: zero build is using zero\.graph, which is newer than the \.0 source projection/);
+writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 2\n}\n");
+const staleMultiDiverged = json(["check", "--json", staleMultiRoot], { allowFailure: true });
+assert.notEqual(staleMultiDiverged.code, 0);
+assert.equal(staleMultiDiverged.body.diagnostics[0].code, "RGP006");
+assert.match(staleMultiDiverged.body.diagnostics[0].message, /have diverged/);
+assert.match(staleMultiDiverged.body.repairCommands.join("\n"), /zero import/);
+assert.match(staleMultiDiverged.body.repairCommands.join("\n"), /zero export/);
+const staleMultiDivergedBuild = json(["build", "--json", staleMultiRoot], { allowFailure: true });
+assert.notEqual(staleMultiDivergedBuild.code, 0);
+assert.equal(staleMultiDivergedBuild.body.diagnostics[0].code, "RGP006");
+assert.equal(json(["import", "--json", staleMultiRoot]).body.ok, true);
+assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi two\n");
+assert.equal(json(["status", "--json", staleMultiRoot]).body.repositoryGraph.projectionState, "clean");
+// Content-based store/source sync classification: a freshly staged workspace
+// with an edited source projection classifies source-newer and runs the
+// edited behavior with the store mtime newest, oldest, or tied, because the
+// store records a hash of the source projection at every write and mtimes
+// never decide the state.
+const stagedSyncBase = join("/tmp", `zero-staged-sync-base-${process.pid}`);
+rmSync(stagedSyncBase, { force: true, recursive: true });
+mkdirSync(join(stagedSyncBase, "src"), { recursive: true });
+writeFileSync(join(stagedSyncBase, "zero.toml"), '[package]\nname = "staged-sync"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+writeFileSync(join(stagedSyncBase, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    check world.out.write("staged one\\n")\n}\n');
+assert.equal(json(["import", "--json", stagedSyncBase]).body.ok, true);
+assert.equal(zero(["run", stagedSyncBase]).stdout, "staged one\n");
+const stagedSyncEpoch = new Date("2026-01-01T00:00:00Z");
+for (const order of ["store-newest", "store-oldest", "tied"]) {
+  const stagedRoot = join("/tmp", `zero-staged-sync-${order}-${process.pid}`);
+  rmSync(stagedRoot, { force: true, recursive: true });
+  cpSync(stagedSyncBase, stagedRoot, { recursive: true });
+  writeFileSync(join(stagedRoot, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    check world.out.write("staged two\\n")\n}\n');
+  const stagedNow = new Date();
+  const storeTime = order === "store-newest" ? stagedNow : stagedSyncEpoch;
+  const sourceTime = order === "store-oldest" ? stagedNow : stagedSyncEpoch;
+  utimesSync(join(stagedRoot, "zero.graph"), storeTime, storeTime);
+  utimesSync(join(stagedRoot, "src", "main.0"), sourceTime, sourceTime);
+  const stagedRun = zeroWithStderr(["run", stagedRoot]);
+  assert.equal(stagedRun.code, 0, `staged ${order} run exits 0`);
+  assert.equal(stagedRun.stdout, "staged two\n", `staged ${order} runs the edited behavior`);
+  assert.match(stagedRun.stderr, /refreshed zero\.graph from the edited package source projection/, `staged ${order} classifies source-newer`);
+  rmSync(stagedRoot, { force: true, recursive: true });
+}
+// A patched store stays authoritative by content even when its mtime is the
+// oldest file in the workspace.
+const stagedPatch = json(["patch", "--json", stagedSyncBase, "--op", 'addCheckWrite fn="main" text="staged patched\\n"']);
+assert.equal(stagedPatch.body.ok, true);
+utimesSync(join(stagedSyncBase, "zero.graph"), stagedSyncEpoch, stagedSyncEpoch);
+const stagedStoreNewer = zeroWithStderr(["run", stagedSyncBase]);
+assert.equal(stagedStoreNewer.code, 0);
+assert.equal(stagedStoreNewer.stdout, "staged one\nstaged patched\n");
+assert.match(stagedStoreNewer.stderr, /is using zero\.graph, which is newer than the \.0 source projection/);
+// zero export refreshes the recorded source projection hash so a source edit
+// after the export classifies source-newer instead of diverged.
+const stagedExport = json(["export", "--json", stagedSyncBase]);
+assert.equal(stagedExport.body.ok, true);
+assert.equal(stagedExport.body.changedPaths.includes(join(stagedSyncBase, "zero.graph")), true);
+writeFileSync(join(stagedSyncBase, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    check world.out.write("staged three\\n")\n}\n');
+utimesSync(join(stagedSyncBase, "src", "main.0"), stagedSyncEpoch, stagedSyncEpoch);
+const stagedAfterExport = zeroWithStderr(["run", stagedSyncBase]);
+assert.equal(stagedAfterExport.code, 0);
+assert.equal(stagedAfterExport.stdout, "staged three\n");
+assert.match(stagedAfterExport.stderr, /refreshed zero\.graph from the edited package source projection/);
+// Editing the source while the store holds unexported patches is a genuine
+// divergence regardless of mtimes.
+assert.equal(json(["patch", "--json", stagedSyncBase, "--op", 'addCheckWrite fn="main" text="staged patched again\\n"']).body.ok, true);
+writeFileSync(join(stagedSyncBase, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    check world.out.write("staged four\\n")\n}\n');
+const stagedDiverged = json(["check", "--json", stagedSyncBase], { allowFailure: true });
+assert.notEqual(stagedDiverged.code, 0);
+assert.equal(stagedDiverged.body.diagnostics[0].code, "RGP006");
+rmSync(stagedSyncBase, { force: true, recursive: true });
+// Stores written before the recorded source projection hash existed degrade
+// to one reconciling source refresh instead of an error wall, and the
+// refresh records the hash.
+const legacySyncRoot = join("/tmp", `zero-legacy-sync-${process.pid}`);
+rmSync(legacySyncRoot, { force: true, recursive: true });
+mkdirSync(join(legacySyncRoot, "src"), { recursive: true });
+writeFileSync(join(legacySyncRoot, "zero.toml"), '[package]\nname = "legacy-sync"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+writeFileSync(join(legacySyncRoot, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    check world.out.write("legacy one\\n")\n}\n');
+assert.equal(json(["import", "--json", "--format", "text", legacySyncRoot]).body.ok, true);
+const legacyStorePath = join(legacySyncRoot, "zero.graph");
+const legacyStoreText = readFileSync(legacyStorePath, "utf8");
+assert.match(legacyStoreText, /\nsourceHash "src:[0-9a-f]{16}"\n/);
+writeFileSync(legacyStorePath, legacyStoreText.replace(/\nsourceHash "[^"]*"/, ""));
+writeFileSync(join(legacySyncRoot, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    check world.out.write("legacy two\\n")\n}\n');
+utimesSync(join(legacySyncRoot, "src", "main.0"), stagedSyncEpoch, stagedSyncEpoch);
+const legacyRun = zeroWithStderr(["run", legacySyncRoot]);
+assert.equal(legacyRun.code, 0);
+assert.equal(legacyRun.stdout, "legacy two\n");
+assert.match(legacyRun.stderr, /refreshed zero\.graph from the edited package source projection/);
+assert.match(readFileSync(legacyStorePath, "utf8"), /\nsourceHash "src:[0-9a-f]{16}"\n/);
+rmSync(legacySyncRoot, { force: true, recursive: true });
+// One diagnostic oracle for the sync verbs: zero check, zero import, and
+// zero patch revalidation accept the same code (Span<T> helpers through
+// std.mem.prefix, integer-literal returns in plain helpers, and ref<shape>
+// parameters), revalidation reports every introduced diagnostic in one
+// shot, and pre-existing diagnostics print as notes instead of walls.
+const oracleAlignRoot = join("/tmp", `zero-oracle-align-${process.pid}`);
+rmSync(oracleAlignRoot, { force: true, recursive: true });
+mkdirSync(join(oracleAlignRoot, "src"), { recursive: true });
+writeFileSync(join(oracleAlignRoot, "zero.toml"), '[package]\nname = "oracle-align"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+const oracleAlignSource = [
+  "pub type Pair {",
+  "    left: u64,",
+  "    right: u64,",
+  "}",
+  "",
+  "fn headBytes(bytes: Span<u8>, len: usize) -> Span<u8> {",
+  "    return std.mem.prefix(bytes, len)",
+  "}",
+  "",
+  "fn limit() -> usize {",
+  "    return 5",
+  "}",
+  "",
+  "pub fn pairLeft(p: ref<Pair>) -> u64 {",
+  "    return p.left",
+  "}",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  '    let text: String = "alignment"',
+  "    let head: Span<u8> = headBytes(text, limit())",
+  "    if std.mem.len(head) == 5 {",
+  '        check world.out.write("aligned\\n")',
+  "    }",
+  "}",
+  "",
+].join("\n");
+writeFileSync(join(oracleAlignRoot, "src", "main.0"), oracleAlignSource);
+assert.equal(json(["import", "--json", oracleAlignRoot]).body.ok, true);
+assert.equal(zero(["check", oracleAlignRoot]).stdout, "ok\n");
+assert.equal(zero(["run", oracleAlignRoot]).stdout, "aligned\n");
+const oracleAlignPatch = json(["patch", "--json", oracleAlignRoot, "--op", 'addLetLiteral fn="main" name="probe" type="u32" value="1"']);
+assert.equal(oracleAlignPatch.body.ok, true);
+// a deliberate bad payload still fails with the diagnostic list and leaves
+// the store untouched
+const oracleHashBefore = json(["status", "--json", oracleAlignRoot]).body.store.graphHash;
+const oracleBadPatch = json(["patch", "--json", oracleAlignRoot, "--op", 'addReturnValue fn="limit" value="no_such_binding" type="usize"'], { allowFailure: true });
+assert.notEqual(oracleBadPatch.code, 0);
+assert.equal(oracleBadPatch.body.ok, false);
+assert.equal(oracleBadPatch.body.diagnostics[0].code, "NAM003");
+assert.equal(json(["status", "--json", oracleAlignRoot]).body.store.graphHash, oracleHashBefore);
+// an import that introduces two diagnostics reports both in one shot
+assert.equal(json(["export", "--json", oracleAlignRoot]).body.ok, true);
+writeFileSync(join(oracleAlignRoot, "src", "main.0"), oracleAlignSource.replace('    if std.mem.len(head) == 5 {', "    check world.out.write(missing_one)\n    check world.out.write(missing_two)\n    if std.mem.len(head) == 5 {"));
+const oracleMultiImport = json(["import", "--json", oracleAlignRoot], { allowFailure: true });
+assert.notEqual(oracleMultiImport.code, 0);
+assert.equal(oracleMultiImport.body.diagnostics.length, 2);
+assert.equal(oracleMultiImport.body.diagnostics[0].code, "NAM003");
+assert.equal(oracleMultiImport.body.diagnostics[1].code, "NAM003");
+rmSync(oracleAlignRoot, { force: true, recursive: true });
+// pre-existing diagnostics report as notes, not walls: the TAR002 a
+// capability-less target reports in zero check predates the patch, so a
+// valid op still applies and the note points back at zero check
+const oraclePreRoot = join("/tmp", `zero-oracle-preexisting-${process.pid}`);
+rmSync(oraclePreRoot, { force: true, recursive: true });
+mkdirSync(join(oraclePreRoot, "src"), { recursive: true });
+writeFileSync(join(oraclePreRoot, "zero.toml"), '[package]\nname = "oracle-preexisting"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+writeFileSync(join(oraclePreRoot, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    let a1: Maybe<String> = std.args.get(1)\n    if a1.has {\n        check world.out.write(a1.value)\n    }\n    check world.out.write("done\\n")\n}\n');
+assert.equal(json(["import", "--json", oraclePreRoot]).body.ok, true);
+// win32-x64.exe is a direct-backend cross target on every CI host, so the
+// Args-capability gap is host-independent (linux-x64 resolves to the hosted
+// backend on linux runners and reports nothing).
+const oraclePreCheck = json(["check", "--json", "--target", "win32-x64.exe", oraclePreRoot], { allowFailure: true });
+assert.notEqual(oraclePreCheck.code, 0);
+assert.equal(oraclePreCheck.body.diagnostics[0].code, "TAR002");
+const oraclePrePatch = zeroWithStderr(["patch", "--target", "win32-x64.exe", oraclePreRoot, "--op", 'addLetLiteral fn="main" name="probe" type="u32" value="1"']);
+assert.equal(oraclePrePatch.code, 0);
+assert.match(oraclePrePatch.stdout, /program graph patch ok/);
+assert.match(oraclePrePatch.stderr, /pre-existing diagnostic predates this patch and did not block it/);
+assert.match(oraclePrePatch.stderr, /TAR002: target does not provide required Args capability/);
+rmSync(oraclePreRoot, { force: true, recursive: true });
+// a store whose recorded projection already fails the compiler typecheck
+// (checker drift, stores written by older compilers) does not wall the
+// import of unchanged files: the failure prints as a note and the refresh
+// proceeds, so one pre-existing diagnostic never costs a whack-a-mole round
+const oracleDriftRoot = join("/tmp", `zero-oracle-drift-${process.pid}`);
+rmSync(oracleDriftRoot, { force: true, recursive: true });
+mkdirSync(join(oracleDriftRoot, "src"), { recursive: true });
+writeFileSync(join(oracleDriftRoot, "zero.toml"), '[package]\nname = "oracle-drift"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+writeFileSync(join(oracleDriftRoot, "src", "main.0"), 'fn want(v: u32) -> u32 {\n    return v\n}\n\npub fn main(world: World) -> Void raises {\n    let r: u32 = want(1_u32)\n    if r == 1 {\n        check world.out.write("drift ok\\n")\n    }\n}\n');
+assert.equal(json(["import", "--json", "--format", "text", oracleDriftRoot]).body.ok, true);
+const oracleDriftStorePath = join(oracleDriftRoot, "zero.graph");
+writeFileSync(oracleDriftStorePath, readFileSync(oracleDriftStorePath, "utf8").replace("want(1_u32)", 'want(\\"text\\")'));
+writeFileSync(join(oracleDriftRoot, "src", "main.0"), readFileSync(join(oracleDriftRoot, "src", "main.0"), "utf8").replace("want(1_u32)", 'want("text")'));
+const oracleDriftImport = zeroWithStderr(["import", oracleDriftRoot]);
+assert.equal(oracleDriftImport.code, 0);
+assert.match(oracleDriftImport.stdout, /repository graph import ok/);
+assert.match(oracleDriftImport.stderr, /note: a pre-existing diagnostic predates this import and did not block it \(the file is unchanged since the last sync\)/);
+assert.equal(json(["status", "--json", oracleDriftRoot]).body.repositoryGraph.projectionState, "clean");
+assert.equal(zero(["check", oracleDriftRoot]).stdout, "ok\n");
+rmSync(oracleDriftRoot, { force: true, recursive: true });
+const reconcileScaleRoot = join("/tmp", `zero-reconcile-scale-${process.pid}`);
+const reconcileScaleSource = join(reconcileScaleRoot, "src", "main.0");
+rmSync(reconcileScaleRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", reconcileScaleRoot]).body.ok, true);
+mkdirSync(join(reconcileScaleRoot, "src"), { recursive: true });
+const reconcileScaleFunctions: string[] = [];
+for (let i = 0; i < 240; i++) {
+  reconcileScaleFunctions.push([
+    `fn helper${i}(x: usize) -> usize {`,
+    "    var a: usize = x",
+    ...Array.from({ length: 8 }, (_, j) => `    a = a + ${i * 8 + j + 1}_usize`),
+    "    return a",
+    "}",
+  ].join("\n"));
+}
+const reconcileScaleMain = 'pub fn main(world: World) -> Void raises {\n    check world.out.write("reconcile scale\\n")\n}';
+writeFileSync(reconcileScaleSource, `${reconcileScaleFunctions.join("\n\n")}\n\n${reconcileScaleMain}\n`);
+assert.equal(json(["import", "--json", reconcileScaleRoot]).body.ok, true);
+const reconcileScaleNeedle = "fn helper120(x: usize) -> usize {\n    var a: usize = x";
+const reconcileScaleText = readFileSync(reconcileScaleSource, "utf8");
+assert(reconcileScaleText.includes(reconcileScaleNeedle));
+writeFileSync(reconcileScaleSource, reconcileScaleText.replace(reconcileScaleNeedle, `${reconcileScaleNeedle}\n    var inserted: usize = a + 7001_usize\n    inserted = inserted + 7003_usize\n    a = a + inserted`));
+const reconcileScaleStarted = Date.now();
+let reconcileScaleStdout = "";
+try {
+  reconcileScaleStdout = execFileSync(zeroBin, ["reconcile", "--json", reconcileScaleRoot, "--source", reconcileScaleSource], { encoding: "utf8", maxBuffer: execMaxBuffer, stdio: ["ignore", "pipe", "pipe"], timeout: 120000 });
+} catch (error) {
+  assert(false, `zero reconcile on a multi-statement insertion into a large package did not complete: ${error.signal ?? error.status}`);
+}
+const reconcileScaleElapsed = Date.now() - reconcileScaleStarted;
+assert(reconcileScaleElapsed < 60000, `zero reconcile on a large package took ${reconcileScaleElapsed}ms`);
+if (reconcileScaleStdout) {
+  const reconcileScale = JSON.parse(reconcileScaleStdout);
+  assert.equal(reconcileScale.ok, true);
+  assert.equal(reconcileScale.identity.moduleIdentityChanged, false);
+  assert.equal(reconcileScale.identity.ambiguous, 0);
+  assert(reconcileScale.identity.inserted > 0);
+  assert(reconcileScale.identity.unchanged > 0);
+}
+assert.equal(zero(["run", reconcileScaleRoot]).stdout, "reconcile scale\n");
+assert.equal(json(["status", "--json", reconcileScaleRoot]).body.repositoryGraph.projectionState, "clean");
 const postCheckWriteFailureRoot = join("/tmp", `zero-repo-graph-post-check-write-${process.pid}`);
 const postCheckWriteFailureHelper = join(postCheckWriteFailureRoot, "src", "helper.0");
 rmSync(postCheckWriteFailureRoot, { force: true, recursive: true });
@@ -1617,8 +2119,15 @@ rmSync(copiedRepoGraphRootA, { force: true, recursive: true });
 rmSync(copiedRepoGraphRootB, { force: true, recursive: true });
 mkdirSync(copiedRepoGraphRootA, { recursive: true });
 mkdirSync(copiedRepoGraphRootB, { recursive: true });
-writeFileSync(join(copiedRepoGraphRootA, "main.0"), readFileSync("conformance/check/pass/checker-type-forms.0", "utf8"));
-writeFileSync(join(copiedRepoGraphRootB, "main.0"), readFileSync("conformance/check/pass/checker-type-forms.0", "utf8"));
+const copiedRepoGraphSourceText = `pub fn main(world: World) -> Void raises {
+    let total: i32 = 41 + 1
+    if total == 42 {
+        check world.out.write("copied graph source ok\\n")
+    }
+}
+`;
+writeFileSync(join(copiedRepoGraphRootA, "main.0"), copiedRepoGraphSourceText);
+writeFileSync(join(copiedRepoGraphRootB, "main.0"), copiedRepoGraphSourceText);
 const copiedRepoGraphSourceA = join(copiedRepoGraphRootA, "main.0");
 const copiedRepoGraphSourceB = join(copiedRepoGraphRootB, "main.0");
 json(["import", "--format", "text", "--json", copiedRepoGraphSourceA]);
@@ -1626,7 +2135,7 @@ writeFileSync(join(copiedRepoGraphRootB, "zero.graph"), readFileSync(join(copied
 const copiedRepoGraphVerify = json(["verify-projection", "--json", copiedRepoGraphSourceB]);
 assert.equal(copiedRepoGraphVerify.code, 0);
 assert.equal(copiedRepoGraphVerify.body.ok, true);
-writeFileSync(copiedRepoGraphSourceB, readFileSync(copiedRepoGraphSourceB, "utf8").replace("checker type forms ok", "checker copied graph store"));
+writeFileSync(copiedRepoGraphSourceB, readFileSync(copiedRepoGraphSourceB, "utf8").replace("copied graph source ok", "checker copied graph store"));
 const copiedRepoGraphVerifyDrift = json(["verify-projection", "--json", copiedRepoGraphSourceB], { allowFailure: true });
 assert.notEqual(copiedRepoGraphVerifyDrift.code, 0);
 assert.equal(copiedRepoGraphVerifyDrift.body.diagnostics[0].code, "RGP006");
@@ -1871,6 +2380,71 @@ assert(ambiguousSiblingRepoGraphStoreAfter.includes(`node ${ambiguousSiblingRepo
 const ambiguousSiblingRepoGraphAppendedId = ambiguousSiblingRepoGraphStoreAfter.match(/^node (#[^ ]+) Function name:"appendedHelper"/m)?.[1];
 assert(ambiguousSiblingRepoGraphAppendedId);
 assert.notEqual(ambiguousSiblingRepoGraphAppendedId, ambiguousSiblingRepoGraphHelperId);
+const insertRunRepoGraphRoot = join("/tmp", `zero-repo-graph-insert-run-${process.pid}`);
+const insertRunRepoGraphSource = join(insertRunRepoGraphRoot, "main.0");
+const insertRunRepoGraphStore = join(insertRunRepoGraphRoot, "zero.graph");
+rmSync(insertRunRepoGraphRoot, { force: true, recursive: true });
+mkdirSync(insertRunRepoGraphRoot, { recursive: true });
+const insertRunRepoGraphOriginal = `fn fill(out: MutSpan<u8>, n: usize) -> usize {
+    var i: usize = 0
+    var p: usize = 0
+    while i < n {
+        p = p + 1_usize
+        i = i + 1_usize
+    }
+    return p
+}
+
+pub fn main(world: World) -> Void raises {
+    check world.out.write("insert run ok\\n")
+}
+`;
+writeFileSync(insertRunRepoGraphSource, insertRunRepoGraphOriginal);
+json(["import", "--format", "text", "--json", insertRunRepoGraphSource]);
+const insertRunRepoGraphStoreBefore = readFileSync(insertRunRepoGraphStore, "utf8");
+const insertRunRepoGraphWhileId = insertRunRepoGraphStoreBefore.match(/^node (#[^ ]+) While/m)?.[1];
+const insertRunRepoGraphReturnId = insertRunRepoGraphStoreBefore.match(/^node (#[^ ]+) Return path:"main\.0" line:8/m)?.[1];
+assert(insertRunRepoGraphWhileId);
+assert(insertRunRepoGraphReturnId);
+assert(!insertRunRepoGraphWhileId.includes("-"));
+writeFileSync(
+  insertRunRepoGraphSource,
+  insertRunRepoGraphOriginal.replace(
+    "    while i < n {",
+    "    var padded: usize = 0\n    while padded < n {\n        padded = padded + 1_usize\n    }\n    var spill: usize = padded\n    while i < n {",
+  ),
+);
+const insertRunRepoGraphSync = json(["import", "--format", "text", "--json", insertRunRepoGraphSource]);
+assert.equal(insertRunRepoGraphSync.code, 0);
+assert.equal(insertRunRepoGraphSync.body.repositoryGraph.projectionState, "clean");
+const insertRunRepoGraphStoreAfter = readFileSync(insertRunRepoGraphStore, "utf8");
+assert(insertRunRepoGraphStoreAfter.includes(`node ${insertRunRepoGraphWhileId} While`));
+assert(insertRunRepoGraphStoreAfter.includes(`node ${insertRunRepoGraphReturnId} Return`));
+const insertRunRepoGraphWhileIds = [...insertRunRepoGraphStoreAfter.matchAll(/^node (#[^ ]+) While/gm)].map((m) => m[1]);
+assert.equal(insertRunRepoGraphWhileIds.length, 2);
+assert(insertRunRepoGraphWhileIds.includes(insertRunRepoGraphWhileId));
+const ambiguousRunRepoGraphRoot = join("/tmp", `zero-repo-graph-ambiguous-run-${process.pid}`);
+const ambiguousRunRepoGraphSource = join(ambiguousRunRepoGraphRoot, "main.0");
+const ambiguousRunRepoGraphStore = join(ambiguousRunRepoGraphRoot, "zero.graph");
+rmSync(ambiguousRunRepoGraphRoot, { force: true, recursive: true });
+mkdirSync(ambiguousRunRepoGraphRoot, { recursive: true });
+writeFileSync(ambiguousRunRepoGraphSource, insertRunRepoGraphOriginal);
+json(["import", "--format", "text", "--json", ambiguousRunRepoGraphSource]);
+const ambiguousRunRepoGraphStoreBefore = readFileSync(ambiguousRunRepoGraphStore, "utf8");
+writeFileSync(
+  ambiguousRunRepoGraphSource,
+  insertRunRepoGraphOriginal.replace(
+    "    while i < n {",
+    "    var padded: usize = 0\n    while padded < n {\n        padded = padded + 1_usize\n    }\n    while i <= n {",
+  ),
+);
+const ambiguousRunRepoGraphSync = json(["import", "--format", "text", "--json", ambiguousRunRepoGraphSource], { allowFailure: true });
+assert.notEqual(ambiguousRunRepoGraphSync.code, 0);
+assert.equal(ambiguousRunRepoGraphSync.body.diagnostics[0].code, "RGP007");
+assert.equal(ambiguousRunRepoGraphSync.body.diagnostics[0].message, "repository graph source identity is ambiguous");
+assert.match(ambiguousRunRepoGraphSync.body.diagnostics[0].actual, /matches 2 edited candidates at main\.0:\d+-\d+/);
+assert.match(ambiguousRunRepoGraphSync.body.diagnostics[0].help, /split the text edit: import the change touching main\.0:\d+-\d+ on its own first/);
+assert.equal(readFileSync(ambiguousRunRepoGraphStore, "utf8"), ambiguousRunRepoGraphStoreBefore);
 const mergeRepoGraphRoot = join("/tmp", `zero-repo-graph-merge-${process.pid}`);
 const mergeRepoGraphSource = join(mergeRepoGraphRoot, "main.0");
 const mergeRepoGraphStore = join(mergeRepoGraphRoot, "zero.graph");
@@ -2726,8 +3300,12 @@ assert.match(repositoryBlockView, /check world\.out\.write\("hello anonymous\\n"
 assert.equal(zero(["check", graphRepositoryPatchPackageDir]).stdout, "ok\n");
 assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "name: Ada\n");
 assert.match(zero(["status", graphRepositoryPatchPackageDir]).stdout, /source-stale/);
+const statusStorePathStdout = zero(["status", join(graphRepositoryPatchPackageDir, "zero.graph")]).stdout;
+assert.match(statusStorePathStdout, /repository graph status: source-stale/);
+assert.match(statusStorePathStdout, new RegExp(`root: ${graphRepositoryPatchPackageDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\n`));
 assert.match(zero(["export", graphRepositoryPatchPackageDir]).stdout, /repository graph export ok/);
 assert.equal(zero(["verify-projection", graphRepositoryPatchPackageDir]).stdout, "repository graph verify-projection ok\n");
+assert.equal(zero(["verify-projection", join(graphRepositoryPatchPackageDir, "zero.graph")]).stdout, "repository graph verify-projection ok\n");
 const repositoryRowQueryJson = json(["query", "--json", graphRepositoryPatchPackageDir]).body;
 writeFileSync(graphRepositoryCheckExprPatchPath, [
   "zero-program-graph-patch v1",
@@ -2814,6 +3392,192 @@ const repositoryInvalidBodyPatch = json(["patch", "--json", graphRepositoryPatch
 assert.notEqual(repositoryInvalidBodyPatch.code, 0);
 assert.equal(repositoryInvalidBodyPatch.body.diagnostics[0].code, "ERR003");
 assert.equal(json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash, repositorySyncedQueryJson.graphHash);
+const replaceFnBodyPath = join(outDir, "repository-graph.replace-fn.body");
+writeFileSync(replaceFnBodyPath, [
+  "  let name: Maybe<String> = std.args.get(1)",
+  "  if name.has {",
+  "    check world.out.write(\"hi \")",
+  "    check world.out.write(name.value)",
+  "    check world.out.write(\"\\n\")",
+  "  } else {",
+  "    check world.out.write(\"hi anonymous\\n\")",
+  "  }",
+  "",
+].join("\n"));
+const replaceFnPatchJson = json(["patch", "--json", graphRepositoryPatchPackageDir, "--expect-graph-hash", repositorySyncedQueryJson.graphHash, "--replace-fn", "main", "--body-file", replaceFnBodyPath]).body;
+assert.equal(replaceFnPatchJson.ok, true);
+assert.equal(replaceFnPatchJson.patch, replaceFnBodyPath);
+assert.equal(replaceFnPatchJson.operationCount, 1);
+assert.equal(replaceFnPatchJson.operations[0].op, "replaceFunctionBody");
+assert.equal(replaceFnPatchJson.saved.path, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.match(zero(["view", "--fn", "main", graphRepositoryPatchPackageDir]).stdout, /check world\.out\.write\("hi "\)/);
+assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "hi Ada\n");
+const replaceFnStaleHash = json(["patch", "--json", graphRepositoryPatchPackageDir, "--expect-graph-hash", repositorySyncedQueryJson.graphHash, "--replace-fn", "main", "--body-file", replaceFnBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnStaleHash.code, 0);
+assert.equal(replaceFnStaleHash.body.diagnostic.code, "GPH002");
+const replaceFnInvalidBodyPath = join(outDir, "repository-graph.replace-fn.invalid.body");
+writeFileSync(replaceFnInvalidBodyPath, "  let same Bool = std.mem.eql (std.mem.span name \"Ada\"\n");
+const replaceFnInvalidText = zero(["patch", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", replaceFnInvalidBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnInvalidText.code, 0);
+assert.match(replaceFnInvalidText.stderr, /replaceFunctionBody rows did not parse as a Zero function body/);
+assert.match(replaceFnInvalidText.stderr, /row 1: let same Bool = std\.mem\.eql \(std\.mem\.span name "Ada"/);
+const replaceFnInvalidJson = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", replaceFnInvalidBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnInvalidJson.code, 0);
+assert.equal(replaceFnInvalidJson.body.diagnostic.code, "GPH001");
+assert.match(replaceFnInvalidJson.body.diagnostic.actual, /row 1: let same Bool = std\.mem\.eql/);
+const replaceFnEmptyBodyPath = join(outDir, "repository-graph.replace-fn.empty.body");
+writeFileSync(replaceFnEmptyBodyPath, "\n");
+const replaceFnEmptyJson = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", replaceFnEmptyBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnEmptyJson.code, 0);
+assert.equal(replaceFnEmptyJson.body.diagnostic.code, "GPH001");
+assert.equal(replaceFnEmptyJson.body.diagnostic.message, "function body file is empty");
+const replaceFnMissingBodyFlag = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main"], { allowFailure: true });
+assert.notEqual(replaceFnMissingBodyFlag.code, 0);
+assert.match(replaceFnMissingBodyFlag.body.diagnostics[0].message, /needs both --replace-fn and --body-file/);
+assert.equal(replaceFnMissingBodyFlag.body.diagnostics[0].actual, "missing --body-file");
+const replaceFnAmbiguousSource = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryBodyPatchPath, "--replace-fn", "main", "--body-file", replaceFnBodyPath], { allowFailure: true });
+assert.notEqual(replaceFnAmbiguousSource.code, 0);
+assert.match(replaceFnAmbiguousSource.body.diagnostics[0].message, /graph patch source is ambiguous/);
+const genericPatchRoot = join(outDir, "repository-graph-generic-patch");
+rmSync(genericPatchRoot, { recursive: true, force: true });
+mkdirSync(join(genericPatchRoot, "src"), { recursive: true });
+writeZeroTomlSync(genericPatchRoot, { package: { name: "generic-patch", version: "0.1.0" }, targets: { cli: { kind: "exe", main: "src/main.0" } } });
+writeFileSync(join(genericPatchRoot, "src", "main.0"), [
+  "fn tail(data: Span<u8>, offset: usize) -> Span<u8> {",
+  "    return std.mem.dropPrefix(data, offset)",
+  "}",
+  "",
+  "fn pick(data: Span<u8>, limit: usize) -> usize {",
+  "    var i: usize = 0",
+  "    var total: usize = 0",
+  "    while i < limit {",
+  "        total = total + std.mem.len(tail(data, i))",
+  "        i = i + 1_usize",
+  "    }",
+  "    return total",
+  "}",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  "    let bytes: Span<u8> = \"abc\"",
+  "    if pick(bytes, 2) > 0 {",
+  "        check world.out.write(\"generic patch ok\\n\")",
+  "    }",
+  "}",
+  "",
+].join("\n"));
+assert.equal(json(["import", "--format", "text", "--json", genericPatchRoot]).code, 0);
+assert.equal(zero(["check", genericPatchRoot]).stdout, "ok\n");
+const genericPatchDump = zero(["dump", genericPatchRoot]).stdout;
+const genericComparisonNode = genericPatchDump.match(/node (#\S+) Call name:"<"/);
+assert(genericComparisonNode, "expected a comparison Call node in the generic-bearing package dump");
+const genericOperatorFlip = json(["patch", "--json", genericPatchRoot, "--op", `set node="${genericComparisonNode[1]}" field="name" expect="<" value="<="`]).body;
+assert.equal(genericOperatorFlip.ok, true);
+assert.equal(genericOperatorFlip.operations[0].ok, true);
+assert.equal(zero(["check", genericPatchRoot]).stdout, "ok\n");
+assert.match(zero(["view", genericPatchRoot]).stdout, /while i <= limit/);
+assert.equal(zero(["run", genericPatchRoot]).stdout, "generic patch ok\n");
+const genericViewBodyQuery = json(["query", "--json", genericPatchRoot]).body;
+const genericViewSource = zero(["view", genericPatchRoot]).stdout.split("\n");
+const genericPickStart = genericViewSource.findIndex((line) => line.startsWith("fn pick("));
+assert(genericPickStart >= 0, "expected zero view to print fn pick");
+const genericPickBody: string[] = [];
+let genericPickDepth = 0;
+for (const line of genericViewSource.slice(genericPickStart)) {
+  genericPickDepth += (line.match(/\{/g) ?? []).length - (line.match(/\}/g) ?? []).length;
+  genericPickBody.push(line);
+  if (genericPickDepth === 0 && genericPickBody.length > 1) break;
+}
+const genericVerbatimPatchPath = join(outDir, "repository-graph-generic-verbatim.patch");
+writeFileSync(genericVerbatimPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${genericViewBodyQuery.graphHash}"`,
+  "replaceFunctionBody pick",
+  ...genericPickBody.slice(1, -1).map((line) => `  ${line}`),
+  "end",
+  "",
+].join("\n"));
+const genericVerbatimPatch = json(["patch", "--json", genericPatchRoot, genericVerbatimPatchPath]).body;
+assert.equal(genericVerbatimPatch.ok, true);
+assert.equal(genericVerbatimPatch.operations[0].op, "replaceFunctionBody");
+assert.equal(zero(["check", genericPatchRoot]).stdout, "ok\n");
+assert.equal(zero(["run", genericPatchRoot]).stdout, "generic patch ok\n");
+const genericTypedRowsQuery = json(["query", "--json", genericPatchRoot]).body;
+const genericTypedRowsPatchPath = join(outDir, "repository-graph-generic-typed-rows.patch");
+writeFileSync(genericTypedRowsPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${genericTypedRowsQuery.graphHash}"`,
+  "replaceFunctionBody pick",
+  "  let n: usize = std.mem.len(tail(data, 0))",
+  "  var total: usize = 0",
+  "  if n > 0 && limit > 0 {",
+  "      total = n + limit",
+  "  } else {",
+  "      total = limit",
+  "  }",
+  "  return total",
+  "end",
+  "",
+].join("\n"));
+const genericTypedRowsPatch = json(["patch", "--json", genericPatchRoot, genericTypedRowsPatchPath]).body;
+assert.equal(genericTypedRowsPatch.ok, true);
+assert.equal(genericTypedRowsPatch.operations[0].op, "replaceFunctionBody");
+const genericTypedRowsView = zero(["view", genericPatchRoot]).stdout;
+assert.match(genericTypedRowsView, /let n: usize = std\.mem\.len\(tail\(data, 0\)\)/);
+assert.match(genericTypedRowsView, /if n > 0 && limit > 0/);
+assert.equal(zero(["check", genericPatchRoot]).stdout, "ok\n");
+const genericUnknownOpPatchPath = join(outDir, "repository-graph-generic-unknown-op.patch");
+writeFileSync(genericUnknownOpPatchPath, [
+  "zero-program-graph-patch v1",
+  'setNodeField node="#missing" value="oops"',
+  "",
+].join("\n"));
+const genericUnknownOp = json(["patch", "--json", "--check-only", genericPatchRoot, genericUnknownOpPatchPath], { allowFailure: true });
+assert.notEqual(genericUnknownOp.code, 0);
+assert.equal(genericUnknownOp.body.diagnostic.code, "GPH001");
+assert.match(genericUnknownOp.body.diagnostic.message, /unknown program graph patch operation/);
+assert.match(genericUnknownOp.body.diagnostic.message, /zero patch --op help/);
+assert.match(genericUnknownOp.body.diagnostic.expected, /set, insert, insertEdge, replace, delete, rename/);
+assert.match(genericUnknownOp.body.diagnostic.expected, /replaceFunctionBody/);
+assert.equal(genericUnknownOp.body.diagnostic.line, 2);
+const genericUnknownOpText = zero(["patch", "--check-only", genericPatchRoot, genericUnknownOpPatchPath], { allowFailure: true });
+assert.notEqual(genericUnknownOpText.code, 0);
+assert.match(genericUnknownOpText.stderr, /unknown program graph patch operation/);
+assert.match(genericUnknownOpText.stderr, new RegExp(`${genericUnknownOpPatchPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2: setNodeField`));
+assert.match(genericUnknownOpText.stderr, /help: a minimal complete patch file looks exactly like this:\nzero-program-graph-patch v1\nreplaceFunctionBody main\n {2}check world\.out\.write "hello\\n"\nend\n/);
+const genericMissingHeaderPatchPath = join(outDir, "repository-graph-generic-missing-header.patch");
+writeFileSync(genericMissingHeaderPatchPath, [
+  "replaceFunctionBody main",
+  '  check world.out.write("missing header\\n")',
+  "end",
+  "",
+].join("\n"));
+const genericMissingHeader = zero(["patch", "--check-only", genericPatchRoot, genericMissingHeaderPatchPath], { allowFailure: true });
+assert.notEqual(genericMissingHeader.code, 0);
+assert.match(genericMissingHeader.stderr, /unknown program graph patch schema/);
+assert.match(genericMissingHeader.stderr, new RegExp(`${genericMissingHeaderPatchPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:1: replaceFunctionBody main`));
+assert.match(genericMissingHeader.stderr, /expected: zero-program-graph-patch v1/);
+assert.match(genericMissingHeader.stderr, /help: a minimal complete patch file looks exactly like this:/);
+const genericMissingEndPatchPath = join(outDir, "repository-graph-generic-missing-end.patch");
+writeFileSync(genericMissingEndPatchPath, [
+  "zero-program-graph-patch v1",
+  "replaceFunctionBody main",
+  '  check world.out.write("missing end\\n")',
+  "",
+].join("\n"));
+const genericMissingEnd = zero(["patch", "--check-only", genericPatchRoot, genericMissingEndPatchPath], { allowFailure: true });
+assert.notEqual(genericMissingEnd.code, 0);
+assert.match(genericMissingEnd.stderr, /body replacement is missing end marker/);
+assert.match(genericMissingEnd.stderr, new RegExp(`${genericMissingEndPatchPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2: replaceFunctionBody main`));
+assert.match(genericMissingEnd.stderr, /help: a minimal complete patch file looks exactly like this:/);
+const genericIndentedHeaderPatchPath = join(outDir, "repository-graph-generic-indented-header.patch");
+writeFileSync(genericIndentedHeaderPatchPath, [
+  "  zero-program-graph-patch v1",
+  "  replaceFunctionBody main",
+  '    check world.out.write("indented header ok\\n")',
+  "  end",
+  "",
+].join("\n"));
+assert.match(zero(["patch", "--check-only", genericPatchRoot, genericIndentedHeaderPatchPath]).stdout, /^program graph patch ok \(check-only\)\n/);
 const checkedInGraphCallsJson = json(["query", "--json", "--fn", "main", "--calls", "write", checkedInGraphPackageDir]).body;
 assert.equal(checkedInGraphCallsJson.ok, true);
 assert.equal(checkedInGraphCallsJson.query.function, "main");
@@ -3260,11 +4024,6 @@ mkdirSync(checkedInGraphDriftRoot, { recursive: true });
 writeFileSync(join(checkedInGraphDriftRoot, "zero.toml"), readFileSync(join(checkedInGraphPackageDir, "zero.toml"), "utf8"));
 writeFileSync(join(checkedInGraphDriftRoot, "zero.graph"), checkedInRepositoryGraphStoreBytes);
 writeFileSync(join(checkedInGraphDriftRoot, "hello.0"), checkedInGraphSource.replace("hello from zero", "hello from drift"));
-const checkedInGraphDriftCheck = json(["check", "--json", checkedInGraphDriftRoot]);
-assert.equal(checkedInGraphDriftCheck.body.ok, true);
-assertSourceGraph(checkedInGraphDriftCheck.body, join(checkedInGraphDriftRoot, "zero.graph"), "package:program-graph-fixture@0.1.0", "graph-native-check", false, "stale");
-assertProgramGraphCompilerInput(checkedInGraphDriftCheck.body, join(checkedInGraphDriftRoot, "zero.graph"));
-assertRepositoryGraphNativeCheck(checkedInGraphDriftCheck.body, "stale");
 const checkedInGraphDriftVerify = json(["verify-projection", "--json", checkedInGraphDriftRoot], { allowFailure: true });
 assert.notEqual(checkedInGraphDriftVerify.code, 0);
 assert.equal(checkedInGraphDriftVerify.body.ok, false);
@@ -3273,6 +4032,14 @@ assert.equal(checkedInGraphDriftVerify.body.repositoryGraph.compilerInput, "repo
 assert.equal(checkedInGraphDriftVerify.body.diagnostics[0].code, "RGP006");
 assert.match(checkedInGraphDriftVerify.body.repairCommands.join("\n"), /zero import/);
 assert.match(checkedInGraphDriftVerify.body.repairCommands.join("\n"), /zero export/);
+const checkedInGraphDriftCheck = json(["check", "--json", checkedInGraphDriftRoot]);
+assert.equal(checkedInGraphDriftCheck.body.ok, true);
+assertSourceGraph(checkedInGraphDriftCheck.body, join(checkedInGraphDriftRoot, "zero.graph"), "package:program-graph-fixture@0.1.0", "graph-native-check", false, "clean");
+assertProgramGraphCompilerInput(checkedInGraphDriftCheck.body, join(checkedInGraphDriftRoot, "zero.graph"));
+assertRepositoryGraphNativeCheck(checkedInGraphDriftCheck.body, "clean");
+assert.match(zero(["view", join(checkedInGraphDriftRoot, "zero.graph")]).stdout, /hello from drift/);
+const checkedInGraphDriftVerifyAfterRefresh = json(["verify-projection", "--json", checkedInGraphDriftRoot]);
+assert.equal(checkedInGraphDriftVerifyAfterRefresh.body.ok, true);
 const graphView = zero(["view", graphDumpPath]).stdout;
 assert.equal(zero(["view", graphDumpPath]).stdout, graphView);
 assert.equal(zero(["diff", graphDumpPath]).stdout, graphView);
@@ -3305,7 +4072,7 @@ assert.equal(existsSync(graphViewParentFileOutPath), false);
 const graphDiffOutJson = json(["diff", "--json", "--out", graphViewPath, graphDumpPath], { allowFailure: true });
 assert.notEqual(graphDiffOutJson.code, 0);
 assert.equal(graphDiffOutJson.body.diagnostics[0].message, "diff textconv output does not support --out");
-assert.equal(graphDiffOutJson.body.diagnostics[0].expected, "zero diff [graph-input]");
+assert.equal(graphDiffOutJson.body.diagnostics[0].expected, "zero diff [--fn <name>] [graph-input]");
 assert.equal(zero(["check", graphDumpPath]).stdout, "ok\n");
 const graphCheckJson = json(["check", "--json", graphDumpPath]).body;
 assert.equal(graphCheckJson.ok, true);
@@ -4525,11 +5292,16 @@ assert.match(zeroSkill.data[0].content, /zero skills get zero --full/);
 assert.match(zeroSkill.data[0].content, /zero check \[graph-or-package\]/);
 assert.doesNotMatch(zeroSkill.data[0].content, /<file-or-package>/);
 assert.equal(zeroSkill.data[0].files, undefined);
+assert.match(zeroSkill.data[0].content, /at most once per session/);
+for (const skillName of skillsList.data.map((skill) => skill.name)) {
+  assert(zeroSkill.data[0].content.includes(`\`${skillName}\` (~`), `zero stub should index topic ${skillName} with a size`);
+}
 
 const agentSkill = json(["skills", "get", "agent", "--json"]).body;
 assert.equal(agentSkill.success, true);
 assert.match(agentSkill.data[0].content, /zero query --fn main/);
 assert.match(agentSkill.data[0].content, /Use JSON only when another tool must parse stable fields/);
+assert.match(agentSkill.data[0].content, /Fetch each skill topic once/);
 assert.doesNotMatch(agentSkill.data[0].content, /<file-or-package>/);
 
 const languageSkill = json(["skills", "get", "language", "--json"]).body;
@@ -6076,9 +6848,9 @@ const directElfFsFallibleReport = json(["build", "--json", "--emit", "exe", "--b
 const directElfFsFallibleBytes = readFileSync(directElfFsFalliblePath);
 assert.equal(directElfFsFallibleReport.generatedCBytes, 0);
 assert.equal(directElfFsFallibleReport.objectBackend.objectEmission.path, "direct-elf64-exe");
-assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(2)));
-assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(3)));
-assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(4)));
+assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(2, true)));
+assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(3, true)));
+assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(4, true)));
 const directArm64ElfPath = join(outDir, "direct-arm64.o");
 rmSync(directArm64ElfPath, { force: true });
 const directArm64ElfReport = json(["build", "--json", "--emit", "obj", "--target", "linux-arm64", "examples/direct-call-add.graph", "--out", directArm64ElfPath]).body;
@@ -6129,6 +6901,24 @@ assert.equal(depTime.interfaceFingerprints.algorithm, "fnv1a64-zero-interface-v1
 assert.match(depTime.interfaceFingerprints.targetFactsHash, /^[0-9a-f]{16}$/);
 assert(depTime.cacheSummary.entries >= 5);
 assert(depTime.incrementalInvalidation.changedInputs.sourceFiles.some((item) => item.endsWith("src/main.0")));
+if (process.getuid?.() !== 0) {
+  const unreadableDepRoot = join("/tmp", `zero-unreadable-dep-manifest-${process.pid}`);
+  const unreadableDepManifest = join(unreadableDepRoot, "dep-lib", "zero.toml");
+  rmSync(unreadableDepRoot, { force: true, recursive: true });
+  cpSync("conformance/packages/dep-app", join(unreadableDepRoot, "dep-app"), { recursive: true });
+  cpSync("conformance/packages/dep-lib", join(unreadableDepRoot, "dep-lib"), { recursive: true });
+  rmSync(join(unreadableDepRoot, "dep-app", ".zero"), { force: true, recursive: true });
+  rmSync(join(unreadableDepRoot, "dep-lib", ".zero"), { force: true, recursive: true });
+  chmodSync(unreadableDepManifest, 0o000);
+  const unreadableDepCheck = json(["check", "--json", join(unreadableDepRoot, "dep-app")], { allowFailure: true });
+  assert.equal(unreadableDepCheck.code, 1);
+  assert.equal(unreadableDepCheck.body.ok, false);
+  assert.equal(unreadableDepCheck.body.diagnostics[0].code, "PAR100");
+  assert.equal(unreadableDepCheck.body.diagnostics[0].path, unreadableDepManifest);
+  assert.match(unreadableDepCheck.body.diagnostics[0].message, /failed to read '.*dep-lib\/zero\.toml'/);
+  chmodSync(unreadableDepManifest, 0o644);
+  rmSync(unreadableDepRoot, { force: true, recursive: true });
+}
 const zeroHashSize = json(["size", "--json", "--target", "linux-musl-x64", "examples/zero-hash", "--out", join(outDir, "zero-hash-sized")]).body;
 assert.equal(zeroHashSize.generatedCBytes, 0);
 assert(zeroHashSize.usedStdlibHelpers.some((helper) => helper.name === "std.codec.crc32Bytes"));
@@ -6666,6 +7456,16 @@ assert.equal(machOMemoryPackageReport.objectBackend.directFacts.moduleCount, 3);
 assert.equal(machOMemoryPackageReport.objectBackend.directFacts.runtimeHelperCount, 1);
 assert.equal(machOMemoryPackageBytes.readUInt32LE(0), 0xfeedfacf);
 assert(machOMemoryPackageBytes.includes(Buffer.from("memory package ok")));
+
+// Package builds must be byte-deterministic: emitting the same package through
+// the store-backed manifest pipeline twice must produce identical object bytes,
+// so toolchain or allocation randomness can never leak into emitted artifacts.
+const crmApiDeterminismPath = join(outDir, "determinism-crm-api.o");
+rmSync(crmApiDeterminismPath, { force: true });
+const crmApiDeterminismReport = json(["build", "--json", "--emit", "obj", "--target", "linux-musl-x64", "examples/crm-api", "--out", crmApiDeterminismPath]).body;
+assert.equal(crmApiDeterminismReport.generatedCBytes, 0);
+assert.equal(crmApiDeterminismReport.cBridgeFallback ?? false, false);
+repeatBuildHash(["build", "--json", "--emit", "obj", "--target", "linux-musl-x64", "examples/crm-api", "--out", crmApiDeterminismPath], crmApiDeterminismPath, join(outDir, "determinism-crm-api.repeat.o"));
 
 const graph = json(["inspect", "--json", "--target", "linux-musl-x64", "examples/memory-package"]).body;
 assert.equal(graph.schemaVersion, 1);

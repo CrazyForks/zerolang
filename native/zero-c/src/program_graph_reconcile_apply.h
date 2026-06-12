@@ -14,6 +14,10 @@ typedef struct {
   char message[160];
   char node_id[64];
   char candidate_id[64];
+  char node_range[96];
+  char candidate_range[96];
+  size_t candidate_count;
+  char hint[224];
 } ZProgramGraphIdentityReconcile;
 
 bool z_program_graph_preserve_source_node_ids(const ZProgramGraph *base, ZProgramGraph *edited, ZProgramGraphIdentityReconcile *out);

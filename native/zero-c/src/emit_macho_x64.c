@@ -190,12 +190,15 @@ static void machx64_emit_array_base_rdx(ZBuf *text, const IrFunction *fun, unsig
   z_x64_emit_rbp_disp_reg(text, 0x8d, 2, machx64_local_offset(fun, local_index), true);
 }
 
-static void machx64_emit_bounds_check(ZBuf *text, const IrLocal *local) {
+static bool machx64_emit_trap(ZBuf *text, MachOEmitContext *ctx, ZDiag *diag, ZDirectTrapKind kind);
+
+static bool machx64_emit_bounds_check(ZBuf *text, const IrLocal *local, MachOEmitContext *ctx, ZDiag *diag) {
   z_x64_append_u8(text, 0x3d);
   z_x64_append_u32(text, local ? local->array_len : 0);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!machx64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
+  return true;
 }
 
 static unsigned machx64_setcc_opcode(IrCompareOp op, bool uns) {
@@ -288,16 +291,47 @@ static bool machx64_emit_rodata_ptr_rax(ZBuf *text, unsigned data_offset, MachOE
   return z_macho_record_data_patch(ctx, patch, data_offset, value, diag);
 }
 
+static bool machx64_emit_trap(ZBuf *text, MachOEmitContext *ctx, ZDiag *diag, ZDirectTrapKind kind) {
+  /* Cold path: branch to the shared per-binary trap stub that prints a diagnostic. */
+  if (ctx && ctx->trap_messages.lens[kind] > 0) {
+    size_t patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
+    if (z_direct_trap_branches_record(&ctx->trap_branches[kind], patch)) return true;
+    return machx64_diag_at(diag, "direct x86_64 Mach-O backend ran out of memory while recording a trap branch", 1, 1, "allocation failed");
+  }
+  z_x64_emit_ud2(text);
+  return true;
+}
+
+static bool machx64_emit_trap_stubs(ZBuf *text, MachOEmitContext *ctx, ZDiag *diag) {
+  for (unsigned kind = 0; ctx && kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    ZDirectTrapBranchList *branches = &ctx->trap_branches[kind];
+    if (branches->len == 0) continue;
+    size_t stub_offset = text->len;
+    if (!machx64_emit_rodata_ptr_rax(text, ctx->trap_messages.offsets[kind], ctx, NULL, diag)) return false;
+    z_x64_emit_mov_reg_from_reg(text, 6, 0, true);
+    z_x64_emit_mov_reg_u32(text, 2, ctx->trap_messages.lens[kind]);
+    z_x64_emit_mov_reg_u32(text, 7, 2u);
+    z_x64_emit_align_rsp_16(text);
+    size_t patch = z_x64_emit_call32_placeholder(text);
+    if (!z_macho_record_instr_runtime_patch(ctx, MACHO_RUNTIME_WORLD_WRITE, patch, NULL, diag)) return false;
+    z_x64_emit_ud2(text);
+    for (size_t i = 0; i < branches->len; i++) z_x64_patch_rel32(text, branches->items[i], stub_offset);
+    branches->len = 0;
+  }
+  return true;
+}
+
 static bool machx64_emit_byte_view_ptr(ZBuf *text, const IrFunction *fun, const IrValue *view, MachOEmitContext *ctx, ZDiag *diag);
 static bool machx64_emit_byte_view_len(ZBuf *text, const IrFunction *fun, const IrValue *view, MachOEmitContext *ctx, ZDiag *diag);
 static bool machx64_emit_byte_view_pair(ZBuf *text, const IrFunction *fun, const IrValue *view, unsigned ptr_reg, unsigned len_reg, MachOEmitContext *ctx, ZDiag *diag);
 static bool machx64_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *value, MachOEmitContext *ctx, ZDiag *diag);
 
-static void machx64_emit_u64_upper_bound_check(ZBuf *text, unsigned value_reg, unsigned limit_reg) {
+static bool machx64_emit_u64_upper_bound_check(ZBuf *text, unsigned value_reg, unsigned limit_reg, MachOEmitContext *ctx, ZDiag *diag) {
   z_x64_emit_cmp_reg_reg(text, value_reg, limit_reg, true);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x86);
-  z_x64_emit_ud2(text);
+  if (!machx64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_VALUE_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
+  return true;
 }
 
 static bool machx64_emit_byte_view_len(ZBuf *text, const IrFunction *fun, const IrValue *view, MachOEmitContext *ctx, ZDiag *diag) {
@@ -345,6 +379,11 @@ static bool machx64_emit_byte_view_ptr(ZBuf *text, const IrFunction *fun, const 
   if (view->kind == IR_VALUE_STR_RUNTIME && view->type == IR_TYPE_BYTE_VIEW) return machx64_emit_value(text, fun, view, ctx, diag);
   if (view->kind == IR_VALUE_ARRAY_BYTE_VIEW && view->array_index < fun->local_len) {
     const IrLocal *local = &fun->locals[view->array_index];
+    if (local->is_record_ref) {
+      machx64_emit_load_local_slot_rax(text, fun, view->array_index, 0);
+      if (view->field_offset > 0) z_x64_emit_add_rax_u32(text, view->field_offset, true);
+      return true;
+    }
     if (!((local->is_array && view->field_offset == 0) || local->is_record)) return machx64_diag_at(diag, "direct x86_64 Mach-O byte-view array requires a fixed array or record array field", view->line, view->column, "unsupported array view");
     z_x64_emit_rbp_disp_reg(text, 0x8d, 0, machx64_local_slot_offset(fun, view->array_index, view->field_offset), true);
     return true;
@@ -410,12 +449,12 @@ static bool machx64_emit_byte_view_pair(ZBuf *text, const IrFunction *fun, const
       if (!machx64_emit_value(text, fun, view->right, ctx, diag)) return false;
       z_x64_emit_pop_reg64(text, 1);
       z_x64_emit_pop_reg64(text, 10);
-      machx64_emit_u64_upper_bound_check(text, 1, 0);
-      machx64_emit_u64_upper_bound_check(text, 0, 10);
+      if (!machx64_emit_u64_upper_bound_check(text, 1, 0, ctx, diag)) return false;
+      if (!machx64_emit_u64_upper_bound_check(text, 0, 10, ctx, diag)) return false;
       z_x64_emit_sub_reg_reg(text, 0, 1, true);
     } else {
       z_x64_emit_pop_reg64(text, 10);
-      machx64_emit_u64_upper_bound_check(text, 1, 10);
+      if (!machx64_emit_u64_upper_bound_check(text, 1, 10, ctx, diag)) return false;
       z_x64_emit_mov_reg_from_reg(text, 0, 10, true);
       z_x64_emit_sub_reg_reg(text, 0, 1, true);
     }
@@ -599,7 +638,7 @@ static bool machx64_emit_byte_view_index_load_value(ZBuf *text, const IrFunction
   z_x64_emit_pop_rax(text);
   z_x64_emit_cmp_rax_rcx(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!machx64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   z_x64_emit_mov_rcx_from_rax(text, false);
   z_x64_emit_mov_reg_from_reg(text, 0, 8, true);
@@ -788,7 +827,7 @@ static bool machx64_emit_index_load_value(ZBuf *text, const IrFunction *fun, con
   }
   if (local->is_array && machx64_type_is_array_element(local->element_type)) {
     if (!value->index || !machx64_emit_value(text, fun, value->index, ctx, diag)) return false;
-    machx64_emit_bounds_check(text, local);
+    if (!machx64_emit_bounds_check(text, local, ctx, diag)) return false;
     z_x64_emit_push_rax(text);
     machx64_emit_array_base_rdx(text, fun, value->array_index);
     z_x64_emit_pop_reg64(text, 1);
@@ -801,8 +840,21 @@ static bool machx64_emit_index_load_value(ZBuf *text, const IrFunction *fun, con
 
 static bool machx64_emit_field_load_value(ZBuf *text, const IrFunction *fun, const IrValue *value, ZDiag *diag) {
   if (value->local_index >= fun->local_len) return machx64_diag_at(diag, "direct x86_64 Mach-O field load record is out of range", value->line, value->column, "invalid record local");
+  if (fun->locals[value->local_index].is_record_ref) {
+    machx64_emit_load_local_slot_rax(text, fun, value->local_index, 0);
+    if (value->field_offset > 0) z_x64_emit_add_rax_u32(text, value->field_offset, true);
+    machx64_emit_load_ptr_element(text, 0, 0, value->type);
+    return true;
+  }
   if (!fun->locals[value->local_index].is_record) return machx64_diag_at(diag, "direct x86_64 Mach-O field load requires record local", value->line, value->column, "non-record local");
   machx64_emit_load_field_eax(text, fun, value->local_index, value->field_offset, value->type);
+  return true;
+}
+
+static bool machx64_emit_record_addr_value(ZBuf *text, const IrFunction *fun, const IrValue *value, ZDiag *diag) {
+  if (value->local_index >= fun->local_len) return machx64_diag_at(diag, "direct x86_64 Mach-O record address local is out of range", value->line, value->column, "invalid record local");
+  if (!fun->locals[value->local_index].is_record) return machx64_diag_at(diag, "direct x86_64 Mach-O record address requires record local", value->line, value->column, "non-record local");
+  z_x64_emit_rbp_disp_reg(text, 0x8d, 0, machx64_local_offset(fun, value->local_index), true);
   return true;
 }
 
@@ -1301,6 +1353,7 @@ static bool machx64_emit_value(ZBuf *text, const IrFunction *fun, const IrValue 
     case IR_VALUE_BYTE_VIEW_INDEX_LOAD: return machx64_emit_byte_view_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_INDEX_LOAD: return machx64_emit_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_FIELD_LOAD: return machx64_emit_field_load_value(text, fun, value, diag);
+    case IR_VALUE_RECORD_ADDR: return machx64_emit_record_addr_value(text, fun, value, diag);
     default: {
       char actual[64];
       snprintf(actual, sizeof(actual), "unsupported value kind %d", (int)value->kind);
@@ -1318,7 +1371,7 @@ static bool machx64_emit_world_write(ZBuf *text, const IrFunction *fun, const Ir
   size_t patch = z_x64_emit_call32_placeholder(text);
   z_x64_emit_test_rax_rax(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x84);
-  z_x64_emit_ud2(text);
+  if (!machx64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_WRITE_FAILED)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   return z_macho_record_instr_runtime_patch(ctx, MACHO_RUNTIME_WORLD_WRITE, patch, instr, diag);
 }
@@ -1441,6 +1494,15 @@ static bool machx64_emit_local_set_instr(ZBuf *text, const IrFunction *fun, cons
 
 static bool machx64_emit_field_store_instr(ZBuf *text, const IrFunction *fun, const IrInstr *instr, MachOEmitContext *ctx, ZDiag *diag) {
   if (instr->local_index >= fun->local_len) return machx64_diag_at(diag, "direct x86_64 Mach-O field store record is out of range", instr->line, instr->column, "invalid record local");
+  if (fun->locals[instr->local_index].is_record_ref) {
+    machx64_emit_load_local_slot_rax(text, fun, instr->local_index, 0);
+    if (instr->field_offset > 0) z_x64_emit_add_rax_u32(text, instr->field_offset, true);
+    z_x64_emit_push_rax(text);
+    if (!machx64_emit_value(text, fun, instr->value, ctx, diag)) return false;
+    z_x64_emit_pop_reg64(text, 1);
+    machx64_emit_store_ptr_element(text, 1, 0, instr->value ? instr->value->type : IR_TYPE_I32);
+    return true;
+  }
   if (!fun->locals[instr->local_index].is_record) return machx64_diag_at(diag, "direct x86_64 Mach-O field store requires record local", instr->line, instr->column, "non-record local");
   if (!machx64_emit_value(text, fun, instr->value, ctx, diag)) return false;
   machx64_emit_store_field_from_eax(text, fun, instr->local_index, instr->field_offset, instr->value ? instr->value->type : IR_TYPE_I32);
@@ -1460,7 +1522,7 @@ static bool machx64_emit_byte_view_index_store_instr(ZBuf *text, const IrFunctio
   z_x64_emit_pop_rax(text);
   z_x64_emit_cmp_rax_rcx(text, false);
   size_t ok_patch = z_x64_emit_jcc32_placeholder(text, 0x82);
-  z_x64_emit_ud2(text);
+  if (!machx64_emit_trap(text, ctx, diag, Z_DIRECT_TRAP_INDEX_BOUNDS)) return false;
   z_x64_patch_rel32(text, ok_patch, text->len);
   z_x64_emit_push_rax(text);
   machx64_emit_load_local_slot_rax(text, fun, instr->array_index, 0);
@@ -1484,7 +1546,7 @@ static bool machx64_emit_index_store_instr(ZBuf *text, const IrFunction *fun, co
   }
   if (local->is_array && machx64_type_is_array_element(local->element_type)) {
     if (!instr->index || !machx64_emit_value(text, fun, instr->index, ctx, diag)) return false;
-    machx64_emit_bounds_check(text, local);
+    if (!machx64_emit_bounds_check(text, local, ctx, diag)) return false;
     z_x64_emit_push_rax(text);
     if (!machx64_emit_value(text, fun, instr->value, ctx, diag)) return false;
     z_x64_emit_pop_reg64(text, 1);
@@ -1713,6 +1775,16 @@ static void machx64_append_rodata(ZBuf *rodata, const IrProgram *program, unsign
   }
 }
 
+static void machx64_append_trap_messages(ZBuf *rodata, unsigned base_offset, ZDirectTrapMessages *messages) {
+  for (unsigned kind = 0; kind < Z_DIRECT_TRAP_KIND_COUNT; kind++) {
+    const char *text = z_direct_trap_message((ZDirectTrapKind)kind);
+    size_t len = strlen(text);
+    messages->offsets[kind] = base_offset + (unsigned)rodata->len;
+    messages->lens[kind] = (unsigned)len;
+    machx64_append_bytes(rodata, text, len);
+  }
+}
+
 static void machx64_patch_object_data_refs(ZBuf *text, const MachOEmitContext *ctx) {
   uint32_t const_addr = (uint32_t)machx64_align(text ? text->len : 0, 8);
   for (size_t i = 0; ctx && i < ctx->data_patch_len; i++) {
@@ -1761,6 +1833,7 @@ typedef struct {
   MachOEmitContext ctx;
   unsigned rodata_base_offset;
   bool has_rodata;
+  ZDirectTrapMessages trap_messages;
 } MachX64ObjectBuild;
 
 static void machx64_object_build_free(MachX64ObjectBuild *build) {
@@ -1800,9 +1873,10 @@ static bool machx64_object_build_init(MachX64ObjectBuild *build, const IrProgram
   zbuf_init(&build->relocs);
   zbuf_init(&build->strings);
   machx64_append_u8(&build->strings, 0);
-  build->has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
+  build->has_rodata = true;
   build->rodata_base_offset = machx64_rodata_base_offset(program);
-  if (build->has_rodata) machx64_append_rodata(&build->rodata, program, build->rodata_base_offset);
+  machx64_append_rodata(&build->rodata, program, build->rodata_base_offset);
+  machx64_append_trap_messages(&build->rodata, build->rodata_base_offset, &build->trap_messages);
   build->offsets = z_checked_calloc(program->function_len, sizeof(size_t));
   build->function_string_offsets = z_checked_calloc(program->function_len, sizeof(uint32_t));
   build->external_string_offsets = program->external_function_len > 0 ? z_checked_calloc(program->external_function_len, sizeof(uint32_t)) : NULL;
@@ -1814,7 +1888,8 @@ static bool machx64_object_build_init(MachX64ObjectBuild *build, const IrProgram
     .program = program,
     .function_offsets = build->offsets,
     .function_count = program->function_len,
-    .rodata_base_offset = build->rodata_base_offset
+    .rodata_base_offset = build->rodata_base_offset,
+    .trap_messages = build->trap_messages
   };
   return true;
 }
@@ -1829,7 +1904,7 @@ static bool machx64_object_emit_functions(MachX64ObjectBuild *build, const IrPro
     zbuf_append(&build->strings, program->functions[i].name ? program->functions[i].name : "zero_fn");
     machx64_append_u8(&build->strings, 0);
   }
-  return true;
+  return machx64_emit_trap_stubs(&build->text, &build->ctx, diag);
 }
 
 static void machx64_object_append_relocations(MachX64ObjectBuild *build, const IrProgram *program) {
@@ -1967,6 +2042,7 @@ typedef struct {
   unsigned main_index;
   unsigned rodata_base_offset;
   bool has_rodata;
+  ZDirectTrapMessages trap_messages;
 } MachX64ExeBuild;
 
 static size_t machx64_emit_exe_start_stub(ZBuf *text) {
@@ -2018,9 +2094,10 @@ static bool machx64_exe_build_init(MachX64ExeBuild *build, const IrProgram *prog
   zbuf_init(&build->rodata);
   zbuf_init(&build->rebase);
   build->main_index = main_index;
-  build->has_rodata = program->readonly_data_bytes > 0 || program->data_segment_len > 0;
+  build->has_rodata = true;
   build->rodata_base_offset = machx64_rodata_base_offset(program);
-  if (build->has_rodata) machx64_append_rodata(&build->rodata, program, build->rodata_base_offset);
+  machx64_append_rodata(&build->rodata, program, build->rodata_base_offset);
+  machx64_append_trap_messages(&build->rodata, build->rodata_base_offset, &build->trap_messages);
   build->offsets = z_checked_calloc(program->function_len, sizeof(size_t));
   if (!build->offsets) {
     machx64_exe_build_free(build);
@@ -2030,7 +2107,8 @@ static bool machx64_exe_build_init(MachX64ExeBuild *build, const IrProgram *prog
     .program = program,
     .function_offsets = build->offsets,
     .function_count = program->function_len,
-    .rodata_base_offset = build->rodata_base_offset
+    .rodata_base_offset = build->rodata_base_offset,
+    .trap_messages = build->trap_messages
   };
   build->start_call_patch = machx64_emit_exe_start_stub(&build->text);
   machx64_pad_to(&build->text, machx64_align(build->text.len, 16));
@@ -2043,7 +2121,7 @@ static bool machx64_exe_emit_functions(MachX64ExeBuild *build, const IrProgram *
     build->offsets[i] = build->text.len;
     if (!machx64_emit_function_text(&build->text, &program->functions[i], &build->ctx, diag)) return false;
   }
-  return true;
+  return machx64_emit_trap_stubs(&build->text, &build->ctx, diag);
 }
 
 static bool machx64_exe_validate_runtime(const MachX64ExeBuild *build, ZDiag *diag) {

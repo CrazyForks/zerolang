@@ -107,6 +107,10 @@ static bool build_check_function_shape(const ZBuildability *ctx, const IrFunctio
   if (!z_build_backend_is_aarch64_direct(ctx->backend) && abi_slots > max_slots) {
     return z_build_diag(ctx, diag, "direct backend object buildability has too many ABI argument slots", fun->line, fun->column, fun->name);
   }
+  size_t frame_bytes = fun->frame_bytes ? fun->frame_bytes : fun->local_len * 8u;
+  if (frame_bytes > Z_DIRECT_FRAME_LOCAL_LIMIT_BYTES) {
+    return z_build_diag(ctx, diag, "direct backend stack frame exceeds the supported per-function locals limit", fun->line, fun->column, fun->name);
+  }
   if (z_build_backend_is_aarch64_direct(ctx->backend)) return z_build_check_aarch64_function_shape(ctx, fun, diag);
   bool wide_scalars = ctx->backend == Z_DIRECT_BACKEND_ELF64 || ctx->backend == Z_DIRECT_BACKEND_MACHO64 ||
                       ctx->backend == Z_DIRECT_BACKEND_MACHO_X64 || ctx->backend == Z_DIRECT_BACKEND_COFF_X64;

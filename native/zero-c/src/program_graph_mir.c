@@ -392,6 +392,23 @@ static void ir_free_instrs(IrInstr *instrs, size_t len) {
   }
 }
 
+static char *ir_graph_reference_inner_type_alloc(const char *type, bool *out_is_mutable) {
+  size_t len = type ? strlen(type) : 0;
+  const char *mut_prefix = "mutref<";
+  size_t mut_prefix_len = strlen(mut_prefix);
+  if (len > mut_prefix_len + 1 && strncmp(type, mut_prefix, mut_prefix_len) == 0 && type[len - 1] == '>') {
+    if (out_is_mutable) *out_is_mutable = true;
+    return z_strndup(type + mut_prefix_len, len - mut_prefix_len - 1);
+  }
+  const char *ref_prefix = "ref<";
+  size_t ref_prefix_len = strlen(ref_prefix);
+  if (len > ref_prefix_len + 1 && strncmp(type, ref_prefix, ref_prefix_len) == 0 && type[len - 1] == '>') {
+    if (out_is_mutable) *out_is_mutable = false;
+    return z_strndup(type + ref_prefix_len, len - ref_prefix_len - 1);
+  }
+  return NULL;
+}
+
 static void ir_function_push_local(IrProgram *ir, IrFunction *fun, const char *name, IrTypeKind type, bool is_param, bool is_array, bool is_record, const char *shape_name, IrTypeKind element_type, unsigned array_len, unsigned byte_size_override, unsigned alignment_override, bool is_mutable, int line, int column) {
   fun->locals = ir_grow_tracked_items(ir, fun->locals, fun->local_len, &fun->local_cap, 4, sizeof(IrLocal));
   unsigned byte_size = byte_size_override ? byte_size_override : (is_array ? ir_type_byte_size(element_type) * array_len : (type == IR_TYPE_BYTE_VIEW || type == IR_TYPE_ALLOC || type == IR_TYPE_VEC ? 16 : (type == IR_TYPE_MAYBE_BYTE_VIEW ? 24 : (type == IR_TYPE_MAYBE_SCALAR ? 16 : 8))));
@@ -1073,6 +1090,15 @@ static bool ir_graph_function_is_hosted_world_main(const ZProgramGraph *graph, c
          ir_text_eq(return_type, "Void");
 }
 
+bool z_program_graph_has_direct_entry_function(const ZProgramGraph *graph) {
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION) continue;
+    if (node->export_c || ir_graph_function_is_hosted_world_main(graph, node)) return true;
+  }
+  return false;
+}
+
 static bool ir_graph_expr_qualified_name_into(const ZProgramGraph *graph, const ZProgramGraphNode *node, ZBuf *out) {
   if (!node || !out) return false;
   if (node->kind == Z_PROGRAM_GRAPH_NODE_IDENTIFIER) {
@@ -1173,6 +1199,24 @@ static bool ir_graph_collect_function_locals(IrProgram *ir, IrFunction *fun, con
     char *param_type_text_owned = ir_graph_bound_type_text_alloc(fun, param->type);
     const char *param_type_text = param_type_text_owned;
     IrTypeKind type = ir_type_kind(param_type_text);
+    bool ref_is_mutable = false;
+    char *ref_inner = type == IR_TYPE_UNSUPPORTED ? ir_graph_reference_inner_type_alloc(param_type_text, &ref_is_mutable) : NULL;
+    if (ref_inner) {
+      unsigned ref_size = 0;
+      unsigned ref_align = 0;
+      if (!ir_graph_shape_layout(graph, ref_inner, &ref_size, &ref_align)) {
+        ir_graph_mark_unsupported(ir, param, "typed graph MIR reference parameter requires a shape whose fields are scalars or fixed scalar arrays", param_type_text);
+        free(ref_inner);
+        free(param_type_text_owned);
+        return false;
+      }
+      ir_function_push_local(ir, fun, param->name, IR_TYPE_USIZE, true, false, false, ref_inner, IR_TYPE_UNSUPPORTED, 0, 0, 0, ref_is_mutable, ir_graph_line(param), ir_graph_column(param));
+      fun->locals[fun->local_len - 1].is_record_ref = true;
+      fun->locals[fun->local_len - 1].ref_byte_size = ref_size;
+      free(ref_inner);
+      free(param_type_text_owned);
+      continue;
+    }
     if (!ir_type_is_direct_param_abi(type)) {
       ir_graph_mark_unsupported(ir, param, "typed graph MIR parameter type is unsupported", param_type_text);
       free(param_type_text_owned);
@@ -1217,7 +1261,12 @@ static bool ir_graph_collect_let_local(IrProgram *ir, IrFunction *fun, const ZPr
     return true;
   }
   if (!ir_type_is_direct_local(type)) {
-    ir_graph_mark_unsupported(ir, stmt, "typed graph MIR local type is unsupported", type_text ? type_text : "inferred unknown");
+    if (ir_text_eq(type_text, "PageAlloc") || ir_text_eq(type_text, "GeneralAlloc") || ir_text_eq(type_text, "NullAlloc")) {
+      ir_graph_mark_unsupported(ir, stmt, "typed graph MIR allocator local requires FixedBufAlloc", type_text);
+      snprintf(ir->mir_help, sizeof(ir->mir_help), "allocate from a fixed array with std.mem.fixedBufAlloc, or split large buffers across helper functions with smaller frames; PageAlloc, GeneralAlloc, and NullAlloc locals do not lower to direct backends yet");
+    } else {
+      ir_graph_mark_unsupported(ir, stmt, "typed graph MIR local type is unsupported", type_text ? type_text : "inferred unknown");
+    }
     free(type_text_owned);
     return false;
   }
@@ -1268,17 +1317,18 @@ static bool ir_graph_lower_record_array_field_byte_view(const ZProgramGraph *gra
   bool field_is_array = false;
   unsigned field_array_len = 0;
   IrTypeKind field_element_type = IR_TYPE_UNSUPPORTED;
-  if (!record || !record->is_record ||
+  if (!record || !(record->is_record || record->is_record_ref) ||
       !ir_graph_shape_field_info(graph, record->shape_name, expr->name, &field_offset, NULL, &field_is_array, &field_array_len, &field_element_type) ||
       !field_is_array) {
     return false;
   }
+  unsigned record_byte_size = record->is_record_ref ? record->ref_byte_size : record->byte_size;
   unsigned element_size = ir_type_byte_size(field_element_type);
   if (!(ir_type_is_value(field_element_type) || field_element_type == IR_TYPE_BOOL) ||
       element_size == 0 ||
       field_array_len > UINT_MAX / element_size ||
-      field_offset > record->byte_size ||
-      field_array_len * element_size > record->byte_size - field_offset) {
+      field_offset > record_byte_size ||
+      field_array_len * element_size > record_byte_size - field_offset) {
     ir_graph_mark_unsupported(ir, expr, "typed graph MIR record array field byte view has unsupported storage", expr && expr->name ? expr->name : "array field");
     return false;
   }
@@ -1490,6 +1540,12 @@ static bool ir_graph_lower_array_initializer(const ZProgramGraph *graph, IrProgr
       ir_graph_mark_unsupported(ir, expr, "typed graph MIR fixed array repeat literal requires value and count", local->name);
       return false;
     }
+    const ZProgramGraphNode *count_node = ir_graph_ordered_node(graph, expr->id, "arg", 1);
+    unsigned long long repeat_count = 0;
+    if (count_node && count_node->kind == Z_PROGRAM_GRAPH_NODE_LITERAL && ir_parse_integer_literal(count_node->value, &repeat_count) && repeat_count != (unsigned long long)local->array_len) {
+      ir_graph_mark_unsupported(ir, count_node, "typed graph MIR fixed array repeat count must match local type", local->name);
+      return false;
+    }
     const ZProgramGraphNode *value_node = ir_graph_ordered_node(graph, expr->id, "arg", 0);
     for (size_t i = 0; i < local->array_len; i++) {
       IrValue *index = ir_new_index_literal(ir, (unsigned)i, ir_graph_line(value_node), ir_graph_column(value_node));
@@ -1591,6 +1647,15 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
         ir_graph_mark_unsupported(ir, field_expr, "typed graph MIR record array field literal length must match field type", field->name);
         return false;
       }
+      if (repeat) {
+        const ZProgramGraphNode *count_node = ir_graph_ordered_node(graph, field_expr->id, "arg", 1);
+        unsigned long long repeat_count = 0;
+        if (count_node && count_node->kind == Z_PROGRAM_GRAPH_NODE_LITERAL && ir_parse_integer_literal(count_node->value, &repeat_count) && repeat_count != (unsigned long long)field_array_len) {
+          ir_graph_type_arg_vec_free(&shape_args);
+          ir_graph_mark_unsupported(ir, count_node, "typed graph MIR record array field repeat count must match field type", field->name);
+          return false;
+        }
+      }
       const ZProgramGraphNode *repeat_value = repeat ? ir_graph_ordered_node(graph, field_expr->id, "arg", 0) : NULL;
       for (size_t element_index = 0; element_index < field_array_len; element_index++) {
         const ZProgramGraphNode *element_node = repeat ? repeat_value : ir_graph_ordered_node(graph, field_expr->id, "arg", element_index);
@@ -1627,15 +1692,45 @@ static bool ir_graph_lower_record_initializer(const ZProgramGraph *graph, IrProg
   return true;
 }
 
-static bool ir_graph_lower_identifier(const ZProgramGraphNode *expr, IrProgram *ir, const IrFunction *fun, IrValue **out) {
+static const ZProgramGraphNode *ir_graph_find_const(const ZProgramGraph *graph, const char *name) {
+  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind == Z_PROGRAM_GRAPH_NODE_CONST && ir_text_eq(node->name, name)) return node;
+  }
+  return NULL;
+}
+
+static bool ir_graph_lower_const_reference(const ZProgramGraph *graph, IrProgram *ir, const IrFunction *fun, const ZProgramGraphNode *expr, const ZProgramGraphNode *const_decl, IrValue **out) {
+  const ZProgramGraphNode *const_value = ir_graph_ordered_node(graph, const_decl->id, "value", 0);
+  if (!const_value) {
+    ir_graph_mark_unsupported(ir, expr, "typed graph MIR const declaration has no value", expr->name);
+    return false;
+  }
+  if (ir->const_lower_depth >= 16) {
+    ir_graph_mark_unsupported(ir, expr, "typed graph MIR const reference chain is too deep", expr->name);
+    return false;
+  }
+  ir->const_lower_depth++;
+  IrTypeKind const_type = ir_type_kind(const_decl->type);
+  bool lowered = (ir_type_is_value(const_type) || const_type == IR_TYPE_BOOL)
+    ? ir_graph_lower_expr_for_type(graph, ir, fun, const_value, const_type, IR_TYPE_UNSUPPORTED, false, ir_graph_line(expr), ir_graph_column(expr), out)
+    : ir_graph_lower_expr(graph, ir, fun, const_value, out);
+  ir->const_lower_depth--;
+  return lowered;
+}
+
+static bool ir_graph_lower_identifier(const ZProgramGraph *graph, const ZProgramGraphNode *expr, IrProgram *ir, const IrFunction *fun, IrValue **out) {
   const IrLocal *local = ir_function_find_local(fun, expr ? expr->name : NULL);
   if (!local) {
+    const ZProgramGraphNode *const_decl = expr ? ir_graph_find_const(graph, expr->name) : NULL;
+    if (const_decl) return ir_graph_lower_const_reference(graph, ir, fun, expr, const_decl, out);
     ir_graph_mark_unsupported(ir, expr, "typed graph MIR identifier is not a local", expr && expr->name ? expr->name : "unknown identifier");
     return false;
   }
   IrValue *value = ir_new_value(ir, IR_VALUE_LOCAL, local->type, ir_graph_line(expr), ir_graph_column(expr));
   value->local_index = local->index;
   if (local->type == IR_TYPE_BYTE_VIEW) value->element_type = local->element_type == IR_TYPE_UNSUPPORTED ? IR_TYPE_U8 : local->element_type;
+  else value->element_type = local->element_type;
   *out = value;
   return true;
 }
@@ -1675,7 +1770,7 @@ static bool ir_graph_lower_field_access(const ZProgramGraph *graph, IrProgram *i
     unsigned field_offset = 0;
     IrTypeKind field_type = IR_TYPE_UNSUPPORTED;
     bool field_is_array = false;
-    if (local && local->is_record && ir_graph_shape_field_info(graph, local->shape_name, expr->name, &field_offset, &field_type, &field_is_array, NULL, NULL)) {
+    if (local && (local->is_record || local->is_record_ref) && ir_graph_shape_field_info(graph, local->shape_name, expr->name, &field_offset, &field_type, &field_is_array, NULL, NULL)) {
       if (field_is_array) {
         ir_graph_mark_unsupported(ir, expr, "typed graph MIR record array field load requires indexing", expr && expr->name ? expr->name : "array field");
         return false;
@@ -1795,6 +1890,14 @@ static bool ir_graph_lower_binary_call(const ZProgramGraph *graph, IrProgram *ir
       ir_free_value(right);
       return false;
     }
+  } else if (ir_graph_node_is_untyped_literal(left_node) && !ir_graph_node_is_untyped_literal(right_node)) {
+    if (!ir_graph_lower_expr(graph, ir, fun, right_node, &right) ||
+        !ir_graph_lower_expr_for_type(graph, ir, fun, left_node, right ? right->type : IR_TYPE_UNSUPPORTED, IR_TYPE_UNSUPPORTED, false, ir_graph_line(left_node), ir_graph_column(left_node), &left)) {
+      ir_free_value(left);
+      ir_free_value(right);
+      return false;
+    }
+    type = right->type;
   } else {
     if (!ir_graph_lower_expr(graph, ir, fun, left_node, &left) ||
         !ir_graph_lower_expr_for_type(graph, ir, fun, right_node, left ? left->type : IR_TYPE_UNSUPPORTED, IR_TYPE_UNSUPPORTED, false, ir_graph_line(right_node), ir_graph_column(right_node), &right)) {
@@ -1860,6 +1963,20 @@ static bool ir_graph_lower_named_call(const ZProgramGraph *graph, IrProgram *ir,
       ir_free_value(value);
       free(specialized_name);
       return false;
+    }
+    if (param->is_record_ref) {
+      const IrLocal *source = NULL;
+      if ((arg->kind == IR_VALUE_RECORD_ADDR || arg->kind == IR_VALUE_LOCAL) && arg->local_index < fun->local_len) {
+        const IrLocal *candidate = &fun->locals[arg->local_index];
+        if ((arg->kind == IR_VALUE_RECORD_ADDR && candidate->is_record) || (arg->kind == IR_VALUE_LOCAL && candidate->is_record_ref)) source = candidate;
+      }
+      if (!source || !ir_text_eq(source->shape_name, param->shape_name)) {
+        ir_free_value(arg);
+        ir_free_value(value);
+        ir_graph_mark_unsupported(ir, ir_graph_ordered_node(graph, expr->id, "arg", arg_index), "typed graph MIR reference argument must borrow a matching local shape variable", param->shape_name ? param->shape_name : "shape");
+        free(specialized_name);
+        return false;
+      }
     }
     ir_value_push_arg(ir, value, arg);
     arg_index++;
@@ -3876,7 +3993,7 @@ static bool ir_graph_lower_expr(const ZProgramGraph *graph, IrProgram *ir, const
     case Z_PROGRAM_GRAPH_NODE_LITERAL:
       return ir_graph_lower_literal(expr, ir, out);
     case Z_PROGRAM_GRAPH_NODE_IDENTIFIER:
-      return ir_graph_lower_identifier(expr, ir, fun, out);
+      return ir_graph_lower_identifier(graph, expr, ir, fun, out);
     case Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS:
       return ir_graph_lower_field_access(graph, ir, fun, expr, out);
     case Z_PROGRAM_GRAPH_NODE_INDEX_ACCESS:
@@ -3935,6 +4052,28 @@ static bool ir_graph_lower_expr(const ZProgramGraph *graph, IrProgram *ir, const
     case Z_PROGRAM_GRAPH_NODE_CALL:
     case Z_PROGRAM_GRAPH_NODE_METHOD_CALL:
       return ir_graph_lower_call(graph, ir, fun, expr, IR_TYPE_UNSUPPORTED, out);
+    case Z_PROGRAM_GRAPH_NODE_BORROW: {
+      const ZProgramGraphNode *target = ir_graph_ordered_node(graph, expr->id, "left", 0);
+      const IrLocal *local = target && target->kind == Z_PROGRAM_GRAPH_NODE_IDENTIFIER ? ir_function_find_local(fun, target->name) : NULL;
+      if (local && local->is_record_ref) {
+        IrValue *value = ir_new_value(ir, IR_VALUE_LOCAL, IR_TYPE_USIZE, ir_graph_line(expr), ir_graph_column(expr));
+        value->local_index = local->index;
+        *out = value;
+        return true;
+      }
+      if (!local || !local->is_record) {
+        ir_graph_mark_unsupported(ir, expr, "typed graph MIR borrow expression supports only local shape variables", target && target->name ? target->name : "borrow target");
+        return false;
+      }
+      if (expr->is_mutable && !local->is_mutable) {
+        ir_graph_mark_unsupported(ir, expr, "typed graph MIR mutable shape borrow requires a mutable shape local", local->name ? local->name : "shape local");
+        return false;
+      }
+      IrValue *value = ir_new_value(ir, IR_VALUE_RECORD_ADDR, IR_TYPE_USIZE, ir_graph_line(expr), ir_graph_column(expr));
+      value->local_index = local->index;
+      *out = value;
+      return true;
+    }
     default:
       ir_graph_mark_unsupported(ir, expr, "typed graph MIR expression kind is unsupported", z_program_graph_node_kind_name(expr->kind));
       return false;
@@ -4027,7 +4166,7 @@ static bool ir_graph_lower_stmt(const ZProgramGraph *graph, IrProgram *ir, IrFun
         return false;
       }
       const IrLocal *local = ir_function_find_local(fun, base->name);
-      if (!local || !local->is_record) {
+      if (!local || !(local->is_record || local->is_record_ref)) {
         ir_graph_mark_unsupported(ir, target, "typed graph MIR field assignment target is not a record local", base->name);
         return false;
       }

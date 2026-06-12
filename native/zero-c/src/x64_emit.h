@@ -108,6 +108,7 @@ void z_x64_emit_bool_from_nonnegative_rax(ZBuf *buf);
 void z_x64_emit_prologue(ZBuf *buf, unsigned stack_size);
 void z_x64_emit_epilogue(ZBuf *buf);
 void z_x64_emit_mov_eax_u32(ZBuf *buf, uint32_t value);
+void z_x64_emit_align_rsp_16(ZBuf *buf);
 void z_x64_emit_ud2(ZBuf *buf);
 void z_x64_emit_syscall(ZBuf *buf);
 void z_x64_emit_sub_rsp(ZBuf *buf, unsigned amount);

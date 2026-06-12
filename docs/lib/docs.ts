@@ -199,6 +199,22 @@ export const docs: Doc[] = [
     section: "Text And Data",
   },
   {
+    slug: "module-regex",
+    title: "std.regex",
+    description: "Compile-once regular expression matching for a documented ECMA-262-leaning subset.",
+    path: "/modules/regex",
+    sourcePath: "/articles/modules/regex.md",
+    section: "Text And Data",
+  },
+  {
+    slug: "module-inet",
+    title: "std.inet",
+    description: "Target-neutral IPv4, IPv6, and RFC 1123 hostname literal validation and parsing.",
+    path: "/modules/inet",
+    sourcePath: "/articles/modules/inet.md",
+    section: "Text And Data",
+  },
+  {
     slug: "module-codec",
     title: "std.codec",
     description: "Little-endian integer helpers, unsigned varints, and CRC-32 primitives.",
@@ -300,6 +316,15 @@ export const docs: Doc[] = [
     description: "ASCII and UTF-8 byte-backed text validation.",
     path: "/modules/text",
     sourcePath: "/articles/modules/text.md",
+    section: "Text And Data",
+  },
+
+  {
+    slug: "module-unicode",
+    title: "std.unicode",
+    description: "Strict UTF-8 codepoint decode/encode iteration and codepoint-class helpers.",
+    path: "/modules/unicode",
+    sourcePath: "/articles/modules/unicode.md",
     section: "Text And Data",
   },
   {

@@ -1,7 +1,7 @@
 ## When To Use std.time
 
-In Zerolang, use `std.time` for duration math and target-gated monotonic or wall-clock
-helpers.
+In Zerolang, use `std.time` for duration math, RFC 3339 date and time validation
+and parsing, and target-gated monotonic or wall-clock helpers.
 
 This module is graph-backed. The compiler uses its standard-library graph store,
 while the projection snippets below show the human-readable projection that agents may
@@ -37,6 +37,12 @@ Runnable today:
 | `std.time.isZero(value)` | `Bool` | Reports whether a duration is zero. |
 | `std.time.monotonic()` | `Duration` | Reads a monotonic target clock where available. |
 | `std.time.wallSeconds()` | `i64` | Reads target wall-clock seconds where available. |
+| `std.time.isRfc3339Date(text)` | `Bool` | Validates an RFC 3339 full-date with leap years and days-in-month. |
+| `std.time.isRfc3339Time(text)` | `Bool` | Validates an RFC 3339 full-time with fractional seconds, numeric offsets, and the leap-second rule. |
+| `std.time.isRfc3339DateTime(text)` | `Bool` | Validates an RFC 3339 date-time joined by `T` or `t`. |
+| `std.time.parseRfc3339DateTimeOr(text, fallback)` | `i64` | Parses a date-time into UTC epoch seconds; returns the fallback when invalid. Fractional seconds truncate; a valid leap second maps to the same epoch second as `:59`. |
+| `std.time.isLeapYear(year)` | `Bool` | Gregorian leap-year predicate. |
+| `std.time.daysInMonth(year, month)` | `u32` | Days in a month; returns `0` for invalid months. |
 
 Current limits:
 
@@ -49,7 +55,7 @@ Metadata labels:
 - effects: time
 - allocation behavior: no allocation
 - target support: duration math is target-neutral; clock reads require a time-capable target
-- error behavior: infallible helpers
+- error behavior: infallible helpers; RFC 3339 validators return `Bool` and the epoch parser returns its fallback for invalid text
 - ownership notes: no ownership transfer
 - example: `examples/std-platform.graph`
 
@@ -63,6 +69,23 @@ pub fn main(world: World) -> Void raises {
     let span: Duration = std.time.between(std.time.seconds(2), std.time.ms(250))
     if std.time.asMsFloor(total) == 1250 && std.time.asMsFloor(span) == 1750 {
         check world.out.write("duration ok\n")
+    }
+}
+```
+
+RFC 3339 validation includes the exact leap-second rule: `seconds == 60` is
+valid only when the time normalized by its numeric offset equals `23:59:60`
+UTC, wrapping modulo 24 hours. `00:29:60+00:30` is valid because it normalizes
+to `23:59:60` UTC on the previous day, while `23:59:60-01:00` is invalid
+because it normalizes to `00:59:60` UTC.
+
+```zero
+pub fn main(world: World) -> Void raises {
+    let wrapped: Bool = std.time.isRfc3339Time("00:29:60+00:30")
+    let not_leap: Bool = std.time.isRfc3339Time("23:59:60-01:00")
+    let epoch: i64 = std.time.parseRfc3339DateTimeOr("2000-01-01T00:00:00Z", -1)
+    if wrapped && !not_leap && epoch == 946684800 && std.time.daysInMonth(2024, 2) == 29 {
+        check world.out.write("rfc3339 ok\n")
     }
 }
 ```

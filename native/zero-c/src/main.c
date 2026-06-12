@@ -11,7 +11,9 @@
 #include "cli_help.h"
 #include "http_listen_runner.h"
 #include "init_template.h"
+#include "mir_binary.h"
 #include "program_graph_build.h"
+#include "program_graph_check_gate.h"
 #include "program_graph_command.h"
 #include "program_graph_compare.h"
 #include "program_graph_contracts.h"
@@ -78,6 +80,8 @@ typedef struct {
   const char *patch_file;
   const char *patch_text;
   const char *patch_expect_graph_hash;
+  const char *patch_replace_fn;
+  const char *patch_body_file;
   const char *reconcile_source;
   const char *merge_base;
   const char *merge_left;
@@ -90,6 +94,9 @@ typedef struct {
   const char *query_node;
   const char *query_refs;
   const char *query_calls;
+  const char *query_depth;
+  const char *query_bare_argument;
+  bool query_full;
   const char **patch_ops;
   size_t patch_op_len;
   size_t patch_op_cap;
@@ -168,10 +175,18 @@ static const char *diag_code(int code) {
     case 1001: return "ERR001";
     case 1002: return "ERR002";
     case 1003: return "ERR003";
+    case 1004: return "RGP009";
+    case 1005: return "RGP003";
+    case 1006: return "RGP007";
+    case 1007: return "RGP007";
+    case 1008: return "RGP004";
+    case 1009: return "RGP006";
+    case 1010: return "RGM002";
     case 2001: return "APP001";
     case 2002: return "BLD002";
     case 2003: return "BLD003";
     case 2004: return "BLD004";
+    case 3001: return "NAM002";
     case 3002: return "NAM002";
     case 3003: return "NAM003";
     case 3004: return "NAM004";
@@ -194,7 +209,6 @@ static const char *diag_code(int code) {
     case 3021: return "TYP015";
     case 3022: return "TYP016";
     case 3023: return "TYP017";
-    case 3024: return "TYP018";
     case 3025: return "TYP019";
     case 3026: return "TYP020";
     case 3027: return "TYP021";
@@ -209,6 +223,8 @@ static const char *diag_code(int code) {
     case 3036: return "TYP026";
     case 3050: return "TYP027";
     case 3051: return "MEM002";
+    case 3052: return "MEM003";
+    case 3053: return "BOR003";
     case 3037: return "PUB001";
     case 3038: return "IFC001";
     case 3039: return "IFC002";
@@ -234,7 +250,6 @@ static const char *diag_code(int code) {
     case 3110: return "MAT004";
     case 3111: return "MAT005";
     case 4004: return "CGEN004";
-    case 5001: return "WEB001";
     case 6001: return "TAR001";
     case 6002: return "TAR002";
     case 7001: return "IMP001";
@@ -625,7 +640,7 @@ static void append_parse_json(ZBuf *buf, const char *source_file, const Program 
 
 static const char *zero_commit(void) {
   const char *commit = getenv("ZERO_COMMIT");
-  return commit && commit[0] ? commit : "unknown";
+  return commit && commit[0] ? commit : ZERO_BUILD_HASH;
 }
 
 static bool command_available(const char *name) {
@@ -664,7 +679,7 @@ static bool runtime_make_dir(const char *path, ZDiag *diag) {
   if (rc == 0 || errno == EEXIST) return true;
   if (diag) {
     diag->code = 2002;
-    diag->path = path;
+    z_diag_set_path_copy(diag, path);
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
@@ -695,10 +710,6 @@ static bool write_runtime_chunks_file(const char *path, const char *const *chunk
   return ok;
 }
 
-static void runtime_diag_preserve_path(ZDiag *diag) {
-  if (diag && diag->path) diag->path = z_strdup(diag->path);
-}
-
 static bool write_runtime_compile_inputs(
   const char *runtime_object_file,
   const char *source_suffix,
@@ -718,7 +729,6 @@ static bool write_runtime_compile_inputs(
   if (!runtime_make_dir(out->include_dir, diag) ||
       !write_runtime_chunks_file(out->header_file, zero_embedded_zero_runtime_h, diag) ||
       !write_runtime_chunks_file(out->source_file, source_chunks, diag)) {
-    runtime_diag_preserve_path(diag);
     runtime_compile_inputs_free(out);
     return false;
   }
@@ -2594,7 +2604,8 @@ static void append_compile_time_json(ZBuf *buf, const Program *program, const So
 
 static void append_program_graph_artifact_source_json(ZBuf *buf, const ZProgramGraphArtifactSource *source);
 static void append_safety_facts_json(ZBuf *buf, const char *profile);
-static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, long long *lower_ms_out, bool *graph_mir_used_out);
+typedef struct RepositoryGraphCheckReadiness RepositoryGraphCheckReadiness;
+static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, RepositoryGraphCheckReadiness *readiness, long long *lower_ms_out, bool *graph_mir_used_out);
 static bool validate_package_dependencies_for_target(const SourceInput *input, const ZTargetInfo *target, ZDiag *diag);
 
 static bool graph_check_text_eq(const char *left, const char *right) {
@@ -2691,15 +2702,9 @@ static bool graph_check_target_capabilities_ok(const ZProgramGraph *graph, const
   return true;
 }
 
-static bool graph_native_compiler_input_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const SourceInput *input, const ZTargetInfo *target, const char *path, ZDiag *diag) {
-  if (!graph_check_resolution_ok(graph, resolution, path, diag)) return false;
-  if (!z_program_graph_semantic_contracts_ok(graph, resolution, path, diag)) return false;
-  if (!graph_check_target_capabilities_ok(graph, resolution, target, diag)) return false;
-  return validate_package_dependencies_for_target(input, target, diag);
-}
-
 static bool graph_stored_compiler_input_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const SourceInput *input, const ZTargetInfo *target, const char *path, ZDiag *diag) {
   if (!graph_check_resolution_ok(graph, resolution, path, diag)) return false;
+  if (!z_program_graph_fixed_array_length_contracts_ok(graph, resolution, path, diag)) return false;
   if (!graph_check_target_capabilities_ok(graph, resolution, target, diag)) return false;
   return validate_package_dependencies_for_target(input, target, diag);
 }
@@ -2740,13 +2745,13 @@ static void append_repository_graph_default_readiness_json(ZBuf *buf, const char
   zbuf_append(buf, "}");
 }
 
-static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetInfo *target, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, long long load_ms, long long validate_ms, long long resolve_ms, long long check_ms, long long lower_ms, long long cache_ms, bool validation_in_load, bool target_ready, bool graph_mir_used) {
+static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetInfo *target, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const char *projection_state, long long load_ms, long long validate_ms, long long resolve_ms, long long check_ms, long long lower_ms, long long cache_ms, bool validation_in_load, bool target_ready, bool graph_mir_used) {
   ZProgramGraphStoreTableCounts tables;
   z_program_graph_store_table_counts_for_graph(store ? &store->graph : NULL,
                                                store ? store->source_path_len : 0,
                                                store ? store->projection_len : 0,
                                                &tables);
-  const char *projection_state = z_program_graph_projection_state_label(store, target, NULL, NULL, NULL);
+  (void)target;
   zbuf_append(buf, "{\"schemaVersion\":1,\"input\":\"repository-graph-store\",\"graphStoreLoaded\":true");
   zbuf_append(buf, ",\"sourceProjectionRequiredForCompilerInput\":false,\"sourceProjectionState\":");
   append_json_string(buf, projection_state);
@@ -2769,22 +2774,23 @@ static void append_repository_graph_compiler_path_json(ZBuf *buf, const ZTargetI
   zbuf_append(buf, "}");
 }
 
-static void print_repository_graph_check_json_success(const Command *command, const ZTargetInfo *target, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, long long load_ms, long long resolve_ms, long long check_ms, long long cache_ms) {
+static void print_repository_graph_check_json_success(const Command *command, const ZTargetInfo *target, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, RepositoryGraphCheckReadiness *readiness, long long load_ms, long long resolve_ms, long long check_ms, long long cache_ms) {
   ZBuf target_readiness;
   zbuf_init(&target_readiness);
   long long lower_ms = 0;
   bool graph_mir_used = false;
-  bool target_ready = append_repository_graph_target_readiness_json(&target_readiness, input, store, resolution, target, command, &lower_ms, &graph_mir_used);
+  bool target_ready = append_repository_graph_target_readiness_json(&target_readiness, input, store, resolution, target, command, readiness, &lower_ms, &graph_mir_used);
   ZBuf buf;
   zbuf_init(&buf);
   zbuf_append(&buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": true,\n  \"sourceFile\": ");
   append_json_string(&buf, store && store->path ? store->path : (command ? command->input : ""));
+  const char *projection_state = z_program_graph_projection_state_label(store, target, NULL, NULL, NULL);
   ZProgramGraphArtifactSource graph_source = {
     .artifact = store && store->path ? store->path : "",
     .graph_hash = store && store->graph.graph_hash ? store->graph.graph_hash : "",
     .module_identity = store && store->graph.module_identity ? store->graph.module_identity : "",
     .lowering = "graph-native-check",
-    .source_projection_state = z_program_graph_projection_state_label(store, target, NULL, NULL, NULL),
+    .source_projection_state = projection_state,
     .canonical_source = false,
   };
   append_program_graph_artifact_source_json(&buf, &graph_source);
@@ -2800,7 +2806,7 @@ static void print_repository_graph_check_json_success(const Command *command, co
   zbuf_append(&buf, ",\n  \"safetyFacts\": ");
   append_safety_facts_json(&buf, profile);
   zbuf_append(&buf, ",\n  \"graphCompiler\": ");
-  append_repository_graph_compiler_path_json(&buf, target, store, resolution, load_ms, 0, resolve_ms, check_ms, lower_ms, cache_ms, true, target_ready, graph_mir_used);
+  append_repository_graph_compiler_path_json(&buf, target, store, resolution, projection_state, load_ms, 0, resolve_ms, check_ms, lower_ms, cache_ms, true, target_ready, graph_mir_used);
   zbuf_append(&buf, ",\n  \"compilerPhases\": ");
   append_compiler_phases_json(&buf, input);
   zbuf_append(&buf, ",\n  \"compilerCaches\": ");
@@ -3229,6 +3235,13 @@ static const char *diag_repair_id(int code) {
     case 1001: return "add-fallible-marker-or-rescue";
     case 1002: return "add-missing-error-name";
     case 1003: return "check-or-rescue-fallible-call";
+    case 1004: return "rebuild-store-with-matching-compiler";
+    case 1005: return "reimport-repository-graph-store";
+    case 1006: return "resolve-source-identity";
+    case 1007: return "resolve-source-identity";
+    case 1008: return "regenerate-source-projection";
+    case 1009: return "reconcile-projection-with-store";
+    case 1010: return "resolve-repository-graph-merge-conflict";
     case 7001: return "fix-import-path";
     case 7002: return "break-import-cycle";
     case 3003: return "declare-missing-symbol";
@@ -3241,6 +3254,7 @@ static const char *diag_repair_id(int code) {
     case 3015: return "add-memory-type-argument";
     case 3029: return "end-conflicting-borrow";
     case 3030: return "return-owned-value";
+    case 3053: return "report-provenance-analysis-budget";
     case 3031: return "make-c-abi-safe";
     case 2003: return "use-direct-emitter";
     case 2004: return "choose-supported-backend";
@@ -3251,6 +3265,7 @@ static const char *diag_repair_id(int code) {
     case 3036: return "fix-type-alias-declaration";
     case 3050: return "keep-recursive-generic-arguments-stable";
     case 3051: return "guard-maybe-payload";
+    case 3052: return "move-large-locals-off-stack";
     case 3037: return "add-public-api-type";
     case 3038: return "declare-or-use-static-interface";
     case 3039: return "add-required-interface-method";
@@ -3284,6 +3299,13 @@ static const char *diag_repair_summary(int code) {
     case 1001: return "Add `raises` or an explicit error set to the function signature, or handle the fallible expression with rescue.";
     case 1002: return "Add the missing error name to the `raises [...]` set or rescue the call locally.";
     case 1003: return "Wrap the fallible call in check or rescue so error flow is explicit.";
+    case 1004: return "Rebuild zero.graph with this binary via `zero import .`, or install the zero build that wrote the store.";
+    case 1005: return "Run zero import after reviewing the source projection so the store is rebuilt from source.";
+    case 1006: return "Split the text edit into smaller passes or make the change with zero patch so graph identity stays unambiguous.";
+    case 1007: return "Add package.name to zero.toml or zero.json so it matches the zero.graph module identity.";
+    case 1008: return "Fix the projection target path or rerun zero export after reviewing graph changes.";
+    case 1009: return "Review the diff, then run zero import if the .0 projection is authoritative or zero export if zero.graph is authoritative.";
+    case 1010: return "Resolve the conflicting graph node or edge before merging.";
     case 7001: return "Change the import to a package-local module path that resolves under src/.";
     case 7002: return "Break the import cycle by moving shared declarations into a third module or removing one import edge.";
     case 3003: return "Declare the referenced symbol, import the module that provides it, or correct the identifier spelling.";
@@ -3306,6 +3328,7 @@ static const char *diag_repair_summary(int code) {
     case 3036: return "Make the alias name unique and point it at a non-cyclic concrete type.";
     case 3050: return "Call recursively with the same generic type parameters or use a concrete helper.";
     case 3051: return "Prove the Maybe is present with `.has`, or use `check`/`rescue` so absence is handled explicitly.";
+    case 3052: return "Split the buffer into smaller buffers in helper functions so each frame stays within the limit, or process the data in fixed-size chunks.";
     case 3037: return "Add an explicit public type annotation so graph and docs metadata stay stable.";
     case 3038: return "Declare the referenced interface or pass a concrete shape that satisfies the constraint.";
     case 3039: return "Add the required static method to the concrete shape.";
@@ -3329,6 +3352,7 @@ static const char *diag_repair_summary(int code) {
     case 9002: return "Remove the package cycle or move shared code into an acyclic dependency.";
     case 9003: return "Resolve the graph to one version of each package name.";
     case 9004: return "Select a target supported by the dependency or gate the dependency behind a compatible target.";
+    case 3053: return "Simplify the recursive call cycle around the named function and report this compiler defect with the source program.";
     default: return code == 0 ? "Repair the syntax at the reported parser span, then rerun zero check." : "Inspect the diagnostic fields and choose a repair manually.";
   }
 }
@@ -3633,6 +3657,16 @@ static const ExplainInfo explain_infos[] = {
     "if item.has {\n    let byte: u8 = item.value\n}",
   },
   {
+    "MEM003",
+    "memory",
+    "Stack frame locals exceed the supported limit",
+    "One function declares more fixed-size local storage than the per-function stack frame limit of 131072 bytes.",
+    "Direct backends place fixed arrays and scalar locals in one stack frame, so a documented limit keeps frames safely inside thread stacks on every target.",
+    "Split the buffer into smaller buffers in helper functions so each frame stays within the limit, or process the data in fixed-size chunks.",
+    "var buffer: [262144]u8 = [0; 262144]",
+    "var buffer: [65536]u8 = [0; 65536]",
+  },
+  {
     "FLD002",
     "shape",
     "Missing required field",
@@ -3651,6 +3685,16 @@ static const ExplainInfo explain_infos[] = {
     "End the active lexical borrow before the conflicting operation by moving the operation after the borrow scope or putting the borrow in a narrower block.",
     "let shared = &data\nupdate(&mut data)",
     "{\n  let shared = &data\n  let observed = shared.value\n}\nupdate(&mut data)",
+  },
+  {
+    "BOR003",
+    "borrow",
+    "Borrow provenance analysis did not converge",
+    "The borrow provenance analysis exceeded its internal work budget while summarizing a recursive call cycle, so the compiler stopped instead of spinning.",
+    "Provenance summaries over recursive call cycles are memoized and bounded so the type checker always terminates; exceeding the generous budget indicates a compiler defect, not a program error.",
+    "Simplify the recursive call cycle around the named function and report this compiler defect with the source program.",
+    "fn deep(n: usize) -> Bool {\n    if n == 0 {\n        return true\n    }\n    let next: Bool = deep(n - 1)\n    return next\n}",
+    "fn deep(n: usize) -> Bool {\n    if n == 0 {\n        return true\n    }\n    return deep(n - 1)\n}",
   },
   {
     "SHM001",
@@ -3705,6 +3749,105 @@ static const ExplainInfo explain_infos[] = {
   },
   {"BLD004", "build", "Backend target not buildable", "The selected backend cannot build this source, target, object format, architecture, or artifact kind.", "Target-aware buildability runs before object or executable emission and reports backend limitations with structured blocker facts.", "Choose a target whose `zero targets --json` backend facts advertise the requested artifact, or simplify the program to the backend-supported subset.", "zero check --json --emit obj --target linux-arm64 examples/direct-call-add.graph", "zero check --json --emit obj --target linux-x64 examples/direct-call-add.graph"},
   {"CGEN004", "codegen", "Direct code generation invariant failed", "A direct emitter reached an internal code generation invariant after target buildability accepted the program.", "Ordinary unsupported targets and source features should be reported before emission with BLD004.", "Report this compiler bug with the source program and target that produced it.", "zero build --json --emit obj --target linux-musl-x64 examples/direct-call-add.graph", "zero build --json --emit obj --target linux-x64 examples/direct-call-add.graph"},
+  {"APP001", "app", "Missing main function", "An executable build needs an entry point but the program declares no main function and no test blocks.", "Executable targets resolve one deterministic `pub fn main` entry point from the program graph.", "Add `pub fn main() -> Void` (optionally taking `world: World`), or build a library target instead.", "fn helper() -> i32 {\n    return 1\n}", "pub fn main() -> Void {\n    return\n}"},
+  {"BLD002", "build", "Build input or build stage failed", "The command could not load or build its input: the path is not a Zero source file, package, or graph store, or an internal build stage such as graph construction or canonical rendering failed.", "Compiler commands resolve a concrete graph or package input before any emission stage runs, so unusable input fails early with the failing stage named.", "Point the command at a package root, zero.toml, zero.graph, or .0 source file, and run `zero check` on the package to see the underlying source diagnostics.", "zero build does-not-exist.0", "zero build examples/hello.graph"},
+  {"NAM002", "name", "Duplicate declaration", "A parameter, local binding, or declaration reuses a name that is already declared in the same scope.", "Zero rejects shadowing so graph identities, reads, and patches stay unambiguous.", "Rename one of the conflicting declarations.", "fn add(value: i32, value: i32) -> i32 {\n    return value\n}", "fn add(left: i32, right: i32) -> i32 {\n    return left + right\n}"},
+  {"NAM003", "name", "Unknown name", "An identifier, type name, or CLI input such as a diagnostic code does not resolve to any visible declaration.", "Zero resolves every name against explicit declarations and fails with close matches instead of guessing.", "Declare the name, import the module that provides it, or fix the spelling using the close matches in the diagnostic.", "let total: i32 = cuont", "let total: i32 = count"},
+  {"NAM004", "name", "Wrong argument count or duplicate field", "A call passes the wrong number of arguments, or a shape literal initializes the same field twice.", "Call arity and shape field lists are fixed by the declaration, so mismatches fail instead of filling defaults.", "Match the declared parameter list exactly and initialize each shape field once.", "check world.out.write(\"a\", \"b\")", "check world.out.write(\"ab\")"},
+  {"TYP001", "type", "Invalid call", "A call target is not a function, or an argument type does not match the declared parameter type.", "Calls resolve statically against graph signatures and no implicit conversions are applied.", "Call a declared function and pass each argument with the exact declared parameter type.", "let n: i32 = add(1, \"two\")", "let n: i32 = add(1, 2)"},
+  {"TYP002", "type", "Type mismatch", "Two sides of a binding, assignment, operator, comparison, or literal disagree about the concrete type.", "Zero never converts implicitly, so every typed position must already agree on one concrete type.", "Change one side so the types match, or cast explicitly for numeric conversions.", "let n: i32 = 1_u8", "let n: i32 = 1"},
+  {"TYP003", "type", "Return type mismatch", "A function returns a value whose type does not match the declared return type, or a non-void function misses a return on some path.", "The declared return type is part of the function contract that callers and the graph rely on.", "Return a value of the declared type on every path, or change the return annotation.", "fn one() -> i32 {\n    return \"one\"\n}", "fn one() -> i32 {\n    return 1\n}"},
+  {"TYP005", "type", "Unknown shape literal type", "A shape literal names a type that is not a declared shape.", "Shape literals are typed by an existing shape declaration, not inferred structurally.", "Declare the shape or fix the literal's type name.", "let p: Pointt = Pointt { x: 1, y: 2 }", "let p: Point = Point { x: 1, y: 2 }"},
+  {"TYP010", "type", "Condition must be Bool", "An if, while, or loop condition is not a Bool expression.", "Zero has no truthiness; only Bool values select control flow.", "Compare explicitly or use a Bool expression as the condition.", "if count {\n    return\n}", "if count > 0 {\n    return\n}"},
+  {"TYP011", "type", "null requires a Maybe context", "`null` was used where the compiler cannot see an explicit Maybe<T> type.", "`null` is only the absent case of Maybe<T>, so the payload type must be visible at the use site.", "Annotate the binding, parameter, or return type as Maybe<T>.", "let value = null", "let value: Maybe<i32> = null"},
+  {"TYP012", "type", "break outside a loop", "A break statement appears outside any enclosing loop.", "break is defined only as an exit from the innermost enclosing loop.", "Move the break inside a loop or use return to leave the function.", "fn f() -> Void {\n    break\n}", "fn f() -> Void {\n    while true {\n        break\n    }\n}"},
+  {"TYP013", "type", "continue outside a loop", "A continue statement appears outside any enclosing loop.", "continue is defined only as a jump to the next iteration of the innermost enclosing loop.", "Move the continue inside a loop.", "fn f() -> Void {\n    continue\n}", "fn f() -> Void {\n    for i in 0..3 {\n        continue\n    }\n}"},
+  {"TYP014", "type", "Range loop bounds must be integers", "A `for x in a..b` loop has a non-integer bound or bounds with mismatched integer types.", "Range loops lower to integer counters, so both bounds must share one integer type.", "Use integer bounds with the same type on both sides of `..`.", "for i in 0..total_f32 {\n}", "for i in 0..total {\n}"},
+  {"TYP015", "type", "Malformed integer literal", "An integer literal has invalid digits, separators, or suffix for its base.", "Literals are parsed exactly; malformed digits fail instead of truncating.", "Fix the literal digits, separator placement, or type suffix.", "let n: i32 = 1__0", "let n: i32 = 1_000"},
+  {"TYP016", "type", "Integer literal out of range", "An integer literal does not fit the expected integer type.", "Literal values are range-checked against the concrete type instead of wrapping silently.", "Use a value within the type's range or a wider integer type.", "let b: u8 = 300_u8", "let b: u16 = 300_u16"},
+  {"TYP017", "type", "Invalid cast", "A cast was applied between types that are not both primitive numeric or byte/char types.", "Casts are explicit numeric conversions only; other type changes need real constructors or parsing.", "Cast only between primitive numeric or byte/char types, or convert through an explicit helper.", "let n: i32 = text as i32", "let parsed: Maybe<i32> = std.parse.parseI32(text)"},
+  {"TYP019", "type", "Malformed float literal", "A float literal has invalid digits, separators, or suffix.", "Literals are parsed exactly; malformed float text fails instead of rounding.", "Fix the float literal digits or suffix.", "let x: f64 = 1..5", "let x: f64 = 1.5"},
+  {"TYP020", "type", "Float literal out of range", "A float literal does not fit the expected float type.", "Literal values are range-checked against the concrete float type.", "Use a value within the float type's range or a wider float type.", "let x: f32 = 1e40_f32", "let x: f64 = 1e40"},
+  {"TYP021", "type", "Invalid member access", "A member access was applied to a value that is not a shape, Maybe value, enum case, or choice case.", "Member access is resolved statically from the declared type's fields and cases.", "Access members only on shapes, Maybe values (`.has`, `.value`), enums, or choices.", "let n: i32 = 42\nlet h: Bool = n.has", "let m: Maybe<i32> = std.parse.parseI32(\"42\")\nlet h: Bool = m.has"},
+  {"TYP022", "type", "Index must be an integer", "An array or span index expression is not an integer.", "Indexing lowers to bounds-checked integer offsets.", "Use an integer index expression.", "let item: u8 = bytes[\"0\"]", "let item: u8 = bytes[0]"},
+  {"STD002", "stdlib", "Unknown standard-library helper", "A `std.<module>.<helper>` call names a helper this compiler does not provide, or calls a known helper with the wrong number of arguments.", "The stdlib surface is an explicit catalog per compiler build, so unknown helpers fail instead of resolving dynamically.", "Load `zero skills get stdlib` for the full signature catalog and call a documented helper with its exact signature.", "let ok: Bool = std.time.validateRfc3339(text)", "let ok: Bool = std.time.isRfc3339DateTime(text)"},
+  {"OWN001", "ownership", "Owned value moved or duplicated", "An owned value was used after being moved, or a construct such as array repeat would duplicate owned values.", "Ownership transfers are tracked statically so destructors run exactly once.", "Keep ownership in one binding until the final use, or borrow with `ref`/`mutref` instead of moving.", "let a: owned<File> = file\nlet b: owned<File> = file", "let a: owned<File> = file\nuseFile(&a)"},
+  {"OWN002", "ownership", "Invalid drop method", "A drop method does not use the canonical signature, returns a value, or raises.", "Drop runs implicitly at scope exit, so it must be exactly `fn drop(self: mutref<Self>) -> Void` and non-raising.", "Use the canonical non-raising drop signature: `fn drop(self: mutref<Self>) -> Void`.", "fn drop(self: mutref<Self>) -> Void raises {\n    raise Io\n}", "fn drop(self: mutref<Self>) -> Void {\n    return\n}"},
+  {"MEM001", "memory", "Malformed memory or container type", "A memory or container type is missing a type argument or uses a malformed fixed array form.", "Container types are explicit: Maybe<T>, Span<T>, and [N]T must name their element types and lengths.", "Add the missing type argument, for example Maybe<u8>, Span<const u8>, or [4]u8.", "let value: Maybe = null", "let value: Maybe<u8> = null"},
+  {"BOR002", "borrow", "Reference outlives its source", "A reference derived from a local binding or call argument would escape through a return or a longer-lived binding.", "References must not outlive the storage they point into, and Zero checks this lexically.", "Return an owned value, or keep references to local storage inside the current function.", "fn first(items: [4]u8) -> ref<u8> {\n    return &items[0]\n}", "fn first(items: [4]u8) -> u8 {\n    return items[0]\n}"},
+  {"STC001", "static", "Unsupported static value parameter type", "A static value parameter uses a type other than a concrete integer, Bool, or enum type.", "Static value parameters are compile-time facts that monomorphization must compare and hash deterministically.", "Use a concrete integer, Bool, or enum type for static value parameters.", "type Buf<static N: String> {\n    len: usize,\n}", "type Buf<static N: usize> {\n    len: usize,\n}"},
+  {"STC002", "static", "Static value argument not constant", "A static value argument is not a deterministic compile-time value.", "Static arguments specialize types and functions at compile time, so runtime values cannot flow into them.", "Pass a literal, top-level const, or supported meta value with the static parameter's type.", "let buf: Buf<runtime_len> = makeBuf()", "const LEN: usize = 16\nlet buf: Buf<LEN> = makeBuf()"},
+  {"FLD001", "field", "Unknown member", "A member access names a field or member the value's type does not declare.", "Members resolve statically from the declared shape fields or the fixed Maybe members `.has` and `.value`.", "Use a declared field name; for Maybe values use `.has` and `.value`.", "if parsed.exists {\n}", "if parsed.has {\n}"},
+  {"VAR001", "variant", "Unknown enum case", "An enum expression names a case the enum does not declare.", "Enum cases are a closed set from the declaration.", "Use a declared case name or add the case to the enum.", "let c: Color = Color.Purpel", "let c: Color = Color.Purple"},
+  {"VAR002", "variant", "Unknown choice case", "A choice expression or match arm names a case the choice does not declare.", "Choice cases are a closed set from the declaration.", "Use a declared case name or add the case to the choice.", "let r: Result = Result.Okk(1)", "let r: Result = Result.Ok(1)"},
+  {"VAR003", "variant", "Choice payload arity mismatch", "A choice case was constructed or matched with the wrong number of payload values.", "Each choice case declares a fixed payload list that constructors and match arms must bind exactly.", "Pass or bind exactly the declared payload values for the case.", "let r: Pair = Pair.Both(1)", "let r: Pair = Pair.Both(1, 2)"},
+  {"VAR004", "variant", "Choice payload type mismatch", "A choice case payload value or binding does not match the declared payload type.", "Choice payloads are typed by the declaration, with no implicit conversions.", "Pass payload values with the declared payload types.", "let r: Wrapped = Wrapped.Value(\"1\")", "let r: Wrapped = Wrapped.Value(1)"},
+  {"MAT001", "match", "Invalid match subject", "A match subject is not an enum, choice, Bool, or integer value.", "Match lowers to exhaustive case dispatch over a closed set of values.", "Match on an enum, choice, Bool, or integer, or use if/else chains for other types.", "match name {\n}", "match color {\n    Color.Red => 1,\n}"},
+  {"MAT002", "match", "Non-exhaustive match", "A match does not cover every case of its subject and has no fallback arm.", "Exhaustiveness is checked statically so new cases fail at compile time instead of trapping at runtime.", "Add the missing case arms or a `_` fallback arm.", "match flag {\n    true => 1,\n}", "match flag {\n    true => 1,\n    false => 0,\n}"},
+  {"MAT003", "match", "Duplicate match arm", "A match repeats a case arm or declares more than one fallback arm.", "Each case and the fallback may appear once so arm selection is unambiguous.", "Remove or merge the duplicate arm.", "match flag {\n    _ => 1,\n    _ => 0,\n}", "match flag {\n    true => 1,\n    _ => 0,\n}"},
+  {"MAT004", "match", "Scalar match arm cannot bind a payload", "A match arm over a Bool, integer, or enum subject tries to bind a payload value.", "Only choice cases carry payloads; scalar and enum cases have none to bind.", "Remove the payload binding from the scalar arm.", "match flag {\n    true(x) => x,\n}", "match flag {\n    true => 1,\n    false => 0,\n}"},
+  {"MAT005", "match", "Match guard must be Bool", "A match arm guard expression is not a Bool.", "Guards select arms, so they must be Bool like every other condition.", "Use a Bool guard expression.", "match n {\n    value if value => 1,\n}", "match n {\n    value if value > 0 => 1,\n    _ => 0,\n}"},
+  {"IMP001", "import", "Unknown package-local import", "A `use` names a package-local module with no matching source file.", "Package-local imports resolve to checked-in module source files, not search paths.", "Create the module source file in the package or remove the import.", "use helpers_missing", "use helpers"},
+  {"IMP002", "import", "Import cycle", "Package-local modules import each other in a cycle.", "Module initialization and graph construction need an acyclic import order.", "Move shared declarations into a third module or remove one import edge.", "use b (from a.0)\nuse a (from b.0)", "use shared (from a.0)\nuse shared (from b.0)"},
+  {"IMP003", "import", "Duplicate public symbol", "Two imported modules export the same public symbol name.", "Public symbols form one flat package namespace, so collisions are rejected instead of shadowed.", "Rename one symbol or keep it private inside its module.", "pub fn parse() in two imported modules", "pub fn parseHeader() and pub fn parseBody()"},
+  {"CIMP001", "c-import", "C header could not be read", "An extern C import names a header file that could not be opened or read.", "Imported C surfaces come from checked-in package-relative headers so builds stay reproducible.", "Vendor the header inside the package and point the extern C import at its package-relative path.", "extern c \"missing/ext.h\" as c", "extern c \"vendor/include/ext.h\" as c"},
+  {"CIMP002", "c-import", "Unsupported C header surface", "The imported C header uses declarations the bootstrap C importer cannot model.", "Zero validates the whole imported surface up front so direct artifacts never depend on misread C declarations.", "Reduce the header to the supported scalar function surface, or wrap complex C APIs behind a small shim header.", "extern c \"vendor/include/complex_macros.h\" as c", "extern c \"vendor/include/ext.h\" as c"},
+  {"CIMP003", "c-import", "C dependency would use host discovery", "A foreign-target build would need host include paths, host libraries, or pkg-config to satisfy a C dependency.", "Cross builds must not inherit host C toolchain state, so host discovery is rejected for foreign targets.", "Use package-relative vendored headers and libraries, or set the target sysroot explicitly.", "zero build --target linux-musl-x64 with a host-discovered C lib", "vendor the lib under the package and list it in c.libs"},
+  {"PKG001", "package", "Package dependency missing", "A local dependency path does not contain a zero.toml or compatibility zero.json manifest.", "Dependencies are explicit checked-in packages, not registry lookups.", "Create the dependency package or update the dependency path in the manifest.", "[dependencies]\nhelpers = { path = \"../missing\" }", "[dependencies]\nhelpers = { path = \"../helpers\" }"},
+  {"PKG002", "package", "Package dependency cycle", "Packages depend on each other in a cycle.", "Package builds need an acyclic dependency order.", "Move shared code into a third package or remove one dependency edge.", "a depends on b, b depends on a", "a and b both depend on shared"},
+  {"PKG003", "package", "Package version conflict", "One package name resolves to conflicting versions in the dependency graph.", "A build uses exactly one version of each package name so graph identities stay stable.", "Update the requested versions so the graph resolves to one version per package.", "helpers = 0.1.0 and helpers = 0.2.0 in one graph", "helpers = 0.2.0 everywhere"},
+  {"PKG004", "package", "Package target unsupported", "A dependency does not support the selected build target.", "Target support is part of the package contract, checked before compilation.", "Select a target the dependency supports, or gate the dependency behind a compatible target.", "zero build --target win32-x64.exe with a posix-only dependency", "zero build --target linux-musl-x64 with a posix-only dependency"},
+  {"PAR100", "parse", "Parse or input error", "The input could not be parsed as Zero source, a manifest, or a recognized graph input; the span points at the first unparseable token.", "PAR100 is the catch-all parser code, so the message and span carry the specific failure.", "Repair the syntax at the reported span, then rerun zero check.", "pub fn main() -> Void {", "pub fn main() -> Void {\n    return\n}"},
+  {"GPH000", "graph-patch", "Graph patch failed", "A patch operation failed without a more specific patch code; the message carries the failing fact.", "Patch failures leave the store unchanged, so the graph is never saved in a half-applied state.", "Read the failure message, fix the operation, and reapply; `zero patch --op help` lists every operation shape.", "zero patch --op 'replace'", "zero patch --op help # copy a working operation shape"},
+  {"GPH001", "graph-patch", "Malformed patch operation", "A patch operation or body row is missing required attributes or does not parse.", "Patch operations have fixed shapes so they validate fully before touching the store.", "Run `zero patch --op help` and copy the exact shape of the operation, including required attributes and `end` markers.", "zero patch --op 'addFunction'", "zero patch --op 'addFunction name=double param=value:i32 returns=i32'"},
+  {"GPH002", "graph-patch", "Patch precondition failed", "An expect operation's graph hash or fact does not match the current store.", "Preconditions let agents assert the graph state they reasoned about before mutating it.", "Re-read the current facts with `zero query` or `zero status`, then update the expect operation to the current graph hash.", "expect graphHash=stale-hash", "zero status . # read the current graph hash, then patch"},
+  {"GPH003", "graph-patch", "Invalid patch operand", "A patch operation operand is not a valid identifier, operator, or value for its slot.", "Operands are validated against the projection grammar before any graph mutation.", "Use canonical projection syntax for operands, the same text `zero view` prints.", "addLetBinary name=x op=plus left=1 right=2", "addLetBinary name=x op=+ left=a right=b"},
+  {"GPH004", "graph-patch", "Patch target not found", "A patch operation names a node, edge, function, or parent that does not exist in the graph.", "Patches address graph handles directly, so missing targets fail instead of creating implicit nodes.", "Locate the handle first with `zero query <name>` and use the exact node id or name it prints.", "zero patch --op 'replaceFunctionBody missing_fn ...'", "zero query main # then patch the printed handle"},
+  {"GPH005", "graph-patch", "Patch conflicts with existing graph facts", "A patch would create a node id, function, or edge slot that already exists, or delete a node that is still referenced outside its subtree.", "The store stays internally consistent, so conflicting inserts and dangling references are rejected.", "Query the existing fact first, then rename, replace, or delete the conflicting fact explicitly in the same patch.", "addFunction name=main # main already exists", "replaceFunctionBody main ... # edit the existing function"},
+  {"GPH006", "graph-patch", "Patch produced an invalid graph", "The patched graph failed validation or could not lower, so the patch was rolled back and the store was not saved.", "Every patch validates the whole resulting graph before saving, keeping the store loadable by every command.", "Fix the patch body so the resulting function and graph are complete and well-formed; the message names the failing validation fact.", "replaceFunctionBody main with an unterminated block", "replaceFunctionBody main\n  return\nend"},
+  {"GRC000", "graph-reconcile", "Graph reconcile failed", "Reconciling edited source with the previous graph failed without a more specific code; the message carries the failing fact.", "Reconcile preserves node identities across text edits so graph history and patches stay stable.", "Read the failure message; if identity cannot be preserved, split the edit into smaller passes or use zero patch.", "zero reconcile zero.graph --source heavily-rewritten.0", "zero reconcile zero.graph --source small-edit.0"},
+  {"GRC001", "graph-reconcile", "Ambiguous source identity", "An edited declaration matches zero or several previous graph nodes, so node identity cannot be preserved deterministically.", "Reconcile refuses to guess which node an edit refers to, because wrong guesses silently rewrite graph history.", "Split the text edit into smaller passes, or make the change with `zero patch` so identity is explicit.", "rename two similar functions in one text edit", "rename one function per import, or zero patch --op 'rename ...'"},
+  {"GRC002", "graph-reconcile", "Node count differs", "The compared graphs contain different numbers of nodes.", "Graph comparison reports the first structural difference as a typed fact.", "Inspect both graphs with `zero query --full` and reconcile or re-import the out-of-date side.", "zero reconcile stale-zero.graph --source main.0", "zero import . # rebuild the store, then reconcile"},
+  {"GRC003", "graph-reconcile", "Node kind or module identity differs", "A compared node has a different kind, or the edited source declares a different module identity.", "Node kind and module identity anchor graph comparison, so mismatches are reported before field-level diffs.", "Compare both sides with `zero diff` and align the module identity or node kind before reconciling.", "zero reconcile zero.graph --source other-package/main.0", "zero reconcile zero.graph --source main.0"},
+  {"GRC004", "graph-reconcile", "Node semantic field differs", "A compared node differs in a semantic field such as name, type, or value.", "Semantic field diffs are reported as typed facts naming the node and field.", "Inspect the named node on both sides with `zero query --node <id>` and align the field.", "zero reconcile with diverged stores", "zero query --node fn-main # inspect, then align"},
+  {"GRC005", "graph-reconcile", "Node flag differs", "A compared node differs in a flag such as visibility or fallibility.", "Flags are part of node identity facts, so comparison reports them explicitly.", "Inspect the named node on both sides and align the flag.", "pub fn main on one side, fn main on the other", "pub fn main on both sides"},
+  {"GRC006", "graph-reconcile", "Edge count differs", "The compared graphs contain different numbers of edges.", "Edge counts anchor structural comparison before per-edge diffs.", "Inspect both graphs with `zero query --full` and reconcile or re-import the out-of-date side.", "zero reconcile stale-zero.graph --source main.0", "zero import . # rebuild the store, then reconcile"},
+  {"GRC007", "graph-reconcile", "Edge semantic fact differs", "A compared edge differs in kind, endpoints, or order.", "Edge facts carry program structure, so comparison names the differing edge.", "Inspect the named edge endpoints on both sides and align the structure.", "zero reconcile with diverged stores", "zero query --node <edge-source> # inspect, then align"},
+  {"GRC012", "graph-reconcile", "Schema version differs", "The compared graphs use different store schema versions.", "Stores written by different compiler builds can carry different schemas, which comparison rejects up front.", "Rebuild the older store with this binary via `zero import .`, or compare stores written by the same build.", "zero reconcile old-build-zero.graph --source main.0", "zero import . # rewrite the store with this build"},
+  {"GRC013", "graph-reconcile", "Module identity differs", "The compared graphs describe different modules.", "Comparison only relates graphs of the same module identity.", "Compare stores of the same package, or update package.name so identities match.", "zero reconcile other-package.graph --source main.0", "zero reconcile zero.graph --source main.0"},
+  {"GRF000", "graph-validate", "Graph validation failed", "The program graph failed validation without a more specific code; the message carries the failing fact.", "Every load, patch, and import validates the whole graph so commands never operate on broken structure.", "Read the failing fact; if the store cannot be repaired, rebuild it from source with `zero import .`.", "zero validate corrupted-zero.graph", "zero import . # rebuild the store from source"},
+  {"GRF001", "graph-validate", "Program graph missing", "A command needed a program graph but none was loaded or built.", "Graph-backed commands require a resolvable graph input.", "Point the command at a package root, zero.graph, or .0 source file.", "zero validate", "zero validate examples/memory-package"},
+  {"GRF002", "graph-validate", "Node missing identity", "A graph node has no id.", "Every node carries a stable id used by patches, queries, and provenance.", "Rebuild the store from source with `zero import .`; hand-edited stores must keep every node id.", "node row with an empty id in a hand-edited store", "zero import . # regenerate ids from source"},
+  {"GRF003", "graph-validate", "Duplicate node id", "Two graph nodes share the same id.", "Node ids are unique handles; duplicates would make patches ambiguous.", "Rebuild the store from source with `zero import .`, or remove the duplicated row from a hand-edited store.", "two node rows with id fn-main", "zero import . # regenerate unique ids"},
+  {"GRF004", "graph-validate", "Edge source missing", "An edge references a source node id that does not exist.", "Edges must connect existing nodes so traversal never dangles.", "Rebuild the store from source with `zero import .`, or fix the edge row to reference an existing node.", "edge from deleted-node to fn-main", "zero import . # regenerate consistent edges"},
+  {"GRF005", "graph-validate", "Edge target outside declared domain", "An edge references a target that is missing from its declared domain.", "Edge targets resolve within explicit domains (nodes, types, symbols) so references stay checkable.", "Rebuild the store from source with `zero import .`, or fix the edge target to an existing domain entry.", "edge to type:MissingType", "zero import . # regenerate consistent edges"},
+  {"GRF006", "graph-validate", "Edge endpoint invalid", "An edge endpoint fact is invalid for the graph; the message names the offending edge.", "Edge endpoint facts are validated against the node table on every load.", "Rebuild the store from source with `zero import .`.", "hand-edited edge row with a bad endpoint", "zero import . # regenerate consistent edges"},
+  {"GRF007", "graph-validate", "Node missing content hash", "A graph node has no content hash.", "Content hashes let stores verify node integrity and let merge detect real changes.", "Rebuild the store from source with `zero import .`; hand-edited stores must keep node hashes.", "node row without a hash field", "zero import . # regenerate node hashes"},
+  {"GRF008", "graph-validate", "Edge target domain invalid", "An edge declares a target domain the schema does not define.", "Edge domains are a closed schema set so traversal code can dispatch on them.", "Rebuild the store from source with `zero import .`, or fix the edge's domain field.", "edge with target domain 'unknown'", "zero import . # regenerate schema-valid edges"},
+  {"GRF009", "graph-validate", "Graph missing module identity", "The program graph carries no module identity.", "Module identity binds the store to its package and is required for import, merge, and status.", "Rebuild the store from source with `zero import .` in a package with package.name set.", "store with an empty moduleIdentity", "zero import . # regenerate module identity"},
+  {"GRF010", "graph-validate", "Node identity malformed", "A node id does not match the required identity format.", "Node ids follow a stable format so handles stay parseable and orderable.", "Rebuild the store from source with `zero import .`; do not hand-edit node ids.", "node id with spaces or illegal characters", "zero import . # regenerate well-formed ids"},
+  {"GRF011", "graph-validate", "Node or edge kind invalid", "A node or edge declares a kind the schema does not define.", "Kinds are a closed schema set per compiler build, so unknown kinds usually mean a build mismatch.", "Rebuild the store with this binary via `zero import .`, or install the compiler build that wrote the store.", "store written by a newer zero build", "zero import . # rewrite the store with this build"},
+  {"GRF012", "graph-validate", "Edge child kind invalid for source node", "An edge connects a parent node to a child kind that is not legal for the parent's kind.", "The graph grammar restricts which child kinds each node kind may own.", "Rebuild the store from source with `zero import .`, or fix the patch that created the illegal edge.", "function node owning a parameter of kind module", "zero import . # regenerate a grammar-valid graph"},
+  {"GRF013", "graph-validate", "Ordered edge group sparse", "An ordered edge group skips an order slot.", "Ordered children use dense order indexes so body rows have a deterministic sequence.", "Rebuild the store from source with `zero import .`, or renumber the patched edge orders densely from zero.", "body edges with orders 0 and 2", "body edges with orders 0 and 1"},
+  {"GRF014", "graph-validate", "Node missing required payload", "A node is missing a payload its kind requires, such as a name, value, or type.", "Each node kind declares required payload fields the projection and emitters rely on.", "Rebuild the store from source with `zero import .`, or add the missing payload in the patch that created the node.", "let node without a type payload", "zero import . # regenerate complete nodes"},
+  {"GRF015", "graph-validate", "Node carries illegal payload", "A node carries a payload its kind forbids, such as a name on a literal node.", "Payload rules keep node kinds unambiguous for projection and lowering.", "Rebuild the store from source with `zero import .`, or remove the illegal payload from the patch.", "literal node with a name payload", "zero import . # regenerate well-formed nodes"},
+  {"GRF016", "graph-validate", "Node edge shape invalid", "A node's edges do not match its kind's required shape, such as a call node missing its callee edge.", "Each node kind declares the edge shape lowering depends on, validated before any emission.", "Rebuild the store from source with `zero import .`, or complete the node's edges in the patch that created it.", "call node without a callee edge", "zero import . # regenerate complete call nodes"},
+  {"RGM000", "graph-merge", "Repository graph merge failed", "The merge failed without a more specific code; the message carries the failing fact.", "Merge failures leave the target store unchanged.", "Read the failure message and rerun `zero merge` after repairing the named input.", "zero merge --base bad.graph --left l.graph --right r.graph .", "zero merge --base base.graph --left l.graph --right r.graph ."},
+  {"RGM001", "graph-merge", "Merge input missing or incompatible", "A merge input store is missing, unreadable, or differs in schema version or module identity.", "Three-way merge needs base, left, and right stores of the same module written by compatible builds.", "Check each input path, rebuild older stores with this binary via `zero import .`, and merge stores of the same package.", "zero merge --base other-module.graph --left l.graph --right r.graph .", "zero merge --base base.graph --left l.graph --right r.graph ."},
+  {"RGM002", "graph-merge", "Node changed on both sides", "Both sides changed the same graph node, or its source path, since the base store.", "Conflicting node edits need a human or agent decision; merge never picks a side silently.", "Resolve the conflict by editing one side to match the intended result, then rerun zero merge.", "both sides edit fn main differently", "apply one side's edit, re-export, then merge"},
+  {"RGM003", "graph-merge", "Same node id inserted with different content", "Both sides inserted the same node id with different content.", "Node ids must converge to one content during merge.", "Rename or re-create one side's node so ids no longer collide, then rerun zero merge.", "both sides add fn helper with different bodies", "rename one helper before merging"},
+  {"RGM004", "graph-merge", "Edge changed on both sides", "Both sides changed the same edge or edge order slot since the base store.", "Conflicting structural edits need an explicit resolution.", "Resolve the conflict by editing one side's structure, then rerun zero merge.", "both sides reorder the same function body", "apply one side's order, then merge"},
+  {"RGM005", "graph-merge", "Source projection conflict", "Both sides changed the same source projection, or a projection no longer matches its merged graph.", "Merged stores must keep projections and graph content consistent.", "Resolve the projection conflict by re-exporting one side, then rerun zero merge.", "both sides edit main.0 differently", "zero export on the chosen side, then merge"},
+  {"RGM006", "graph-merge", "Merged graph failed validation", "The merged result failed whole-graph validation, so no store was written.", "Merge only writes stores every command can load.", "Inspect the named validation fact, repair the conflicting side, and rerun zero merge.", "merge producing a dangling edge", "repair the side that deleted the node, then merge"},
+  {"RGM007", "graph-merge", "Merge could not regenerate source projection", "The merged graph could not regenerate a matching .0 source projection.", "Merged stores ship with projections that match their graph content exactly.", "Re-export the projections on the conflicting side with `zero export`, then rerun zero merge.", "merge with stale checked-in projections", "zero export . # refresh projections, then merge"},
+  {"RGP001", "repository-graph", "Repository graph store missing", "The package has no checked-in zero.graph repository graph store.", "Package commands compile from zero.graph; .0 files are projections of it.", "Run `zero import .` to create the repository graph store from the package source.", "zero status . # in a package without zero.graph", "zero import . # create zero.graph, then zero status ."},
+  {"RGP002", "repository-graph", "Import or export direction required", "Source text and zero.graph disagree, and the command cannot decide which side is authoritative.", "Choosing a direction silently could discard edits on the other side.", "Run `zero import` if the .0 source text is authoritative, or `zero export` if zero.graph is authoritative.", "zero export . # while main.0 has unimported edits", "zero import . # make the edited source authoritative"},
+  {"RGP003", "repository-graph", "Repository graph store invalid", "The zero.graph store exists but could not be parsed or failed validation.", "Commands refuse to guess around a broken store so package state stays deterministic.", "Run `zero import .` after reviewing the source projection to rebuild the store from source.", "zero check . # with a corrupted zero.graph", "zero import . # rebuild zero.graph from source"},
+  {"RGP004", "repository-graph", "Source projection generation failed", "The store's .0 source projection could not be generated, written, or kept byte-stable.", "Projections are deterministic renderings of the graph; failures usually mean a broken projection table or unwritable target path.", "Fix the projection target path, or rebuild the store from source with `zero import .` and re-export.", "zero export . # with a non-local projection path in the store", "zero import . && zero export ."},
+  {"RGP006", "repository-graph", "Source projection missing or differs", "A checked-in .0 source projection is missing or no longer matches the repository graph.", "Projection drift means source text and graph describe different programs.", "Review the diff, then run `zero import` if the .0 projection is authoritative or `zero export` if zero.graph is authoritative.", "zero verify-projection . # after editing main.0 by hand", "zero import . # accept the edited projection"},
+  {"RGP007", "repository-graph", "Source identity ambiguous or mismatched", "An import or status check could not map source declarations onto existing graph identities, or the package manifest identity does not match the store.", "Graph node identities survive text edits only when the mapping is unambiguous and the package identity matches.", "Split the text edit into smaller passes or use `zero patch`; for identity mismatches, align package.name with the store or re-import.", "zero import . # after renaming and reordering many functions at once", "zero import . # after one focused rename"},
+  {"RGP008", "repository-graph", "Stale package projection", "Package source was edited after the store was written and ZERO_STALE=fail turns that staleness into an error.", "Strict staleness mode lets automation require an explicit refresh instead of an implicit one.", "Run `zero import .` to refresh the store, or unset ZERO_STALE to let commands refresh automatically.", "ZERO_STALE=fail zero check . # after editing main.0", "zero import . && ZERO_STALE=fail zero check ."},
+  {"RGP009", "repository-graph", "Binary store unreadable by this compiler", "The binary zero.graph store has the right magic but this compiler build cannot decode it, or its content failed integrity checks.", "Binary store layout can change between zero builds, so a store written by a different build fails to load instead of being misread.", "The store was likely written by a different zero build: rebuild it with this binary via `zero import .`, or install the matching compiler. Check builds with `zero --version`.", "zero query zero.graph # store written by another zero build", "zero import . # rewrite zero.graph with this binary"},
   {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL},
 };
 
@@ -3714,6 +3857,49 @@ static const ExplainInfo *find_explain_info(const char *code) {
     if (strcmp(explain_infos[i].code, code) == 0) return &explain_infos[i];
   }
   return NULL;
+}
+
+typedef struct {
+  const char *code;
+  int numeric;
+} ExplainRepairNumeric;
+
+static int explain_repair_numeric(const char *code) {
+  static const ExplainRepairNumeric pairs[] = {
+    {"PAR100", 100},
+    {"ERR001", 1001}, {"ERR002", 1002}, {"ERR003", 1003},
+    {"RGP009", 1004}, {"RGP003", 1005}, {"RGP007", 1006}, {"RGP004", 1008}, {"RGP006", 1009}, {"RGM002", 1010},
+    {"APP001", 2001}, {"BLD002", 2002}, {"BLD003", 2003}, {"BLD004", 2004},
+    {"NAM002", 3002}, {"NAM003", 3003}, {"NAM004", 3004},
+    {"TYP001", 3005}, {"TYP002", 3006}, {"TYP003", 3007}, {"TYP005", 3009}, {"TYP009", 3010},
+    {"STD002", 3011}, {"STD003", 3012},
+    {"OWN001", 3013}, {"OWN002", 3014}, {"MEM001", 3015},
+    {"TYP010", 3016}, {"TYP011", 3017}, {"TYP012", 3018}, {"TYP013", 3019}, {"TYP014", 3020},
+    {"TYP015", 3021}, {"TYP016", 3022}, {"TYP017", 3023}, {"TYP019", 3025}, {"TYP020", 3026},
+    {"TYP021", 3027}, {"TYP022", 3028},
+    {"BOR001", 3029}, {"BOR002", 3030}, {"ABI001", 3031},
+    {"TYP023", 3032}, {"TYP024", 3033}, {"TYP025", 3034}, {"MET001", 3035}, {"TYP026", 3036},
+    {"PUB001", 3037},
+    {"IFC001", 3038}, {"IFC002", 3039}, {"IFC003", 3040}, {"IFC004", 3041}, {"IFC005", 3042},
+    {"STC001", 3043}, {"STC002", 3044}, {"STC003", 3045},
+    {"SHM001", 3046}, {"SHM002", 3047},
+    {"RCV001", 3048}, {"RCV002", 3049},
+    {"TYP027", 3050}, {"MEM002", 3051}, {"MEM003", 3052}, {"BOR003", 3053},
+    {"FLD001", 3101}, {"FLD002", 3102},
+    {"VAR001", 3103}, {"VAR002", 3104}, {"VAR003", 3108}, {"VAR004", 3109},
+    {"MAT001", 3105}, {"MAT002", 3106}, {"MAT003", 3107}, {"MAT004", 3110}, {"MAT005", 3111},
+    {"CGEN004", 4004},
+    {"TAR001", 6001}, {"TAR002", 6002},
+    {"IMP001", 7001}, {"IMP002", 7002}, {"IMP003", 7003},
+    {"CIMP001", 8001}, {"CIMP002", 8002}, {"CIMP003", 8003}, {"CIMP004", 8004}, {"CIMP005", 8005},
+    {"PKG001", 9001}, {"PKG002", 9002}, {"PKG003", 9003}, {"PKG004", 9004},
+    {NULL, 0},
+  };
+  if (!code) return -1;
+  for (size_t i = 0; pairs[i].code; i++) {
+    if (strcmp(pairs[i].code, code) == 0) return pairs[i].numeric;
+  }
+  return -1;
 }
 
 static void print_explain_json(const ExplainInfo *info) {
@@ -3730,39 +3916,7 @@ static void print_explain_json(const ExplainInfo *info) {
   zbuf_append(&buf, ",\n  \"why\": ");
   append_json_string(&buf, info->why);
   zbuf_append(&buf, ",\n  \"repair\": {\"id\": ");
-  append_json_string(&buf, diag_repair_id(strcmp(info->code, "TAR001") == 0 ? 6001 :
-                                         strcmp(info->code, "TAR002") == 0 ? 6002 :
-                                         strcmp(info->code, "ERR001") == 0 ? 1001 :
-                                         strcmp(info->code, "BLD003") == 0 ? 2003 :
-                                         strcmp(info->code, "BLD004") == 0 ? 2004 :
-                                         strcmp(info->code, "TYP009") == 0 ? 3010 :
-                                         strcmp(info->code, "TYP023") == 0 ? 3032 :
-                                         strcmp(info->code, "TYP024") == 0 ? 3033 :
-                                         strcmp(info->code, "TYP025") == 0 ? 3034 :
-                                         strcmp(info->code, "MET001") == 0 ? 3035 :
-                                         strcmp(info->code, "TYP026") == 0 ? 3036 :
-                                         strcmp(info->code, "TYP027") == 0 ? 3050 :
-                                         strcmp(info->code, "MEM002") == 0 ? 3051 :
-                                         strcmp(info->code, "FLD002") == 0 ? 3102 :
-                                         strcmp(info->code, "PUB001") == 0 ? 3037 :
-                                         strcmp(info->code, "IFC001") == 0 ? 3038 :
-                                         strcmp(info->code, "IFC002") == 0 ? 3039 :
-                                         strcmp(info->code, "IFC003") == 0 ? 3040 :
-                                         strcmp(info->code, "IFC004") == 0 ? 3041 :
-                                         strcmp(info->code, "IFC005") == 0 ? 3042 :
-                                         strcmp(info->code, "STC001") == 0 ? 3043 :
-                                         strcmp(info->code, "STC002") == 0 ? 3044 :
-                                         strcmp(info->code, "STC003") == 0 ? 3045 :
-                                         strcmp(info->code, "SHM001") == 0 ? 3046 :
-                                         strcmp(info->code, "SHM002") == 0 ? 3047 :
-                                         strcmp(info->code, "RCV001") == 0 ? 3048 :
-                                         strcmp(info->code, "RCV002") == 0 ? 3049 :
-                                         strcmp(info->code, "BOR001") == 0 ? 3029 :
-                                         strcmp(info->code, "ERR002") == 0 ? 1002 :
-                                         strcmp(info->code, "ERR003") == 0 ? 1003 :
-                                         strcmp(info->code, "STD003") == 0 ? 3012 :
-                                         strncmp(info->code, "CIMP00", 6) == 0 ? 8000 + (info->code[6] - '0') :
-                                         strcmp(info->code, "CGEN004") == 0 ? 4004 : 0));
+  append_json_string(&buf, diag_repair_id(explain_repair_numeric(info->code)));
   zbuf_append(&buf, ", \"summary\": ");
   append_json_string(&buf, info->canonical_repair);
   zbuf_append(&buf, "},\n  \"examples\": {\"bad\": ");
@@ -3815,50 +3969,19 @@ static void append_backend_blocker_json(ZBuf *buf, const ZBackendBlocker *blocke
   zbuf_append(buf, "}");
 }
 
-static void print_diag_json_ex(const char *path, const ZDiag *diag, const char *safety_profile) {
+static void append_error_diag_json_object(ZBuf *bufp, const char *path, const ZDiag *diag);
+
+static void print_diag_json_list_ex(const char *path, const ZDiag *diags, size_t len, const char *safety_profile) {
   ZBuf buf;
   zbuf_init(&buf);
-  zbuf_append(&buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": false,\n  \"diagnostics\": [\n    {\n");
-  zbuf_append(&buf, "      \"severity\": \"error\",\n      \"code\": ");
-  append_json_string(&buf, diag_code(diag->code));
-  zbuf_append(&buf, ",\n      \"message\": ");
-  append_json_string(&buf, diag->message);
-  zbuf_append(&buf, ",\n      \"path\": ");
-  append_json_string(&buf, diag->path ? diag->path : path);
-  zbuf_appendf(&buf, ",\n      \"line\": %d,\n      \"column\": %d,\n      \"length\": %d,\n", diag->line, diag->column, diag->length > 0 ? diag->length : 1);
-  zbuf_append(&buf, "      \"expected\": ");
-  append_json_string(&buf, diag->expected);
-  zbuf_append(&buf, ",\n      \"actual\": ");
-  append_json_string(&buf, diag->actual);
-  zbuf_append(&buf, ",\n      \"help\": ");
-  append_json_string(&buf, diag->help);
-  zbuf_append(&buf, ",\n      \"fixSafety\": ");
-  append_json_string(&buf, diag_fix_safety(diag->code));
-  zbuf_append(&buf, ",\n      \"repair\": {\"id\": ");
-  append_json_string(&buf, diag_repair_id(diag->code));
-  zbuf_append(&buf, ", \"summary\": ");
-  append_json_string(&buf, diag_repair_summary(diag->code));
-  zbuf_append(&buf, "}");
-  if (diag->backend_blocker.present) {
-    zbuf_append(&buf, ",\n      \"backendBlocker\": ");
-    append_backend_blocker_json(&buf, &diag->backend_blocker);
+  zbuf_append(&buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": false,\n  \"diagnostics\": [\n");
+  for (size_t i = 0; i < len; i++) {
+    if (i > 0) zbuf_append(&buf, ",\n");
+    zbuf_append(&buf, "    {\n");
+    append_error_diag_json_object(&buf, path, &diags[i]);
+    zbuf_append(&buf, "\n    }");
   }
-  if (diag_has_borrow_trace(diag)) {
-    zbuf_append(&buf, ",\n      \"borrowTrace\": ");
-    append_diag_borrow_trace_json(&buf, path, diag);
-  }
-  zbuf_append(&buf, ",\n      \"related\": [");
-  if ((diag->code == 7001 || diag->code == 7002 || diag->code == 7003 || diag->code == 1002 || diag->code == 1003 ||
-       diag->code == 6001 || diag->code == 6002 ||
-       diag->code == 3010 || diag->code == 3011 || diag->code == 3012 || diag->code == 3028 || diag->code == 3029) && diag->actual[0]) {
-    zbuf_append(&buf, "{\"path\":");
-    append_json_string(&buf, diag->path ? diag->path : path);
-    zbuf_appendf(&buf, ",\"line\":%d,\"column\":%d,\"message\":", diag->line, diag->column);
-    append_json_string(&buf, diag->actual);
-    zbuf_append(&buf, "}");
-  }
-  zbuf_append(&buf, "]");
-  zbuf_append(&buf, "\n    }\n  ]");
+  zbuf_append(&buf, "\n  ]");
   if (safety_profile) {
     zbuf_append(&buf, ",\n  \"safetyFacts\": ");
     append_safety_facts_json(&buf, safety_profile);
@@ -3866,6 +3989,53 @@ static void print_diag_json_ex(const char *path, const ZDiag *diag, const char *
   zbuf_append(&buf, "\n}\n");
   fputs(buf.data, stdout);
   zbuf_free(&buf);
+}
+
+static void print_diag_json_ex(const char *path, const ZDiag *diag, const char *safety_profile) {
+  print_diag_json_list_ex(path, diag, 1, safety_profile);
+}
+
+static void append_error_diag_json_object(ZBuf *buf, const char *path, const ZDiag *diag) {
+  zbuf_append(buf, "      \"severity\": \"error\",\n      \"code\": ");
+  append_json_string(buf, diag_code(diag->code));
+  zbuf_append(buf, ",\n      \"message\": ");
+  append_json_string(buf, diag->message);
+  zbuf_append(buf, ",\n      \"path\": ");
+  append_json_string(buf, diag->path ? diag->path : path);
+  zbuf_appendf(buf, ",\n      \"line\": %d,\n      \"column\": %d,\n      \"length\": %d,\n", diag->line, diag->column, diag->length > 0 ? diag->length : 1);
+  zbuf_append(buf, "      \"expected\": ");
+  append_json_string(buf, diag->expected);
+  zbuf_append(buf, ",\n      \"actual\": ");
+  append_json_string(buf, diag->actual);
+  zbuf_append(buf, ",\n      \"help\": ");
+  append_json_string(buf, diag->help);
+  zbuf_append(buf, ",\n      \"fixSafety\": ");
+  append_json_string(buf, diag_fix_safety(diag->code));
+  zbuf_append(buf, ",\n      \"repair\": {\"id\": ");
+  append_json_string(buf, diag_repair_id(diag->code));
+  zbuf_append(buf, ", \"summary\": ");
+  append_json_string(buf, diag_repair_summary(diag->code));
+  zbuf_append(buf, "}");
+  if (diag->backend_blocker.present) {
+    zbuf_append(buf, ",\n      \"backendBlocker\": ");
+    append_backend_blocker_json(buf, &diag->backend_blocker);
+  }
+  if (diag_has_borrow_trace(diag)) {
+    zbuf_append(buf, ",\n      \"borrowTrace\": ");
+    append_diag_borrow_trace_json(buf, path, diag);
+  }
+  zbuf_append(buf, ",\n      \"related\": [");
+  if ((diag->code == 7001 || diag->code == 7002 || diag->code == 7003 || diag->code == 1002 || diag->code == 1003 ||
+       (diag->code >= 1004 && diag->code <= 1010) ||
+       diag->code == 6001 || diag->code == 6002 ||
+       diag->code == 3010 || diag->code == 3011 || diag->code == 3012 || diag->code == 3028 || diag->code == 3029) && diag->actual[0]) {
+    zbuf_append(buf, "{\"path\":");
+    append_json_string(buf, diag->path ? diag->path : path);
+    zbuf_appendf(buf, ",\"line\":%d,\"column\":%d,\"message\":", diag->line, diag->column);
+    append_json_string(buf, diag->actual);
+    zbuf_append(buf, "}");
+  }
+  zbuf_append(buf, "]");
 }
 
 static void print_diag_json(const char *path, const ZDiag *diag) {
@@ -4098,9 +4268,25 @@ static bool parse_graph_query_option(int argc, char **argv, int *index, Command 
   const bool node_selector = cli_arg_is(arg, "--node");
   const bool refs_selector = cli_arg_is(arg, "--refs");
   const bool calls_selector = cli_arg_is(arg, "--calls");
-  if (!function_selector && !find_selector && !node_selector && !refs_selector && !calls_selector) return false;
-  if (!command_is_program_graph_command(command) || !cli_arg_is(command->kind, "query")) {
+  const bool depth_selector = cli_arg_is(arg, "--depth");
+  const bool full_selector = cli_arg_is(arg, "--full");
+  if (!function_selector && !find_selector && !node_selector && !refs_selector && !calls_selector && !depth_selector && !full_selector) return false;
+  const bool query_command = command_is_program_graph_command(command) && cli_arg_is(command->kind, "query");
+  const bool view_command = command_is_program_graph_command(command) && (cli_arg_is(command->kind, "view") || cli_arg_is(command->kind, "diff"));
+  if (function_selector && view_command) {
+    if (*index + 1 >= argc) {
+      command->unknown_flag = arg;
+      return true;
+    }
+    command->query_function = argv[++(*index)];
+    return true;
+  }
+  if (!query_command) {
     command->unknown_flag = arg;
+    return true;
+  }
+  if (full_selector) {
+    command->query_full = true;
     return true;
   }
   if (*index + 1 >= argc) {
@@ -4111,6 +4297,7 @@ static bool parse_graph_query_option(int argc, char **argv, int *index, Command 
   else if (node_selector) command->query_node = argv[++(*index)];
   else if (refs_selector) command->query_refs = argv[++(*index)];
   else if (calls_selector) command->query_calls = argv[++(*index)];
+  else if (depth_selector) command->query_depth = argv[++(*index)];
   else command->query_find = argv[++(*index)];
   return true;
 }
@@ -4191,6 +4378,22 @@ static bool parse_common_option(int argc, char **argv, int *index, Command *comm
     if (*index + 1 >= argc) command->unknown_flag = arg;
     else command->patch_expect_graph_hash = argv[++(*index)];
     return true;
+  } else if (cli_arg_is(arg, "--replace-fn")) {
+    if (!command || !command->graph_patch_command) {
+      command->unknown_flag = arg;
+      return true;
+    }
+    if (*index + 1 >= argc) command->unknown_flag = arg;
+    else command->patch_replace_fn = argv[++(*index)];
+    return true;
+  } else if (cli_arg_is(arg, "--body-file")) {
+    if (!command || !command->graph_patch_command) {
+      command->unknown_flag = arg;
+      return true;
+    }
+    if (*index + 1 >= argc) command->unknown_flag = arg;
+    else command->patch_body_file = argv[++(*index)];
+    return true;
   } else if (cli_arg_is(arg, "--op")) {
     if (!command || !command->graph_patch_command) {
       command->unknown_flag = arg;
@@ -4261,6 +4464,31 @@ static bool command_defaults_to_current_directory(const Command *command) {
 
 static void command_apply_current_directory_default(Command *command) {
   if (command_defaults_to_current_directory(command)) command->input = ".";
+}
+
+static bool query_argument_looks_like_symbol(const char *arg) {
+  if (!arg || !arg[0]) return false;
+  if (!isalpha((unsigned char)arg[0]) && arg[0] != '_') return false;
+  for (const char *c = arg; *c; c++) {
+    if (!isalnum((unsigned char)*c) && *c != '_' && *c != '.') return false;
+  }
+  static const char *const input_extensions[] = {".0", ".graph", ".toml", ".json"};
+  size_t len = strlen(arg);
+  for (size_t i = 0; i < sizeof(input_extensions) / sizeof(input_extensions[0]); i++) {
+    size_t ext_len = strlen(input_extensions[i]);
+    if (len > ext_len && strcmp(arg + len - ext_len, input_extensions[i]) == 0) return false;
+  }
+  return true;
+}
+
+static void command_apply_query_bare_argument(Command *command) {
+  if (!command || !command->kind || !cli_arg_is(command->kind, "query")) return;
+  if (!command->input || path_exists(command->input)) return;
+  if (command->query_find || command->query_function || command->query_refs || command->query_calls || command->query_node) return;
+  if (!query_argument_looks_like_symbol(command->input)) return;
+  command->query_find = command->input;
+  command->query_bare_argument = command->input;
+  command->input = NULL;
 }
 
 static bool parse_command(int argc, char **argv, Command *command) {
@@ -4421,12 +4649,45 @@ static void set_graph_patch_projection_input_diag(const char *input_path, const 
   snprintf(diag->help, sizeof(diag->help), "%s", graph_path && graph_path[0] ? "patch the package or .graph store directly, or run zero import after a human edits the .0 projection" : "run zero import to create a graph store before patching");
 }
 
+static const char *patch_detect_skip_filler(const char *cursor, const char *end) {
+  if (end - cursor >= 3 && memcmp(cursor, "\xEF\xBB\xBF", 3) == 0) cursor += 3;
+  while (cursor < end) {
+    if (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') { cursor++; continue; }
+    if (*cursor == '#') {
+      while (cursor < end && *cursor != '\n') cursor++;
+      continue;
+    }
+    break;
+  }
+  return cursor;
+}
+
 static bool path_has_program_graph_patch_header(const char *path) {
   static const char header[] = "zero-program-graph-patch v1";
-  char bytes[sizeof(header) - 1];
+  char bytes[512];
   size_t read = 0;
   if (!z_read_file_prefix(path, bytes, sizeof(bytes), &read, NULL)) return false;
-  return read == sizeof(bytes) && memcmp(bytes, header, sizeof(bytes)) == 0;
+  const char *cursor = patch_detect_skip_filler(bytes, bytes + read);
+  return (size_t)(bytes + read - cursor) >= sizeof(header) - 1 && memcmp(cursor, header, sizeof(header) - 1) == 0;
+}
+
+static bool path_starts_with_program_graph_patch_operation(const char *path) {
+  static const char *const keywords[] = {
+    "expect", "set", "insertEdge", "insert", "replaceFunctionBody", "replaceBlockBody", "replace",
+    "delete", "rename", "addFunction", "addMain", "addParam", "addReturnBinary", "addLetLiteral",
+    "addLetBinary", "addReturnValue", "addCheckWriteValue", "addCheckWrite", "addTest", NULL,
+  };
+  char bytes[512];
+  size_t read = 0;
+  if (!z_read_file_prefix(path, bytes, sizeof(bytes), &read, NULL)) return false;
+  const char *cursor = patch_detect_skip_filler(bytes, bytes + read);
+  const char *end = bytes + read;
+  for (size_t i = 0; keywords[i]; i++) {
+    size_t len = strlen(keywords[i]);
+    if ((size_t)(end - cursor) < len || memcmp(cursor, keywords[i], len) != 0) continue;
+    if (cursor + len == end || cursor[len] == ' ' || cursor[len] == '\t' || cursor[len] == '\r' || cursor[len] == '\n') return true;
+  }
+  return false;
 }
 
 static void direct_input_push_string(char ***items, size_t *len, const char *value) {
@@ -7021,7 +7282,7 @@ static char *command_default_out_path(const Command *command, const SourceInput 
 
 static int print_version_command(bool json) {
   if (!json) {
-    printf("zero %s\n", ZERO_VERSION);
+    printf("zero %s (build %s)\n", ZERO_VERSION, ZERO_BUILD_HASH);
     return 0;
   }
 
@@ -7084,7 +7345,7 @@ static bool graph_init_reject_existing(const char *root, ZDiag *diag) {
   bool exists = path_exists(toml_manifest) || path_exists(json_manifest) || path_exists(store);
   if (exists) {
     diag->code = 2002;
-    diag->path = path_exists(toml_manifest) ? toml_manifest : (path_exists(json_manifest) ? json_manifest : store);
+    z_diag_set_path_copy(diag, path_exists(toml_manifest) ? toml_manifest : (path_exists(json_manifest) ? json_manifest : store));
     diag->line = 1;
     diag->column = 1;
     diag->length = 1;
@@ -7092,9 +7353,9 @@ static bool graph_init_reject_existing(const char *root, ZDiag *diag) {
     snprintf(diag->expected, sizeof(diag->expected), "project path without zero.toml, zero.json, or zero.graph");
     snprintf(diag->actual, sizeof(diag->actual), "%s", diag->path);
     snprintf(diag->help, sizeof(diag->help), "choose a new project path or remove the existing graph project files");
-    if (diag->path != toml_manifest) free(toml_manifest);
-    if (diag->path != json_manifest) free(json_manifest);
-    if (diag->path != store) free(store);
+    free(toml_manifest);
+    free(json_manifest);
+    free(store);
     return false;
   }
   free(toml_manifest);
@@ -8620,6 +8881,7 @@ static const char *helper_module_name(const ZStdHelperInfo *helper) {
   if (strncmp(name, "std.str.", strlen("std.str.")) == 0) return "std.str";
   if (strncmp(name, "std.testing.", strlen("std.testing.")) == 0) return "std.testing";
   if (strncmp(name, "std.text.", strlen("std.text.")) == 0) return "std.text";
+  if (strncmp(name, "std.unicode.", strlen("std.unicode.")) == 0) return "std.unicode";
   if (strncmp(name, "std.io.", strlen("std.io.")) == 0) return "std.io";
   if (strncmp(name, "std.codec.", strlen("std.codec.")) == 0) return "std.codec";
   if (strncmp(name, "std.mem.", strlen("std.mem.")) == 0) return "std.mem";
@@ -8629,8 +8891,10 @@ static const char *helper_module_name(const ZStdHelperInfo *helper) {
   if (strncmp(name, "std.url.", strlen("std.url.")) == 0) return "std.url";
   if (strncmp(name, "std.time.", strlen("std.time.")) == 0) return "std.time";
   if (strncmp(name, "std.rand.", strlen("std.rand.")) == 0) return "std.rand";
+  if (strncmp(name, "std.regex.", strlen("std.regex.")) == 0) return "std.regex";
   if (strncmp(name, "std.proc.", strlen("std.proc.")) == 0) return "std.proc";
   if (strncmp(name, "std.crypto.", strlen("std.crypto.")) == 0) return "std.crypto";
+  if (strncmp(name, "std.inet.", strlen("std.inet.")) == 0) return "std.inet";
   if (strncmp(name, "std.net.", strlen("std.net.")) == 0) return "std.net";
   if (strncmp(name, "std.http.", strlen("std.http.")) == 0) return "std.http";
   if (strncmp(name, "std.fs.", strlen("std.fs.")) == 0) return "std.fs";
@@ -8669,6 +8933,7 @@ static const char *helper_example_path(const ZStdHelperInfo *helper) {
   if (helper && helper->name && strncmp(helper->name, "std.str.", strlen("std.str.")) == 0) return "examples/std-str.0";
   if (strcmp(module, "std.testing") == 0 || strcmp(module, "std.log") == 0) return "examples/std-testing-log.0";
   if (strcmp(module, "std.text") == 0) return "conformance/native/pass/std-text.0";
+  if (strcmp(module, "std.unicode") == 0) return "conformance/native/pass/std-unicode.0";
   if (helper && helper->name && strncmp(helper->name, "std.math.", strlen("std.math.")) == 0) return "examples/std-math.0";
   if (strcmp(module, "std.io") == 0 || strcmp(module, "std.path") == 0) return "examples/std-path-io.0";
   if (strcmp(module, "std.args") == 0 || strcmp(module, "std.env") == 0) return "examples/cli-file.0";
@@ -8676,7 +8941,9 @@ static const char *helper_example_path(const ZStdHelperInfo *helper) {
   if (strcmp(module, "std.codec") == 0 || strcmp(module, "std.json") == 0) return "examples/std-data-formats.0";
   if (helper && helper->name && strncmp(helper->name, "std.url.", strlen("std.url.")) == 0) return "conformance/native/pass/std-codec-json-url.0";
   if (strcmp(module, "std.parse") == 0) return "examples/parse-cursor.0";
+  if (strcmp(module, "std.regex") == 0) return "conformance/native/pass/std-regex.0";
   if (strcmp(module, "std.time") == 0 || strcmp(module, "std.rand") == 0 || strcmp(module, "std.proc") == 0 || strcmp(module, "std.crypto") == 0) return "examples/std-platform.0";
+  if (strcmp(module, "std.inet") == 0) return "conformance/native/pass/std-inet.0";
   if (strcmp(module, "std.net") == 0) return "conformance/native/pass/std-net-http-breadth.0";
   if (strcmp(module, "std.http") == 0) return "conformance/native/pass/std-http-fetch.0";
   return "examples/README.md";
@@ -10424,13 +10691,15 @@ static bool validate_c_libraries_for_target(const SourceInput *input, const ZTar
   char manifest_path[512];
   manifest_path_for_input(input, manifest_path, sizeof(manifest_path));
   ZDiag read_diag = {0}; char *manifest = z_read_file(manifest_path, &read_diag);
+  free((char *)read_diag.path); read_diag.path = NULL;
   if (!manifest && !require_link_plan) return true;
   if (!manifest) {
     set_c_import_link_plan_diag(diag, manifest_path, "extern C calls require C link metadata", "zero.toml or zero.json was not found");
     return false;
   }
   ZManifest parsed_manifest = {0};
-  if (!z_parse_manifest_json(manifest, &parsed_manifest, &read_diag)) { free(manifest); return true; }
+  if (!z_parse_manifest_json(manifest, &parsed_manifest, &read_diag)) { free((char *)read_diag.path); free(manifest); return true; }
+  free((char *)read_diag.path); read_diag.path = NULL;
   bool *direct_import_has_link_inputs = NULL;
   if (require_link_plan) direct_import_has_link_inputs = z_checked_calloc(input->direct_c_import_header_count ? input->direct_c_import_header_count : 1, sizeof(bool));
   if (require_link_plan && input->direct_c_import_header_count == 0) { set_c_import_link_plan_diag(diag, manifest_path, "extern C calls require C link metadata", "no direct C import headers were recorded"); ok = false; goto done; }
@@ -10795,11 +11064,14 @@ static void append_target_readiness_from_ir_json(ZBuf *buf, SourceInput *input, 
       ready = false;
     }
   }
+  bool mapped = false;
   if (!ready && input) {
-    if (diag.code != 8003 && diag.code != 8005) z_map_source_diag(input, &diag);
+    if (diag.code != 8003 && diag.code != 8005) mapped = z_map_source_diag(input, &diag);
     if (!diag.path) diag.path = input->source_file;
   }
   append_target_readiness_result_json(buf, input, program, target, command, ir, &diag, ready);
+  /* source mapping replaces the path with a fresh copy it owns */
+  if (mapped) free((char *)diag.path);
 }
 
 static void append_target_readiness_json(ZBuf *buf, SourceInput *input, const Program *program, const ZTargetInfo *target, const Command *command) {
@@ -10825,13 +11097,16 @@ static void append_target_readiness_json(ZBuf *buf, SourceInput *input, const Pr
       ready = false;
     }
   }
+  bool mapped = false;
   if (!ready && input) {
     /* C library validation points at the package manifest; source mapping would erase that. */
-    if (diag.code != 8003 && diag.code != 8005) z_map_source_diag(input, &diag);
+    if (diag.code != 8003 && diag.code != 8005) mapped = z_map_source_diag(input, &diag);
     if (!diag.path) diag.path = input->source_file;
   }
 
   append_target_readiness_result_json(buf, input, program, target, command, &ir, &diag, ready);
+  /* source mapping replaces the path with a fresh copy it owns */
+  if (mapped) free((char *)diag.path);
   z_free_ir_program(&ir);
 }
 
@@ -10881,6 +11156,86 @@ static bool repository_graph_target_readiness_select_diag(const Command *command
   return false;
 }
 
+static bool graph_check_buildability_gate_applies(const ZProgramGraph *graph) {
+  if (!z_program_graph_has_direct_entry_function(graph)) return false;
+  HttpListenSpec listen = {0};
+  ZDiag listen_diag = {0};
+  if (find_http_listen_graph_program(graph, &listen, &listen_diag)) return false;
+  return z_check_gate_scan_finds_known_construct(graph);
+}
+
+static bool check_gate_buildability_blocked(const Command *command, const SourceInput *input, const ZTargetInfo *target, const ZProgramGraph *graph, const IrProgram *ir, ZDiag *out_diag) {
+  if (!ir || !graph || ir->mir_valid || !graph_check_buildability_gate_applies(graph)) return false;
+  ZDiag diag = {0};
+  init_lowering_backend_diag(&diag, input, target, command, ir);
+  if (!z_check_gate_diag_is_buildability_blocker(&diag)) return false;
+  if (!z_check_gate_diag_is_known_construct(graph, &diag)) return false;
+  if (input) {
+    if (diag.code != 8003 && diag.code != 8005) z_map_source_diag(input, &diag);
+    if (!diag.path) diag.path = input->source_file;
+  }
+  /* The diagnostic path may point into the transient MIR program; own it. */
+  z_diag_set_path_copy(&diag, diag.path);
+  if (out_diag) *out_diag = diag;
+  return true;
+}
+
+/*
+ * Build parity for unmerged graph inputs: graph artifact check and import
+ * gate graphs have not merged embedded std modules yet, while build's MIR
+ * preparation merges them before lowering. Lower a merged clone so the gate
+ * only blocks programs zero build would also reject.
+ */
+static bool check_gate_merged_graph_blocked(const Command *command, const SourceInput *input, const ZTargetInfo *target, const ZProgramGraph *graph, ZDiag *out_diag) {
+  if (!graph || !graph_check_buildability_gate_applies(graph)) return false;
+  ZProgramGraph merged = {0};
+  if (!z_program_graph_clone(graph, &merged)) return false;
+  ZDiag merge_diag = {0};
+  bool blocked = false;
+  if (z_program_graph_merge_embedded_std_graph_modules(&merged, input, &merge_diag)) {
+    IrProgram merged_ir = z_lower_program_graph_with_source(&merged, input, target);
+    blocked = check_gate_buildability_blocked(command, input, target, &merged, &merged_ir, out_diag);
+    z_free_ir_program(&merged_ir);
+  }
+  z_program_graph_free(&merged);
+  return blocked;
+}
+
+/*
+ * Plain-mode check gate: reuse the final-MIR cache before paying the stdlib
+ * graph merge, then lower once and memoize the result for the next check or
+ * build of the same graph hash.
+ */
+static bool repository_graph_check_gate_blocked(const Command *command, SourceInput *input, ZProgramGraphStore *store, const ZTargetInfo *target, long long *lower_ms_out, ZDiag *diag) {
+  if (!store || !store->path) return false;
+  const char *emit_kind = emit_kind_name(command ? command->emit : EMIT_EXE);
+  const char *requested_backend = command ? command->backend : NULL;
+  long long phase_started = now_ms();
+  IrProgram ir = {0};
+  bool have_ir = false;
+  char *cache_path = z_mir_binary_cache_path_for_graph_store(store->path, store->graph.graph_hash, target, emit_kind, requested_backend);
+  ZMirBinaryCacheFacts cache_facts = {0};
+  if (cache_path && z_mir_binary_load_path(cache_path, store->graph.graph_hash, target, emit_kind, requested_backend, &ir, &cache_facts, NULL)) {
+    have_ir = true;
+  } else {
+    ZDiag merge_diag = {0};
+    if (z_program_graph_merge_embedded_std_graph_modules_timed(&store->graph, input, &merge_diag)) {
+      ir = z_lower_program_graph_with_source(&store->graph, input, target);
+      have_ir = true;
+      if (ir.mir_valid && cache_path) {
+        ZDiag cache_diag = {0};
+        (void)z_mir_binary_write_path(cache_path, &ir, store->graph.graph_hash, target, emit_kind, requested_backend, &cache_diag);
+      }
+    }
+  }
+  free(cache_path);
+  if (lower_ms_out) *lower_ms_out = now_ms() - phase_started;
+  if (input) input->lower_ms = lower_ms_out ? *lower_ms_out : input->lower_ms;
+  bool blocked = have_ir && check_gate_buildability_blocked(command, input, target, &store->graph, &ir, diag);
+  if (have_ir) z_free_ir_program(&ir);
+  return blocked;
+}
+
 static void init_repository_graph_missing_store_diag(ZDiag *diag, SourceInput *input) {
   memset(diag, 0, sizeof(*diag));
   diag->code = 2002;
@@ -10894,61 +11249,77 @@ static void init_repository_graph_missing_store_diag(ZDiag *diag, SourceInput *i
   snprintf(diag->help, sizeof(diag->help), "run zero status to inspect the repository graph store");
 }
 
-static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, long long *lower_ms_out, bool *graph_mir_used_out) {
-  (void)resolution;
-  ZDiag diag = {0};
-  IrProgram ir = {0};
-  Program readiness_program = {0};
-  SourceInput readiness_input = {0};
-  bool ready = true;
-  if (lower_ms_out) *lower_ms_out = 0;
-  if (graph_mir_used_out) *graph_mir_used_out = false;
+struct RepositoryGraphCheckReadiness {
+  bool ran;
+  bool ready;
+  bool prepared;
+  bool graph_mir_used;
+  long long lower_ms;
+  ZDiag diag;
+  IrProgram ir;
+  Program program;
+};
+
+static void repository_graph_check_readiness_free(RepositoryGraphCheckReadiness *readiness) {
+  if (!readiness) return;
+  z_free_ir_program(&readiness->ir);
+  z_free_program(&readiness->program);
+}
+
+static bool repository_graph_check_readiness_compute(const Command *command, SourceInput *input, const ZProgramGraphStore *store, const ZTargetInfo *target, RepositoryGraphCheckReadiness *out) {
+  out->ran = true;
+  out->ready = true;
   const char *emit_kind = emit_kind_name(command ? command->emit : EMIT_EXE);
 
   if (!store || !store->path) {
-    ready = false;
-    init_repository_graph_missing_store_diag(&diag, input);
-  } else if (!validate_c_libraries_for_target(input, target, command, &diag)) {
-    ready = false;
+    out->ready = false;
+    init_repository_graph_missing_store_diag(&out->diag, input);
+  } else if (!validate_c_libraries_for_target(input, target, command, &out->diag)) {
+    out->ready = false;
   } else {
-    ZProgramGraphArtifactSource graph_source = {0};
     long long phase_started = now_ms();
-    bool prepared = z_program_graph_prepare_repository_store_mir_input(store->path,
+    out->prepared = z_program_graph_prepare_repository_store_mir_input(store->path,
                                                                        target,
                                                                        emit_kind,
                                                                        command ? command->backend : NULL,
                                                                        false,
-                                                                       &readiness_program,
-                                                                       &readiness_input,
-                                                                       &ir,
-                                                                       &graph_source,
-                                                                       &diag);
-    long long lower_ms = now_ms() - phase_started;
-    if (lower_ms_out) *lower_ms_out = lower_ms;
-    if (graph_mir_used_out) *graph_mir_used_out = true;
-    if (input) input->lower_ms = lower_ms;
-    if (prepared) apply_ir_metrics_to_input(input, &ir, target);
+                                                                       &out->program,
+                                                                       input,
+                                                                       &out->ir,
+                                                                       NULL,
+                                                                       &out->diag);
+    out->lower_ms = now_ms() - phase_started;
+    out->graph_mir_used = true;
+    if (input) input->lower_ms = out->lower_ms;
+    if (out->prepared) apply_ir_metrics_to_input(input, &out->ir, target);
 
-    if (!prepared) {
-      ready = false;
-    }
-
-    if (ready) {
-      if (!target_readiness_select_emit_target(command, input, target, &diag)) {
-        ready = false;
-      } else if (!ir.mir_valid) {
-        init_lowering_backend_diag(&diag, input, target, command, &ir);
-        ready = false;
-      } else if (!repository_graph_target_readiness_select_diag(command, input, target, &ir, &diag)) {
-        ready = false;
-      }
+    if (!out->prepared) {
+      out->ready = false;
+    } else if (!target_readiness_select_emit_target(command, input, target, &out->diag)) {
+      out->ready = false;
+    } else if (!out->ir.mir_valid) {
+      init_lowering_backend_diag(&out->diag, input, target, command, &out->ir);
+      out->ready = false;
+    } else if (!repository_graph_target_readiness_select_diag(command, input, target, &out->ir, &out->diag)) {
+      out->ready = false;
     }
   }
 
-  if (!ready && input) {
-    if (diag.code != 8003 && diag.code != 8005) z_map_source_diag(input, &diag);
-    if (!diag.path) diag.path = input->source_file;
+  if (!out->ready && input) {
+    if (out->diag.code != 8003 && out->diag.code != 8005) z_map_source_diag(input, &out->diag);
+    if (!out->diag.path) out->diag.path = input->source_file;
   }
+  return out->ready;
+}
+
+static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraphStore *store, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const Command *command, RepositoryGraphCheckReadiness *readiness, long long *lower_ms_out, bool *graph_mir_used_out) {
+  (void)resolution;
+  if (!readiness->ran) repository_graph_check_readiness_compute(command, input, store, target, readiness);
+  bool ready = readiness->ready;
+  const ZDiag *diag = &readiness->diag;
+  if (lower_ms_out) *lower_ms_out = readiness->lower_ms;
+  if (graph_mir_used_out) *graph_mir_used_out = readiness->graph_mir_used;
+  const char *emit_kind = emit_kind_name(command ? command->emit : EMIT_EXE);
 
   zbuf_append(buf, "{\"schemaVersion\":1,\"ok\":");
   zbuf_append(buf, ready ? "true" : "false");
@@ -10965,22 +11336,15 @@ static bool append_repository_graph_target_readiness_json(ZBuf *buf, SourceInput
   const char *ready_backend = requested_llvm_backend
     ? "llvm"
     : z_direct_backend_name_for_emit_kind(target, emit_kind, z_backend_direct_request_name(command ? command->backend : NULL));
-  append_json_string(buf, ready || !diag.backend_blocker.present ? ready_backend : diag.backend_blocker.backend);
+  append_json_string(buf, ready || !diag->backend_blocker.present ? ready_backend : diag->backend_blocker.backend);
   if (requested_llvm_backend) {
     z_append_llvm_backend_lifecycle_field_json(buf);
   }
   zbuf_append(buf, ",\"stage\":");
-  append_json_string(buf, ready ? "ready" : (diag.backend_blocker.present && diag.backend_blocker.stage[0] ? diag.backend_blocker.stage : "select"));
+  append_json_string(buf, ready ? "ready" : (diag->backend_blocker.present && diag->backend_blocker.stage[0] ? diag->backend_blocker.stage : "select"));
   zbuf_append(buf, ",\"diagnostics\":[");
-  if (!ready) append_target_readiness_diagnostic_json(buf, input ? input->source_file : NULL, &diag);
+  if (!ready) append_target_readiness_diagnostic_json(buf, input ? input->source_file : NULL, diag);
   zbuf_append(buf, "]}");
-  /*
-   * The prepared graph MIR and checked projection may share short-lived graph
-   * preparation storage. Keep it alive through JSON assembly.
-   */
-  (void)ir;
-  (void)readiness_program;
-  (void)readiness_input;
   return ready;
 }
 
@@ -11819,13 +12183,6 @@ static bool import_init_template_graph_store(const char *root, ZProgramGraphStor
   return ok;
 }
 
-static bool load_graph_from_checked_current_source(const Command *command, const ZTargetInfo *target, SourceInput *input, Program *program, ZProgramGraph *graph, GraphInputKind *kind, ZDiag *diag) {
-  if (!compile_input(command->input, target, "release", input, program, diag)) return false;
-  if (!graph_build_from_source_program(input, program, input->canonical_text_source, graph, diag)) return false;
-  if (kind) *kind = input->canonical_text_source ? GRAPH_INPUT_CANONICAL_SOURCE : GRAPH_INPUT_CURRENT_SOURCE;
-  return true;
-}
-
 typedef struct {
   const Command *command;
   const ZTargetInfo *target;
@@ -11836,7 +12193,7 @@ static bool load_repository_graph_checked_source_graph(void *ctx, ZProgramGraph 
   if (!loader || !loader->command) return false;
   SourceInput input = {0};
   Program program = {0};
-  bool ok = load_graph_from_checked_current_source(loader->command, loader->target, &input, &program, graph, NULL, diag);
+  bool ok = load_graph_from_current_source(loader->command, loader->target, &input, &program, graph, NULL, diag);
   z_free_program(&program);
   z_free_source(&input);
   if (!ok) z_program_graph_free(graph);
@@ -11909,19 +12266,447 @@ static bool load_graph_input_for_patch(const Command *command, SourceInput *inpu
   return reject_graph_source_input_without_store(command, diag);
 }
 
-static bool validate_repository_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, ZDiag *diag) {
-  SourceInput input = {.source_file = z_strdup(command && command->input ? command->input : "<repository-graph>")};
+/*
+ * One diagnostic oracle for the repository graph sync verbs (friction #52).
+ * zero patch revalidation, zero import, and the stale-store auto-refresh all
+ * collect diagnostics through the same phases zero check runs on a package
+ * store: name contracts, reference resolution, fixed-array length contracts,
+ * target capabilities, package dependencies, and the check-time buildability
+ * gate. The active phase reports every diagnostic it finds instead of only
+ * the first, and callers diff the set against the pre-operation baseline so
+ * pre-existing diagnostics never wall an unrelated operation.
+ */
+#define GRAPH_ORACLE_MAX_PHASE_DIAGS 64
+
+typedef struct {
+  ZDiag *items;
+  char **keys;
+  size_t len;
+  size_t cap;
+} GraphOracleDiags;
+
+static void graph_oracle_diags_free(GraphOracleDiags *list) {
+  if (!list) return;
+  for (size_t i = 0; i < list->len; i++) {
+    free((char *)list->items[i].path);
+    free(list->keys[i]);
+  }
+  free(list->items);
+  free(list->keys);
+  *list = (GraphOracleDiags){0};
+}
+
+static const char *graph_oracle_path_tail(const char *path) {
+  const char *slash = path ? strrchr(path, '/') : NULL;
+  return slash ? slash + 1 : (path ? path : "");
+}
+
+static void graph_oracle_diags_push(GraphOracleDiags *list, const ZDiag *diag, char *key) {
+  if (list->len == list->cap) {
+    size_t next = z_grow_capacity(list->cap, list->len + 1, 8);
+    list->items = z_checked_reallocarray(list->items, next, sizeof(ZDiag));
+    list->keys = z_checked_reallocarray(list->keys, next, sizeof(char *));
+    list->cap = next;
+  }
+  list->items[list->len] = *diag;
+  list->keys[list->len] = key;
+  list->len++;
+}
+
+/*
+ * The match key deliberately omits line and column so edits elsewhere in a
+ * file cannot turn a pre-existing diagnostic into a falsely introduced one;
+ * the salient detail (symbol name, capability, mismatch facts) plus code and
+ * file name identify the diagnostic across graph rebuilds.
+ */
+static void graph_oracle_diags_add(GraphOracleDiags *list, const ZDiag *diag, const char *fallback_path, const char *salient) {
+  ZDiag copy = *diag;
+  const char *path = diag->path && diag->path[0] ? diag->path : fallback_path;
+  copy.path = path ? z_strdup(path) : NULL;
+  ZBuf key;
+  zbuf_init(&key);
+  zbuf_appendf(&key, "%s|%s|%s|%s", diag_code(diag->code), graph_oracle_path_tail(path), diag->message, salient && salient[0] ? salient : diag->actual);
+  graph_oracle_diags_push(list, &copy, key.data ? key.data : z_strdup(""));
+}
+
+static void graph_oracle_collect_resolution(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *facts, const char *path, GraphOracleDiags *out) {
+  if (!facts || facts->diagnostic_len == 0) return;
+  for (size_t i = 0; i < facts->reference_len; i++) {
+    const ZProgramGraphResolutionReference *ref = &facts->references[i];
+    if (ref->resolved && !ref->ambiguous) continue;
+    const ZProgramGraphNode *node = graph_check_node_by_id(graph, ref->node_id);
+    ZDiag diag = {0};
+    diag.code = ref->ambiguous ? 3004 : 3003;
+    diag.path = node && node->path && node->path[0] ? node->path : path;
+    diag.line = node && node->line > 0 ? node->line : 1;
+    diag.column = node && node->column > 0 ? node->column : 1;
+    diag.length = 1;
+    snprintf(diag.message, sizeof(diag.message), "%s", ref->ambiguous ? "ambiguous graph reference" : "unresolved graph reference");
+    snprintf(diag.expected, sizeof(diag.expected), "resolved graph symbol reference");
+    snprintf(diag.actual, sizeof(diag.actual), "node %s name %s", ref->node_id ? ref->node_id : "<unknown>", ref->name ? ref->name : "<unknown>");
+    snprintf(diag.help, sizeof(diag.help), "inspect zero query and zero source-map, then repair the referenced graph node or import binding");
+    graph_oracle_diags_add(out, &diag, path, ref->name);
+  }
+}
+
+static void graph_oracle_collect_capabilities(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const char *path, GraphOracleDiags *out) {
+  ZProgramGraphCapabilitySummary caps;
+  z_program_graph_collect_capabilities(graph, resolution, &caps);
+#define COLLECT_GRAPH_CAP(field, cap_name, label) do { \
+    if (caps.field && !capability_available_on_target(target, cap_name)) { \
+      ZDiag cap_diag = {0}; \
+      graph_check_target_capability_diag(&cap_diag, caps.field##_node, target, cap_name, label); \
+      graph_oracle_diags_add(out, &cap_diag, path, cap_name); \
+    } \
+  } while (0)
+  COLLECT_GRAPH_CAP(fs, "fs", "Fs");
+  COLLECT_GRAPH_CAP(args, "args", "Args");
+  COLLECT_GRAPH_CAP(env, "env", "Env");
+  COLLECT_GRAPH_CAP(time, "time", "Clock");
+  COLLECT_GRAPH_CAP(rand, "rand", "Rand");
+  COLLECT_GRAPH_CAP(net, "net", "Net");
+  COLLECT_GRAPH_CAP(proc, "proc", "Proc");
+  COLLECT_GRAPH_CAP(web, "web", "Web");
+  COLLECT_GRAPH_CAP(world, "world", "World");
+#undef COLLECT_GRAPH_CAP
+}
+
+static bool repository_graph_oracle_collect(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, const char *manifest_input, const char *diag_path, bool with_semantic_contracts, GraphOracleDiags *out, ZDiag *fatal) {
+  SourceInput input = {.source_file = z_strdup(diag_path ? diag_path : "<repository-graph>")};
   z_program_graph_seed_source_metadata(&input, graph);
-  const char *manifest_input = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
-  bool ok = z_program_graph_manifest_attach_metadata_to_input(&input, manifest_input, diag);
-  ZProgramGraphResolutionFacts resolution; z_program_graph_resolution_facts_init(&resolution);
-  if (ok) ok = z_program_graph_name_contracts_ok(graph, command->input, diag);
-  if (ok) ok = z_program_graph_collect_resolution_facts(graph, &resolution);
-  if (ok) ok = graph_native_compiler_input_ok(graph, &resolution, &input, target, command->input, diag);
-  if (!ok && !diag->path) diag->path = input.source_file ? input.source_file : command->input;
+  ZDiag attach_diag = {0};
+  if (manifest_input && !z_program_graph_manifest_attach_metadata_to_input(&input, manifest_input, &attach_diag)) {
+    if (fatal) {
+      const char *attach_path = attach_diag.path;
+      *fatal = attach_diag;
+      if (attach_path) z_diag_set_path_copy(fatal, attach_path);
+      else z_diag_set_path_copy(fatal, diag_path);
+      /* fatal now owns its own copy; release the attach diag's original */
+      free((char *)attach_path);
+    } else {
+      free((char *)attach_diag.path);
+    }
+    z_free_source(&input);
+    return false;
+  }
+  ZDiag *scratch = z_checked_calloc(GRAPH_ORACLE_MAX_PHASE_DIAGS, sizeof(ZDiag));
+  size_t found = z_program_graph_name_contract_violations(graph, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+  if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+  for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+  ZProgramGraphResolutionFacts resolution;
+  z_program_graph_resolution_facts_init(&resolution);
+  if (out->len == 0) {
+    if (!z_program_graph_collect_resolution_facts(graph, &resolution)) {
+      ZDiag facts_diag = {0};
+      facts_diag.code = 2002;
+      facts_diag.path = diag_path;
+      facts_diag.line = 1;
+      facts_diag.column = 1;
+      facts_diag.length = 1;
+      snprintf(facts_diag.message, sizeof(facts_diag.message), "failed to collect graph resolution facts");
+      graph_oracle_diags_add(out, &facts_diag, diag_path, "resolution-facts");
+    } else {
+      graph_oracle_collect_resolution(graph, &resolution, diag_path, out);
+      if (out->len == 0) {
+        memset(scratch, 0, GRAPH_ORACLE_MAX_PHASE_DIAGS * sizeof(ZDiag));
+        found = z_program_graph_fixed_array_length_contract_violations(graph, &resolution, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+        if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+        for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+      }
+      if (out->len == 0) graph_oracle_collect_capabilities(graph, &resolution, target, diag_path, out);
+      if (with_semantic_contracts && out->len == 0) {
+        ZDiag dep_diag = {0};
+        if (!validate_package_dependencies_for_target(&input, target, &dep_diag)) graph_oracle_diags_add(out, &dep_diag, diag_path, dep_diag.actual);
+      }
+      if (out->len == 0 && graph_check_buildability_gate_applies(graph)) {
+        ZDiag gate_diag = {0};
+        if (check_gate_merged_graph_blocked(command, &input, target, graph, &gate_diag)) {
+          graph_oracle_diags_add(out, &gate_diag, diag_path, gate_diag.actual);
+          free((char *)gate_diag.path);
+        }
+      }
+      /*
+       * Graph semantic contracts (return types, checked fallible calls,
+       * Maybe guards, borrows) run last and only for patch revalidation:
+       * they are stricter than zero check, so their findings only fail an
+       * operation when the baseline diff proves the operation introduced
+       * them. Import and refresh validate the same facts with the compiler
+       * typecheck instead, which is much faster on large packages.
+       */
+      if (with_semantic_contracts && out->len == 0) {
+        memset(scratch, 0, GRAPH_ORACLE_MAX_PHASE_DIAGS * sizeof(ZDiag));
+        found = z_program_graph_effect_contract_violations(graph, &resolution, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+        if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+        for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+      }
+      if (with_semantic_contracts && out->len == 0) {
+        memset(scratch, 0, GRAPH_ORACLE_MAX_PHASE_DIAGS * sizeof(ZDiag));
+        found = z_program_graph_memory_contract_violations(graph, &resolution, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+        if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+        for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+      }
+      if (with_semantic_contracts && out->len == 0) {
+        ZDiag borrow_diag = {0};
+        if (!z_program_graph_borrow_contracts_ok(graph, diag_path, &borrow_diag)) graph_oracle_diags_add(out, &borrow_diag, diag_path, borrow_diag.actual);
+      }
+    }
+  }
+  free(scratch);
   z_program_graph_resolution_facts_free(&resolution);
   z_free_source(&input);
-  return ok;
+  return true;
+}
+
+static bool graph_oracle_key_present(const GraphOracleDiags *list, const char *key) {
+  for (size_t i = 0; list && key && i < list->len; i++) {
+    if (graph_check_text_eq(list->keys[i], key)) return true;
+  }
+  return false;
+}
+
+/* Moves every post entry into introduced or preexisting; post ends empty. */
+static void repository_graph_oracle_diff(GraphOracleDiags *post, const GraphOracleDiags *pre, GraphOracleDiags *introduced, GraphOracleDiags *preexisting) {
+  for (size_t i = 0; post && i < post->len; i++) {
+    GraphOracleDiags *target_list = graph_oracle_key_present(pre, post->keys[i]) ? preexisting : introduced;
+    graph_oracle_diags_push(target_list, &post->items[i], post->keys[i]);
+  }
+  if (post) {
+    free(post->items);
+    free(post->keys);
+    *post = (GraphOracleDiags){0};
+  }
+}
+
+static void print_command_diag_list(const Command *command, const char *fallback_path, const GraphOracleDiags *list) {
+  if (!list || list->len == 0) return;
+  if (command && command->json) {
+    if (graph_check_text_eq(command->command, "check")) print_diag_json_list_ex(fallback_path, list->items, list->len, command->profile ? command->profile : "release");
+    else print_diag_json_list_ex(fallback_path, list->items, list->len, NULL);
+    return;
+  }
+  for (size_t i = 0; i < list->len; i++) {
+    print_diag(list->items[i].path ? list->items[i].path : fallback_path, &list->items[i]);
+  }
+}
+
+static void print_preexisting_diag_notes(const char *verb, const GraphOracleDiags *list) {
+  if (!list || list->len == 0) return;
+  fprintf(stderr, "note: %zu pre-existing diagnostic%s predate%s this %s and did not block it; zero check reports the same set\n",
+          list->len, list->len == 1 ? "" : "s", list->len == 1 ? "s" : "", verb);
+  for (size_t i = 0; i < list->len; i++) {
+    const ZDiag *diag = &list->items[i];
+    fprintf(stderr, "note:   %s:%d:%d %s: %s\n", diag->path ? diag->path : "<package>", diag->line, diag->column, diag_code(diag->code), diag->message);
+  }
+}
+
+/*
+ * Whole-graph revalidation for zero patch with baseline-diff semantics: the
+ * patched graph is validated with the shared oracle, and when diagnostics
+ * surface they are compared against the unpatched store so only diagnostics
+ * the patch introduced fail the operation. Returns false with fatal set when
+ * validation infrastructure itself failed, false with introduced entries
+ * when the patch added diagnostics, and true otherwise (preexisting carries
+ * the diagnostics that predate the patch).
+ */
+static bool revalidate_repository_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *patched, GraphOracleDiags *introduced, GraphOracleDiags *preexisting, ZDiag *fatal) {
+  GraphOracleDiags post = {0};
+  const char *manifest_input = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
+  if (!repository_graph_oracle_collect(command, target, patched, manifest_input, command->input, true, &post, fatal)) {
+    graph_oracle_diags_free(&post);
+    return false;
+  }
+  if (post.len == 0) return true;
+  GraphOracleDiags pre = {0};
+  ZProgramGraphStore base;
+  ZDiag base_diag = {0};
+  if (z_program_graph_store_load_path(command->input, &base, &base_diag)) {
+    ZDiag pre_fatal = {0};
+    (void)repository_graph_oracle_collect(command, target, &base.graph, manifest_input, command->input, true, &pre, &pre_fatal);
+    free((char *)pre_fatal.path);
+    z_program_graph_store_free(&base);
+  }
+  repository_graph_oracle_diff(&post, &pre, introduced, preexisting);
+  graph_oracle_diags_free(&pre);
+  return introduced->len == 0;
+}
+
+/*
+ * A compiler typecheck failure predates the operation when the file it
+ * points at is byte-identical to the source projection recorded in the
+ * package store: the diagnostic was already in the store at the last sync,
+ * so the current operation did not introduce it.
+ */
+static bool repository_graph_checker_diag_is_preexisting(const char *input, const ZDiag *diag) {
+  if (!diag || !diag->path || !diag->path[0]) return false;
+  char *root = z_program_graph_store_root_for_input(input);
+  char *store_path = root ? z_program_graph_store_path_for_root(root) : NULL;
+  bool preexisting = false;
+  ZProgramGraphStore store;
+  ZDiag load_diag = {0};
+  if (store_path && z_program_graph_store_path_exists(store_path) && z_program_graph_store_load_path(store_path, &store, &load_diag)) {
+    const char *diag_file = diag->path;
+    while (diag_file[0] == '.' && diag_file[1] == '/') diag_file += 2;
+    size_t diag_len = strlen(diag_file);
+    for (size_t i = 0; i < store.projection_len; i++) {
+      const char *projection_path = store.projection_paths[i];
+      size_t projection_len = strlen(projection_path);
+      bool matches = graph_check_text_eq(projection_path, diag_file) ||
+                     (diag_len > projection_len && strcmp(diag_file + diag_len - projection_len, projection_path) == 0 && diag_file[diag_len - projection_len - 1] == '/');
+      if (!matches) continue;
+      char *joined = direct_join_path(store.root && store.root[0] ? store.root : ".", projection_path);
+      ZDiag read_diag = {0};
+      char *current = z_read_file(joined, &read_diag);
+      preexisting = current && graph_check_text_eq(current, store.projection_texts[i]);
+      free(current);
+      free(joined);
+      break;
+    }
+    z_program_graph_store_free(&store);
+  }
+  free(store_path);
+  free(root);
+  return preexisting;
+}
+
+/*
+ * Shared validation gate for zero import and the stale-store auto-refresh:
+ * the source-projection graph is validated with the zero check oracle,
+ * diffed against the existing package store so only diagnostics the edited
+ * source introduces fail the operation, with every introduced diagnostic
+ * reported in one shot. A compiler typecheck then guards type facts the
+ * graph oracle does not model; its failure is skipped with a note when the
+ * pointed-at file is unchanged since the last sync. Returns an exit code.
+ */
+/*
+ * Diffs the zero check oracle findings for a source-projection graph
+ * against the existing package store so callers see only the diagnostics
+ * the edited source introduced; the rest are pre-existing.
+ */
+static bool repository_graph_source_oracle_diff(const Command *load_command, const ZTargetInfo *target, ZProgramGraph *source_graph, const char *input, GraphOracleDiags *introduced, GraphOracleDiags *preexisting, ZDiag *fatal) {
+  GraphOracleDiags post = {0};
+  if (!repository_graph_oracle_collect(load_command, target, source_graph, input, input, false, &post, fatal)) {
+    graph_oracle_diags_free(&post);
+    return false;
+  }
+  if (post.len == 0) {
+    graph_oracle_diags_free(&post);
+    return true;
+  }
+  GraphOracleDiags pre = {0};
+  char *root = z_program_graph_store_root_for_input(input);
+  char *store_path = root ? z_program_graph_store_path_for_root(root) : NULL;
+  if (store_path && z_program_graph_store_path_exists(store_path)) {
+    ZProgramGraphStore base;
+    ZDiag base_diag = {0};
+    if (z_program_graph_store_load_path(store_path, &base, &base_diag)) {
+      ZDiag pre_fatal = {0};
+      (void)repository_graph_oracle_collect(load_command, target, &base.graph, input, input, false, &pre, &pre_fatal);
+      free((char *)pre_fatal.path);
+      z_program_graph_store_free(&base);
+    }
+  }
+  free(store_path);
+  free(root);
+  repository_graph_oracle_diff(&post, &pre, introduced, preexisting);
+  graph_oracle_diags_free(&pre);
+  graph_oracle_diags_free(&post);
+  return true;
+}
+
+static int repository_graph_report_introduced(const Command *print_command, const char *input, const char *verb, const GraphOracleDiags *introduced) {
+  print_command_diag_list(print_command, input, introduced);
+  if (!(print_command && print_command->json)) {
+    fprintf(stderr, "zero %s failed validation: %zu diagnostic%s introduced by the edited source projection\n", verb, introduced->len, introduced->len == 1 ? "" : "s");
+  }
+  return 1;
+}
+
+/*
+ * Validation failure path for import/refresh when the compiler typecheck
+ * rejected the edited source: report every diagnostic in one shot when the
+ * edit introduced them, or skip with a note when the failure predates the
+ * operation (the pointed-at file is unchanged since the last sync).
+ */
+static int repository_graph_handle_checker_failure(const Command *print_command, const Command *load_command, const ZTargetInfo *target, const char *verb, const char *input, const ZDiag *check_diag, ZProgramGraph *source_graph) {
+  bool checker_preexisting = repository_graph_checker_diag_is_preexisting(input, check_diag);
+  GraphOracleDiags introduced = {0};
+  GraphOracleDiags preexisting = {0};
+  ZDiag fatal = {0};
+  if (!repository_graph_source_oracle_diff(load_command, target, source_graph, input, &introduced, &preexisting, &fatal)) {
+    print_command_diag(print_command, fatal.path ? fatal.path : input, &fatal);
+    free((char *)fatal.path);
+    return 1;
+  }
+  int rc = 0;
+  if (!checker_preexisting) {
+    GraphOracleDiags combined = {0};
+    graph_oracle_diags_add(&combined, check_diag, input, check_diag->actual);
+    for (size_t i = 0; i < introduced.len; i++) {
+      const ZDiag *diag = &introduced.items[i];
+      bool duplicate = diag->code == check_diag->code && diag->line == check_diag->line &&
+                       graph_check_text_eq(graph_oracle_path_tail(diag->path), graph_oracle_path_tail(check_diag->path));
+      if (!duplicate) graph_oracle_diags_add(&combined, diag, input, NULL);
+    }
+    rc = repository_graph_report_introduced(print_command, input, verb, &combined);
+    graph_oracle_diags_free(&combined);
+  } else if (introduced.len > 0) {
+    rc = repository_graph_report_introduced(print_command, input, verb, &introduced);
+  } else {
+    fprintf(stderr, "note: a pre-existing diagnostic predates this %s and did not block it (the file is unchanged since the last sync): %s:%d:%d %s: %s\n",
+            verb, check_diag->path ? check_diag->path : input, check_diag->line, check_diag->column, diag_code(check_diag->code), check_diag->message);
+  }
+  print_preexisting_diag_notes(verb, &preexisting);
+  graph_oracle_diags_free(&introduced);
+  graph_oracle_diags_free(&preexisting);
+  return rc;
+}
+
+/*
+ * Loads and validates the source projection for zero import and the
+ * stale-store auto-refresh. The compiler typecheck builds the checked
+ * source graph (so stored graphs keep evaluated meta facts); its failure
+ * is skipped with a note when it predates the operation, in which case the
+ * graph comes from a parse-only load. The zero check oracle then runs with
+ * baseline-diff semantics so only diagnostics the edited source introduced
+ * fail the operation, all reported in one shot. Returns an exit code and
+ * fills input/program/graph on success.
+ */
+static int load_and_validate_repository_graph_source(const Command *print_command, const Command *load_command, const ZTargetInfo *target, const char *verb, SourceInput *source_input, Program *source_program, ZProgramGraph *source_graph) {
+  const char *input = load_command && load_command->input ? load_command->input : ".";
+  memset(source_input, 0, sizeof(*source_input));
+  memset(source_program, 0, sizeof(*source_program));
+  memset(source_graph, 0, sizeof(*source_graph));
+  ZDiag check_diag = {0};
+  if (!compile_input(input, target, "release", source_input, source_program, &check_diag)) {
+    z_free_program(source_program);
+    z_free_source(source_input);
+    memset(source_input, 0, sizeof(*source_input));
+    memset(source_program, 0, sizeof(*source_program));
+    ZDiag parse_diag = {0};
+    if (!load_graph_from_current_source(load_command, target, source_input, source_program, source_graph, NULL, &parse_diag)) {
+      print_command_diag(print_command, parse_diag.path ? parse_diag.path : input, &parse_diag);
+      return 1;
+    }
+    return repository_graph_handle_checker_failure(print_command, load_command, target, verb, input, &check_diag, source_graph);
+  }
+  if (!graph_build_from_source_program(source_input, source_program, source_input->canonical_text_source, source_graph, &check_diag)) {
+    print_command_diag(print_command, check_diag.path ? check_diag.path : input, &check_diag);
+    return 1;
+  }
+  GraphOracleDiags introduced = {0};
+  GraphOracleDiags preexisting = {0};
+  ZDiag fatal = {0};
+  if (!repository_graph_source_oracle_diff(load_command, target, source_graph, input, &introduced, &preexisting, &fatal)) {
+    print_command_diag(print_command, fatal.path ? fatal.path : input, &fatal);
+    free((char *)fatal.path);
+    return 1;
+  }
+  int rc = 0;
+  if (introduced.len > 0) rc = repository_graph_report_introduced(print_command, input, verb, &introduced);
+  print_preexisting_diag_notes(verb, &preexisting);
+  graph_oracle_diags_free(&introduced);
+  graph_oracle_diags_free(&preexisting);
+  return rc;
 }
 
 static void append_graph_check_json(ZBuf *buf, const Command *command, const ZTargetInfo *target, const SourceInput *input, const ZProgramGraph *graph, bool ok, const ZDiag *diag, const char *phase, const char *target_readiness_json, long long lower_ms, bool graph_mir_used) {
@@ -11958,6 +12743,9 @@ static void append_graph_patch_diagnostic_json(ZBuf *buf, const ZProgramGraphPat
   append_json_string(buf, result ? result->code : "GPH000");
   zbuf_append(buf, ", \"message\": ");
   append_json_string(buf, result ? result->message : "program graph patch failed");
+  zbuf_append(buf, ", \"line\": ");
+  if (result && result->line > 0) zbuf_appendf(buf, "%d", result->line);
+  else zbuf_append(buf, "null");
   zbuf_append(buf, ", \"expected\": ");
   append_json_nullable_string(buf, result ? result->expected : NULL);
   zbuf_append(buf, ", \"actual\": ");
@@ -12069,32 +12857,78 @@ static void append_graph_patch_symbols_json(ZBuf *buf, const ZProgramGraph *grap
   zbuf_append(buf, "]}");
 }
 
-static void print_graph_patch_symbols_text(const ZProgramGraph *graph) {
+typedef struct {
+  char *id;
+  char *hash;
+  bool matched;
+} GraphPatchNodeBaseline;
+
+static int graph_patch_node_baseline_cmp(const void *left, const void *right) {
+  return strcmp(((const GraphPatchNodeBaseline *)left)->id, ((const GraphPatchNodeBaseline *)right)->id);
+}
+
+static GraphPatchNodeBaseline *graph_patch_snapshot_baseline(const ZProgramGraph *graph, size_t *out_len) {
+  size_t len = graph ? graph->node_len : 0;
+  *out_len = len;
+  if (len == 0) return NULL;
+  GraphPatchNodeBaseline *items = z_checked_reallocarray(NULL, len, sizeof(GraphPatchNodeBaseline));
+  for (size_t i = 0; i < len; i++) {
+    items[i].id = z_strdup(graph->nodes[i].id ? graph->nodes[i].id : "");
+    items[i].hash = z_strdup(graph->nodes[i].node_hash ? graph->nodes[i].node_hash : "");
+    items[i].matched = false;
+  }
+  qsort(items, len, sizeof(GraphPatchNodeBaseline), graph_patch_node_baseline_cmp);
+  return items;
+}
+
+static GraphPatchNodeBaseline *graph_patch_baseline_find(GraphPatchNodeBaseline *items, size_t len, const char *id) {
+  size_t lo = 0;
+  size_t hi = len;
+  while (lo < hi) {
+    size_t mid = lo + (hi - lo) / 2;
+    int cmp = strcmp(items[mid].id, id);
+    if (cmp == 0) return &items[mid];
+    if (cmp < 0) lo = mid + 1;
+    else hi = mid;
+  }
+  return NULL;
+}
+
+static size_t graph_patch_nodes_touched(GraphPatchNodeBaseline *baseline, size_t baseline_len, const ZProgramGraph *graph) {
+  size_t touched = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    GraphPatchNodeBaseline *match = graph_patch_baseline_find(baseline, baseline_len, node->id ? node->id : "");
+    if (!match) {
+      touched++;
+      continue;
+    }
+    match->matched = true;
+    if (strcmp(match->hash, node->node_hash ? node->node_hash : "") != 0) touched++;
+  }
+  for (size_t i = 0; i < baseline_len; i++) {
+    if (!baseline[i].matched) touched++;
+  }
+  return touched;
+}
+
+static void graph_patch_baseline_free(GraphPatchNodeBaseline *items, size_t len) {
+  for (size_t i = 0; i < len; i++) {
+    free(items[i].id);
+    free(items[i].hash);
+  }
+  free(items);
+}
+
+static void print_graph_patch_summary_text(const ZProgramGraph *graph, const ZProgramGraphPatchResult *result, size_t nodes_touched) {
   printf("graphHash: %s\n", graph && graph->graph_hash ? graph->graph_hash : "");
-  printf("functions:");
-  size_t functions = 0;
-  for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || (node->value && node->value[0])) continue;
-    printf("%s%s", functions == 0 ? " " : ", ", node->name ? node->name : "");
-    functions++;
-  }
-  if (functions == 0) printf(" none");
-  printf("\n");
-  printf("tests:");
-  size_t tests = 0;
-  for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->value || !node->value[0]) continue;
-    printf("%s%s", tests == 0 ? " " : ", ", node->value);
-    tests++;
-  }
-  if (tests == 0) printf(" none");
-  printf("\n");
+  size_t ops = result ? result->operation_len : 0;
+  printf("applied: %zu %s, %zu %s touched\n", ops, ops == 1 ? "op" : "ops", nodes_touched, nodes_touched == 1 ? "node" : "nodes");
 }
 
 static const char *graph_patch_source_label(const Command *command) {
   if (command && command->patch_file) return command->patch_file;
+  if (command && command->patch_body_file) return command->patch_body_file;
   if (command && (command->patch_text || command->patch_op_len > 0)) return "<inline>";
   return "<patch>";
 }
@@ -12109,21 +12943,24 @@ static bool graph_patch_expect_hash_valid(const char *hash) {
   return true;
 }
 
-static char *graph_patch_build_inline_text(const Command *command, ZDiag *diag) {
-  if (command->patch_expect_graph_hash && !graph_patch_expect_hash_valid(command->patch_expect_graph_hash)) {
-    if (diag) {
-      diag->code = 2002;
-      diag->path = command->input;
-      diag->line = 1;
-      diag->column = 1;
-      diag->length = 1;
-      snprintf(diag->message, sizeof(diag->message), "graph patch expected hash is invalid");
-      snprintf(diag->expected, sizeof(diag->expected), "graph:<16 hex chars>");
-      snprintf(diag->actual, sizeof(diag->actual), "%s", command->patch_expect_graph_hash ? command->patch_expect_graph_hash : "");
-      snprintf(diag->help, sizeof(diag->help), "use the graph hash reported by zero dump or zero validate");
-    }
-    return NULL;
+static bool graph_patch_expect_hash_ok(const Command *command, ZDiag *diag) {
+  if (!command->patch_expect_graph_hash || graph_patch_expect_hash_valid(command->patch_expect_graph_hash)) return true;
+  if (diag) {
+    diag->code = 2002;
+    diag->path = command->input;
+    diag->line = 1;
+    diag->column = 1;
+    diag->length = 1;
+    snprintf(diag->message, sizeof(diag->message), "graph patch expected hash is invalid");
+    snprintf(diag->expected, sizeof(diag->expected), "graph:<16 hex chars>");
+    snprintf(diag->actual, sizeof(diag->actual), "%s", command->patch_expect_graph_hash ? command->patch_expect_graph_hash : "");
+    snprintf(diag->help, sizeof(diag->help), "use the graph hash reported by zero dump or zero validate");
   }
+  return false;
+}
+
+static char *graph_patch_build_inline_text(const Command *command, ZDiag *diag) {
+  if (!graph_patch_expect_hash_ok(command, diag)) return NULL;
   ZBuf text;
   zbuf_init(&text);
   zbuf_append(&text, "zero-program-graph-patch v1\n");
@@ -12380,7 +13217,10 @@ static int run_graph_view_command(const Command *command, ZDiag *diag) {
   }
   ZBuf view;
   zbuf_init(&view);
-  if (!z_program_graph_append_view(&view, &graph, command->input, diag)) {
+  bool view_ok = command->query_function
+    ? z_program_graph_append_view_function(&view, &graph, command->input, command->query_function, diag)
+    : z_program_graph_append_view(&view, &graph, command->input, diag);
+  if (!view_ok) {
     print_command_diag(command, diag->path ? diag->path : command->input, diag);
     zbuf_free(&view);
     z_free_program(&program);
@@ -12423,8 +13263,40 @@ static const char *graph_input_kind_name(GraphInputKind kind) {
   return "unknown";
 }
 
+static bool parse_graph_query_depth(const Command *command, ZProgramGraphQueryRequest *request, ZDiag *diag) {
+  if (!command->query_depth) return true;
+  char *end = NULL;
+  unsigned long value = strtoul(command->query_depth, &end, 10);
+  if (command->query_depth[0] && end && !*end && value >= 1 && value <= 16) {
+    request->node_depth = (size_t)value;
+    return true;
+  }
+  diag->code = 2002;
+  diag->line = 1;
+  diag->column = 1;
+  diag->length = 1;
+  snprintf(diag->message, sizeof(diag->message), "invalid query depth '%s'", command->query_depth);
+  snprintf(diag->expected, sizeof(diag->expected), "--depth <1-16>");
+  snprintf(diag->actual, sizeof(diag->actual), "--depth %s", command->query_depth);
+  snprintf(diag->help, sizeof(diag->help), "use --depth 1 for immediate children of --node <id>, larger values for deeper subtrees");
+  return false;
+}
+
 static int run_graph_query_command(const Command *command, const ZTargetInfo *target, ZDiag *diag) {
   if (command->out) return reject_graph_unsupported_out(command, diag);
+  ZProgramGraphQueryRequest request;
+  z_program_graph_query_request_init(&request);
+  request.function = command->query_function;
+  request.find = command->query_find;
+  request.refs = command->query_refs;
+  request.calls = command->query_calls;
+  request.node = command->query_node;
+  request.full_module = command->query_full;
+  request.bare_argument = command->query_bare_argument;
+  if (!parse_graph_query_depth(command, &request, diag)) {
+    print_command_diag(command, command->input, diag);
+    return 1;
+  }
   SourceInput input = {0};
   Program program = {0};
   ZProgramGraph graph = {0};
@@ -12437,12 +13309,12 @@ static int run_graph_query_command(const Command *command, const ZTargetInfo *ta
     ZBuf json;
     zbuf_init(&json);
     const char *input_name = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
-    z_program_graph_append_query_json(&json, &graph, input_name, command->input, graph_input_kind_name(input_kind), command->query_function, command->query_find, command->query_refs, command->query_calls, command->query_node);
+    z_program_graph_append_query_json(&json, &graph, input_name, command->input, graph_input_kind_name(input_kind), &request);
     fputs(json.data, stdout);
     zbuf_free(&json);
   } else {
     const char *input_name = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
-    z_program_graph_print_query_text(&graph, input_name, command->input, graph_input_kind_name(input_kind), command->query_function, command->query_find, command->query_refs, command->query_calls, command->query_node);
+    z_program_graph_print_query_text(&graph, input_name, command->input, graph_input_kind_name(input_kind), &request);
   }
   z_free_program(&program);
   z_free_source(&input);
@@ -12562,8 +13434,19 @@ static int run_graph_reconcile_command(const Command *command, const ZTargetInfo
     return 1;
   }
 
+  char *reconcile_package_input = NULL;
+  if (is_zero_source_path(command->reconcile_source) && direct_file_exists(command->reconcile_source)) {
+    char *package_root = z_program_graph_store_root_for_input(command->reconcile_source);
+    char *package_manifest = package_root ? z_manifest_path_for_root(package_root) : NULL;
+    if (package_manifest) {
+      reconcile_package_input = package_root;
+      package_root = NULL;
+    }
+    free(package_manifest);
+    free(package_root);
+  }
   Command edited_command = *command;
-  edited_command.input = command->reconcile_source;
+  edited_command.input = reconcile_package_input ? reconcile_package_input : command->reconcile_source;
   edited_command.out = NULL;
   SourceInput edited_input = {0};
   Program edited_program = {0};
@@ -12574,8 +13457,17 @@ static int run_graph_reconcile_command(const Command *command, const ZTargetInfo
     z_free_program(&base_program);
     z_free_source(&base_input);
     z_program_graph_free(&base_graph);
+    free(reconcile_package_input);
     return 1;
   }
+
+  char *edited_normalize_root = z_program_graph_store_root_for_input(edited_command.input);
+  if (edited_normalize_root) {
+    char *edited_normalize_manifest = z_manifest_path_for_root(edited_normalize_root);
+    if (edited_normalize_manifest) z_program_graph_store_normalize_source_graph(&edited_graph, edited_normalize_root);
+    free(edited_normalize_manifest);
+  }
+  free(edited_normalize_root);
 
   ZProgramGraphIdentityReconcile identity = {0};
   (void)z_program_graph_preserve_source_node_ids(&base_graph, &edited_graph, &identity);
@@ -12603,6 +13495,7 @@ static int run_graph_reconcile_command(const Command *command, const ZTargetInfo
   z_free_program(&base_program);
   z_free_source(&base_input);
   z_program_graph_free(&base_graph);
+  free(reconcile_package_input);
   (void)base_kind;
   (void)edited_kind;
   return summary.ok ? 0 : 1;
@@ -12612,37 +13505,46 @@ static bool validate_graph_patch_sources(const Command *command, bool *has_file,
   *has_file = command->patch_file != NULL;
   *has_patch_text = command->patch_text != NULL;
   *has_ops = command->patch_op_len > 0;
-  int source_count = (*has_file ? 1 : 0) + (*has_patch_text ? 1 : 0) + (*has_ops ? 1 : 0);
+  bool has_body = command->patch_replace_fn || command->patch_body_file;
+  diag->code = 2002;
+  diag->path = command->input;
+  diag->line = 1;
+  diag->column = 1;
+  diag->length = 1;
+  if (has_body && (!command->patch_replace_fn || !command->patch_body_file)) {
+    snprintf(diag->message, sizeof(diag->message), "graph patch body replacement needs both --replace-fn and --body-file");
+    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] --replace-fn <function> --body-file <body-rows-file>");
+    snprintf(diag->actual, sizeof(diag->actual), "missing %s", command->patch_replace_fn ? "--body-file" : "--replace-fn");
+    snprintf(diag->help, sizeof(diag->help), "the body file holds only the new body rows, exactly what zero view --fn prints between the signature braces");
+    return false;
+  }
+  int source_count = (*has_file ? 1 : 0) + (*has_patch_text ? 1 : 0) + (*has_ops ? 1 : 0) + (has_body ? 1 : 0);
   if (source_count == 0) {
-    diag->code = 2002;
-    diag->path = command->input;
-    diag->line = 1;
-    diag->column = 1;
-    diag->length = 1;
     snprintf(diag->message, sizeof(diag->message), "graph patch requires patch operations");
-    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] (<patch-file>|--op <operation>|--patch-text <text>)");
+    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] (<patch-file>|--op <operation>|--patch-text <text>|--replace-fn <function> --body-file <file>)");
     snprintf(diag->actual, sizeof(diag->actual), "missing patch input");
-    snprintf(diag->help, sizeof(diag->help), "pass a zero-program-graph-patch v1 file or one or more --op lines");
+    snprintf(diag->help, sizeof(diag->help), "pass a zero-program-graph-patch v1 file, one or more --op lines, or --replace-fn with --body-file");
     return false;
   }
-  if (source_count > 1 || (command->patch_expect_graph_hash && !*has_ops)) {
-    diag->code = 2002;
-    diag->path = command->input;
-    diag->line = 1;
-    diag->column = 1;
-    diag->length = 1;
+  if (source_count > 1 || (command->patch_expect_graph_hash && !*has_ops && !has_body)) {
     snprintf(diag->message, sizeof(diag->message), "graph patch source is ambiguous");
-    snprintf(diag->expected, sizeof(diag->expected), "one patch source: <patch-file>, --patch-text, or --op");
+    snprintf(diag->expected, sizeof(diag->expected), "one patch source: <patch-file>, --patch-text, --op, or --replace-fn with --body-file");
     snprintf(diag->actual, sizeof(diag->actual), "%s", graph_patch_source_label(command));
-    snprintf(diag->help, sizeof(diag->help), "use --expect-graph-hash with --op, or put the precondition in patch text");
+    snprintf(diag->help, sizeof(diag->help), "use --expect-graph-hash with --op or --replace-fn, or put the precondition in patch text");
     return false;
   }
+  diag->code = 0;
+  diag->path = NULL;
   return true;
 }
 
 static bool apply_graph_patch_source(const Command *command, bool has_file, bool has_patch_text, ZProgramGraph *graph, ZProgramGraphPatchResult *result, char **inline_text, ZDiag *diag) {
   if (has_file) return z_program_graph_apply_patch_file(command->patch_file, graph, result, diag);
   if (has_patch_text) return z_program_graph_apply_patch_text("<inline>", command->patch_text, strlen(command->patch_text), graph, result, diag);
+  if (command->patch_body_file) {
+    return graph_patch_expect_hash_ok(command, diag) &&
+           z_program_graph_apply_replace_fn_body_file(command->patch_replace_fn, command->patch_body_file, command->patch_expect_graph_hash, graph, result, diag);
+  }
   *inline_text = graph_patch_build_inline_text(command, diag);
   return *inline_text && z_program_graph_apply_patch_text("<inline>", *inline_text, strlen(*inline_text), graph, result, diag);
 }
@@ -12670,6 +13572,7 @@ static void print_graph_patch_help_json(void) {
 
 static bool save_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, GraphInputKind input_kind, const SourceInput *input, const char **saved_path, ZDiag *diag) {
   (void)input;
+  (void)target;
   *saved_path = NULL;
   bool repository_backed = input_kind == GRAPH_INPUT_REPOSITORY_STORE;
   if (repository_backed) {
@@ -12685,7 +13588,6 @@ static bool save_graph_patch_output(const Command *command, const ZTargetInfo *t
       snprintf(diag->help, sizeof(diag->help), "omit --out when patching a repository graph compiler input");
       return false;
     }
-    if (!validate_repository_graph_patch_output(command, target, graph, diag)) return false;
     if (command->graph_patch_check_only) return true;
     ZProgramGraphStoreFormat fallback_format = z_program_graph_store_path_is_binary(command->input)
       ? Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY
@@ -12750,17 +13652,51 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
   }
 
   char *original_hash = z_strdup(graph.graph_hash ? graph.graph_hash : "");
+  size_t baseline_len = 0;
+  GraphPatchNodeBaseline *baseline = command->json ? NULL : graph_patch_snapshot_baseline(&graph, &baseline_len);
   ZProgramGraphPatchResult result = {0};
   char *inline_text = NULL;
   bool ok = apply_graph_patch_source(command, has_file, has_patch_text, &graph, &result, &inline_text, diag);
   if (!ok && !result.message[0] && diag->code != 0) {
     print_command_diag(command, diag->path ? diag->path : graph_patch_source_label(command), diag);
+    graph_patch_baseline_free(baseline, baseline_len);
     free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
     return 1;
+  }
+  if (ok && input_kind == GRAPH_INPUT_REPOSITORY_STORE) {
+    GraphOracleDiags introduced = {0};
+    GraphOracleDiags preexisting = {0};
+    ZDiag reval_fatal = {0};
+    bool revalidated = revalidate_repository_graph_patch_output(command, target, &graph, &introduced, &preexisting, &reval_fatal);
+    if (!revalidated && introduced.len == 0) {
+      print_command_diag(command, reval_fatal.path ? reval_fatal.path : command->input, &reval_fatal);
+      free((char *)reval_fatal.path);
+      graph_oracle_diags_free(&introduced);
+      graph_oracle_diags_free(&preexisting);
+      graph_patch_baseline_free(baseline, baseline_len);
+      free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
+      return 1;
+    }
+    if (!revalidated) {
+      print_command_diag_list(command, command->input, &introduced);
+      if (!command->json) {
+        fprintf(stderr, "program graph patch failed revalidation: %zu diagnostic%s introduced by this patch\n", introduced.len, introduced.len == 1 ? "" : "s");
+      }
+      print_preexisting_diag_notes("patch", &preexisting);
+      graph_oracle_diags_free(&introduced);
+      graph_oracle_diags_free(&preexisting);
+      graph_patch_baseline_free(baseline, baseline_len);
+      free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
+      return 1;
+    }
+    print_preexisting_diag_notes("patch", &preexisting);
+    graph_oracle_diags_free(&introduced);
+    graph_oracle_diags_free(&preexisting);
   }
   const char *saved_path = NULL;
   if (ok && !save_graph_patch_output(command, target, &graph, input_kind, &input, &saved_path, diag)) {
     print_command_diag(command, diag->path ? diag->path : (command->out ? command->out : command->input), diag);
+    graph_patch_baseline_free(baseline, baseline_len);
     free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
     return 1;
   }
@@ -12773,11 +13709,11 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
     zbuf_free(&json);
   } else if (ok && command->graph_patch_check_only) {
     printf("program graph patch ok (check-only)\n");
-    print_graph_patch_symbols_text(&graph);
+    print_graph_patch_summary_text(&graph, &result, graph_patch_nodes_touched(baseline, baseline_len, &graph));
   } else if (ok && saved_path) {
     printf("program graph patch ok\n");
     printf("saved: %s\n", saved_path);
-    print_graph_patch_symbols_text(&graph);
+    print_graph_patch_summary_text(&graph, &result, graph_patch_nodes_touched(baseline, baseline_len, &graph));
   } else if (ok) {
     ZProgramGraphValidation validation = {0};
     z_program_graph_validate(&graph, &validation);
@@ -12788,12 +13724,20 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
     zbuf_free(&dump);
   } else if (result.message[0]) {
     fprintf(stderr, "program graph patch failed: %s\n", result.message);
+    if (result.line > 0 && result.actual && result.actual[0]) {
+      fprintf(stderr, "  %s:%d: %s\n", graph_patch_source_label(command), result.line, result.actual);
+    }
     if (result.expected && result.expected[0]) fprintf(stderr, "  expected: %s\n", result.expected);
-    if (result.actual && result.actual[0]) fprintf(stderr, "  actual: %s\n", result.actual);
+    if (result.line <= 0 && result.actual && result.actual[0]) fprintf(stderr, "  actual: %s\n", result.actual);
+    if (result.format_error) {
+      fprintf(stderr, "  help: a minimal complete patch file looks exactly like this:\n");
+      fputs(z_program_graph_patch_minimal_file_example(), stderr);
+    }
   } else {
     print_diag(diag->path ? diag->path : graph_patch_source_label(command), diag);
   }
 
+  graph_patch_baseline_free(baseline, baseline_len);
   free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
   return ok ? 0 : 1;
 }
@@ -12819,9 +13763,10 @@ static const char *graph_check_phase_name(GraphCheckPhase phase) {
   return "unknown";
 }
 
-static bool append_graph_artifact_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraph *graph, const ZTargetInfo *target, const Command *command, ZDiag *diag, long long *lower_ms_out, bool *graph_mir_used_out) {
+static bool append_graph_artifact_target_readiness_json(ZBuf *buf, SourceInput *input, const ZProgramGraph *graph, const ZTargetInfo *target, const Command *command, ZDiag *diag, long long *lower_ms_out, bool *graph_mir_used_out, ZDiag *blocked_diag, bool *blocked_out) {
   if (lower_ms_out) *lower_ms_out = 0;
   if (graph_mir_used_out) *graph_mir_used_out = false;
+  if (blocked_out) *blocked_out = false;
   ZDiag readiness_diag = {0};
   long long phase_started = now_ms();
   IrProgram ir = z_lower_program_graph_with_source(graph, input, target);
@@ -12836,6 +13781,9 @@ static bool append_graph_artifact_target_readiness_json(ZBuf *buf, SourceInput *
   if (ready && !ir.mir_valid) { init_lowering_backend_diag(&readiness_diag, input, target, command, &ir); ready = false; }
   if (ready && !repository_graph_target_readiness_select_diag(command, input, target, &ir, &readiness_diag)) ready = false;
   if (!ready && diag) *diag = readiness_diag;
+  if (!ready && blocked_out && blocked_diag && !ir.mir_valid && !z_std_source_path_is_module_artifact(command ? command->input : NULL)) {
+    *blocked_out = check_gate_merged_graph_blocked(command, input, target, graph, blocked_diag);
+  }
   append_target_readiness_result_json(buf, input, NULL, target, command, &ir, &readiness_diag, ready);
   z_free_ir_program(&ir); return ready;
 }
@@ -12870,8 +13818,16 @@ static int run_graph_check_command(const Command *command, const ZTargetInfo *ta
   long long lower_ms = 0;
   bool graph_mir_used = false;
   ZDiag readiness_diag = {0};
-  if (ok) (void)append_graph_artifact_target_readiness_json(&target_readiness, &checked_input, &graph, target, command, &readiness_diag, &lower_ms, &graph_mir_used);
-  if (!ok) {
+  ZDiag blocked_diag = {0};
+  bool buildability_blocked = false;
+  if (ok) (void)append_graph_artifact_target_readiness_json(&target_readiness, &checked_input, &graph, target, command, &readiness_diag, &lower_ms, &graph_mir_used, &blocked_diag, &buildability_blocked);
+  if (ok && buildability_blocked) {
+    ok = false;
+    phase = GRAPH_CHECK_PHASE_TARGET_READINESS;
+    *diag = blocked_diag;
+    /* The gate already mapped this diagnostic to projection source locations. */
+    if (!diag->path) diag->path = graph_check_diagnostic_path(command);
+  } else if (!ok) {
     if (phase == GRAPH_CHECK_PHASE_TYPECHECK || phase == GRAPH_CHECK_PHASE_TARGET_READINESS) graph_check_map_diag_path(command, &checked_input, diag);
     else if (!diag->path) diag->path = command->input;
   }
@@ -13006,6 +13962,13 @@ static bool resolve_graph_command_manifest_input(Command *command, bool *artifac
       free(manifest_path);
       return true;
     }
+    bool projection_inspection = command->kind && (strcmp(command->kind, "status") == 0 || strcmp(command->kind, "verify-projection") == 0);
+    const char *input_name = strrchr(command->input, '/');
+    input_name = input_name ? input_name + 1 : command->input;
+    if (projection_inspection && strcmp(input_name, "zero.graph") == 0 && direct_file_exists(command->input)) {
+      command_set_owned_input(command, direct_dirname_of(command->input));
+      return true;
+    }
     set_source_input_diag(command->input, diag);
     return false;
   }
@@ -13069,6 +14032,90 @@ static bool resolve_graph_command_manifest_input(Command *command, bool *artifac
   return true;
 }
 
+static ZProgramGraphProjectionSourceSync manifest_graph_store_source_sync(const char *input) {
+  char *root = z_program_graph_store_root_for_input(input);
+  char *store_path = root ? z_program_graph_store_path_for_root(root) : NULL;
+  ZProgramGraphProjectionSourceSync sync = Z_PROGRAM_GRAPH_PROJECTION_SYNC_CLEAN;
+  if (store_path && z_program_graph_store_path_exists(store_path)) {
+    ZProgramGraphStore store;
+    ZDiag store_diag = {0};
+    if (z_program_graph_store_load_path(store_path, &store, &store_diag)) {
+      if (!z_program_graph_projection_sources_missing(&store)) {
+        ZProgramGraphProjectionSourceSync store_sync = Z_PROGRAM_GRAPH_PROJECTION_SYNC_CLEAN;
+        ZDiag sync_diag = {0};
+        if (z_program_graph_projection_source_sync_state(&store, &store_sync, &sync_diag)) sync = store_sync;
+      }
+      z_program_graph_store_free(&store);
+    }
+  }
+  free(store_path);
+  free(root);
+  return sync;
+}
+
+static int resolve_manifest_graph_input_sync(const Command *command, const ZTargetInfo *target, const char *source_input_path) {
+  const char *input = source_input_path ? source_input_path : command->input;
+  ZProgramGraphProjectionSourceSync sync = manifest_graph_store_source_sync(input);
+  if (sync == Z_PROGRAM_GRAPH_PROJECTION_SYNC_CLEAN) return 0;
+  if (sync == Z_PROGRAM_GRAPH_PROJECTION_SYNC_STORE_NEWER) {
+    fprintf(stderr, "note: zero %s is using zero.graph, which is newer than the .0 source projection; run zero export to sync sources or zero import to make the edited source authoritative\n", command->command ? command->command : "build");
+    return 0;
+  }
+  if (sync == Z_PROGRAM_GRAPH_PROJECTION_SYNC_DIVERGED) {
+    return z_repository_graph_diverged_compiler_input_error(input, target, command->json);
+  }
+  const char *stale_mode = getenv("ZERO_STALE");
+  if (stale_mode && strcmp(stale_mode, "fail") == 0) {
+    return z_repository_graph_stale_compiler_input_error(input, target, command->json);
+  }
+  Command load_command = *command;
+  load_command.input = input;
+  load_command.out = NULL;
+  SourceInput source_input = {0};
+  Program source_program = {0};
+  ZProgramGraph source_graph = {0};
+  int validate_rc = load_and_validate_repository_graph_source(command, &load_command, target, command->command ? command->command : "build", &source_input, &source_program, &source_graph);
+  if (validate_rc != 0) {
+    z_program_graph_free(&source_graph);
+    z_free_program(&source_program);
+    z_free_source(&source_input);
+    return validate_rc;
+  }
+  int rc = z_repository_graph_refresh_compiler_store(input, target, command->json, &source_graph);
+  z_program_graph_free(&source_graph);
+  z_free_program(&source_program);
+  z_free_source(&source_input);
+  if (rc == 0) fprintf(stderr, "note: zero %s refreshed zero.graph from the edited package source projection\n", command->command ? command->command : "build");
+  return rc;
+}
+
+static int refresh_stale_manifest_graph_input(const Command *command, const ZTargetInfo *target) {
+  return resolve_manifest_graph_input_sync(command, target, NULL);
+}
+
+static bool input_is_package_store_path(const char *input) {
+  if (!input || !direct_file_exists(input)) return false;
+  const char *name = strrchr(input, '/');
+  name = name ? name + 1 : input;
+  return strcmp(name, "zero.graph") == 0;
+}
+
+static void resolve_compiler_command_package_source_input(Command *command) {
+  if (!command || !command->input) return;
+  if (!z_program_graph_manifest_command_can_use_compiler_input(command->command)) return;
+  bool source_input = is_zero_source_path(command->input) && direct_file_exists(command->input);
+  bool store_input = !source_input && input_is_package_store_path(command->input);
+  if (!source_input && !store_input) return;
+  char *root = store_input ? direct_dirname_of(command->input) : z_program_graph_store_root_for_input(command->input);
+  char *manifest_path = root ? z_manifest_path_for_root(root) : NULL;
+  if (manifest_path) {
+    command_set_owned_input(command, root);
+    root = NULL;
+  }
+  free(manifest_path);
+  free(root);
+}
+
 static int resolve_direct_command_manifest_graph_input(Command *command, const ZTargetInfo *target, bool *handled) {
   if (handled) *handled = false;
   if (!command || !z_program_graph_manifest_command_can_use_compiler_input(command->command)) return 0;
@@ -13082,6 +14129,9 @@ static int resolve_direct_command_manifest_graph_input(Command *command, const Z
     return 1;
   }
   if (!enabled) return 0;
+
+  int stale_rc = refresh_stale_manifest_graph_input(command, target);
+  if (stale_rc != 0) return stale_rc;
 
   char *store_path = NULL;
   int rc = z_repository_graph_verify_compiler_input(command->input, target, command->json, &store_path);
@@ -13111,6 +14161,9 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   if (!enabled) return 0;
   if (handled) *handled = true;
 
+  int stale_rc = refresh_stale_manifest_graph_input(command, target);
+  if (stale_rc != 0) return stale_rc;
+
   char *store_path = NULL;
   int store_rc = z_repository_graph_require_compiler_store(command->input, target, command->json, &store_path);
   if (store_rc != 0) return store_rc;
@@ -13134,6 +14187,8 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   if (!z_program_graph_manifest_attach_metadata_to_input(&input, command->input, &diag)) {
     if (command->json) print_command_diag_json(command, diag.path ? diag.path : command->input, &diag);
     else print_diag(diag.path ? diag.path : command->input, &diag);
+    /* metadata attach diags always own their path copies */
+    free((char *)diag.path);
     z_free_source(&input);
     z_program_graph_store_free(&store);
     return 1;
@@ -13148,22 +14203,78 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   bool ok = collected_resolution &&
             graph_stored_compiler_input_ok(&store.graph, &resolution, &input, target, store.path ? store.path : command->input, &diag);
   input.check_ms = now_ms() - check_started;
+
+  /*
+   * Check-time buildability: lower the stored typed graph for the checked
+   * target and fail the check with the same BLD004 diagnostics that
+   * zero build or zero run would report later.
+   */
+  RepositoryGraphCheckReadiness readiness = {0};
+  bool gate_applies = ok && graph_check_buildability_gate_applies(&store.graph);
+  if (ok && command->json) {
+    repository_graph_check_readiness_compute(command, &input, &store, target, &readiness);
+    if (gate_applies && !readiness.ready) {
+      if (!readiness.prepared && readiness.graph_mir_used && z_check_gate_diag_is_buildability_blocker(&readiness.diag) &&
+          z_check_gate_diag_is_known_construct(&store.graph, &readiness.diag)) {
+        diag = readiness.diag;
+        ok = false;
+      } else if (readiness.prepared && check_gate_buildability_blocked(command, &input, target, &store.graph, &readiness.ir, &diag)) {
+        ok = false;
+      }
+    }
+  } else if (ok && gate_applies) {
+    long long gate_lower_ms = 0;
+    if (repository_graph_check_gate_blocked(command, &input, &store, target, &gate_lower_ms, &diag)) ok = false;
+  }
   long long cache_started = now_ms();
   touch_program_graph_compiler_caches(&input, target, command->profile, store.graph.graph_hash);
   long long cache_ms = now_ms() - cache_started;
 
   if (ok) {
-    if (command->json) print_repository_graph_check_json_success(command, target, &input, &store, &resolution, load_ms, resolve_ms, input.check_ms, cache_ms);
+    if (command->json) print_repository_graph_check_json_success(command, target, &input, &store, &resolution, &readiness, load_ms, resolve_ms, input.check_ms, cache_ms);
     else printf("ok\n");
   } else {
     if (command->json) print_command_diag_json(command, diag.path ? diag.path : command->input, &diag);
     else print_diag(diag.path ? diag.path : command->input, &diag);
   }
 
+  repository_graph_check_readiness_free(&readiness);
   z_program_graph_resolution_facts_free(&resolution);
   z_free_source(&input);
   z_program_graph_store_free(&store);
   return ok ? 0 : 1;
+}
+
+static bool graph_subcommand_consumes_package_store(const char *kind) {
+  static const char *const kinds[] = {"query", "view", "diff", "inspect", "source-map", "dump", "size", "roundtrip", "patch"};
+  for (size_t i = 0; kind && i < sizeof(kinds) / sizeof(kinds[0]); i++) {
+    if (strcmp(kind, kinds[i]) == 0) return true;
+  }
+  return false;
+}
+
+static int resolve_graph_subcommand_store_input_sync(const Command *command, const ZTargetInfo *target) {
+  if (!command || !graph_subcommand_consumes_package_store(command->kind)) return 0;
+  if (!command->input || !path_has_program_graph_storage_header(command->input)) return 0;
+  const char *source_input = command->repository_graph_input ? command->repository_graph_source_input : NULL;
+  char *owned_root = NULL;
+  if (!source_input) {
+    if (!input_is_package_store_path(command->input)) return 0;
+    owned_root = direct_dirname_of(command->input);
+    source_input = owned_root;
+  }
+  char *root = source_input ? z_program_graph_store_root_for_input(source_input) : NULL;
+  char *manifest_path = root ? z_manifest_path_for_root(root) : NULL;
+  bool manifest_package = manifest_path != NULL;
+  free(manifest_path);
+  free(root);
+  if (!manifest_package) {
+    free(owned_root);
+    return 0;
+  }
+  int rc = resolve_manifest_graph_input_sync(command, target, source_input);
+  free(owned_root);
+  return rc;
 }
 
 static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *target, bool graph_command_artifact_input, ZDiag *diag, bool *handled) {
@@ -13174,22 +14285,52 @@ static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *ta
   bool repo_graph_command = false;
   SourceInput repo_graph_input = {0}; Program repo_graph_program = {0}; ZProgramGraph repo_source_graph = {0};
   bool repo_wants_source_graph = z_repository_graph_needs_source_graph(command->kind, command->input, target, command->graph_export_from_graph, command->graph_import_from_source);
+  char *repo_package_input = NULL;
+  if (repo_wants_source_graph && !command->out && command->input && is_zero_source_path(command->input) && direct_file_exists(command->input)) {
+    char *repo_package_root = z_program_graph_store_root_for_input(command->input);
+    char *repo_package_manifest = repo_package_root ? z_manifest_path_for_root(repo_package_root) : NULL;
+    if (repo_package_manifest) {
+      repo_package_input = repo_package_root;
+      repo_package_root = NULL;
+    }
+    free(repo_package_manifest);
+    free(repo_package_root);
+  }
+  Command repo_graph_load_command = *command;
+  if (repo_package_input) repo_graph_load_command.input = repo_package_input;
   ZDiag repo_source_graph_diag = {0};
   bool repo_has_source_graph = false;
-  if (repo_wants_source_graph) {
-    repo_has_source_graph = repository_graph_command_loads_checked_source(command)
-      ? load_graph_from_checked_current_source(command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag)
-      : load_graph_from_current_source(command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag);
+  /*
+   * zero import validates the source projection with the compiler typecheck
+   * plus the zero check oracle, diffed against the existing store so
+   * pre-existing diagnostics in untouched files never wall a refresh. Only
+   * diagnostics the import would introduce fail it, and all of them report
+   * in one shot.
+   */
+  if (repo_wants_source_graph && repository_graph_command_loads_checked_source(&repo_graph_load_command)) {
+    int import_rc = load_and_validate_repository_graph_source(command, &repo_graph_load_command, target, "import", &repo_graph_input, &repo_graph_program, &repo_source_graph);
+    if (import_rc != 0) {
+      z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
+      free(repo_package_input);
+      return import_rc;
+    }
+    repo_has_source_graph = true;
+  } else if (repo_wants_source_graph) {
+    repo_has_source_graph = load_graph_from_current_source(&repo_graph_load_command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag);
+    if (!repo_has_source_graph) {
+      if (command->json) print_command_diag_json(command, repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag); else print_diag(repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag);
+      z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
+      free(repo_package_input);
+      return 1;
+    }
   }
-  if (repo_wants_source_graph && !repo_has_source_graph) {
-    if (command->json) print_command_diag_json(command, repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag); else print_diag(repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag);
-    z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
-    return 1;
-  }
-  RepositoryGraphSourceGraphLoader repo_graph_loader = {.command = command, .target = target};
-  int repo_graph_rc = z_repository_graph_maybe_command(command->kind, command->input, target, command->json, command->graph_export_from_graph, command->graph_import_from_source, command->merge_base, command->merge_left, command->merge_right, command->store_format, command->out, repo_has_source_graph ? &repo_source_graph : NULL, command->graph_export_from_graph ? load_repository_graph_checked_source_graph : NULL, &repo_graph_loader, &repo_graph_command);
+  RepositoryGraphSourceGraphLoader repo_graph_loader = {.command = &repo_graph_load_command, .target = target};
+  int repo_graph_rc = z_repository_graph_maybe_command(command->kind, repo_graph_load_command.input, target, command->json, command->graph_export_from_graph, command->graph_import_from_source, command->merge_base, command->merge_left, command->merge_right, command->store_format, command->out, repo_has_source_graph ? &repo_source_graph : NULL, command->graph_export_from_graph ? load_repository_graph_checked_source_graph : NULL, &repo_graph_loader, &repo_graph_command);
   z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
+  free(repo_package_input);
   if (repo_graph_command) return repo_graph_rc;
+  int store_sync_rc = resolve_graph_subcommand_store_input_sync(command, target);
+  if (store_sync_rc != 0) return store_sync_rc;
   if (graph_check_text_eq(command->kind, "validate")) return run_graph_validate_command(command, target, diag);
   if (graph_check_text_eq(command->kind, "dump")) return run_graph_dump_input_command(command, target, diag, false);
   if (graph_check_text_eq(command->kind, "import")) return run_graph_dump_input_command(command, target, diag, true);
@@ -13579,13 +14720,17 @@ int main(int argc, char **argv) {
       !command.patch_file &&
       command.patch_op_len == 0 &&
       !command.patch_text &&
-      path_has_program_graph_patch_header(command.input)) {
+      !command.patch_body_file &&
+      !command.patch_replace_fn &&
+      (path_has_program_graph_patch_header(command.input) ||
+       path_starts_with_program_graph_patch_operation(command.input))) {
     command.patch_file = command.input;
     command.input = ".";
   }
-  if (!command.input && command.graph_patch_command && (command.patch_op_len > 0 || command.patch_text || command.patch_file)) {
+  if (!command.input && command.graph_patch_command && (command.patch_op_len > 0 || command.patch_text || command.patch_file || command.patch_body_file || command.patch_replace_fn)) {
     command.input = ".";
   }
+  command_apply_query_bare_argument(&command);
   command_apply_current_directory_default(&command);
   if (!command.input) {
     z_cli_print_command_help(command.command);
@@ -13842,6 +14987,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  resolve_compiler_command_package_source_input(&command);
   const char *direct_graph_manifest_input = command.input;
   bool direct_graph_manifest_command = false;
   int repository_graph_check_rc = run_repository_graph_check_command(&command, target, &direct_graph_manifest_command);

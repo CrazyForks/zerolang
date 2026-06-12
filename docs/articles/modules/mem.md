@@ -97,7 +97,10 @@ Allocation behavior:
 Ownership: returned spans borrow from the original fixed buffer; no heap
 ownership is created.
 
-Target support: current compiler targets.
+Target support: current compiler targets. Direct native builds lower
+`FixedBufAlloc` locals only; `PageAlloc`, `GeneralAlloc`, and `NullAlloc`
+locals type-check but fail `zero build` with a `BLD004` diagnostic that points
+back to `std.mem.fixedBufAlloc`.
 
 ## Reporting Contract
 

@@ -18,7 +18,10 @@ lets humans read them.
 | `Void` | Return type for functions that produce no useful value. |
 
 Integer literals support decimal, hexadecimal, binary, octal, `_` separators,
-and optional suffixes such as `_u8` or `_usize`.
+and optional suffixes such as `_u8` or `_usize`. An unsuffixed integer literal
+adopts the type of a typed integer operand in arithmetic and comparisons when
+the value fits, so `index + 1` and `index < 10` work when `index` is `usize`.
+Out-of-range literals are rejected, so `byte > 300` fails for a `u8` operand.
 
 ```zero
 let count: u32 = 0x12c_u32
@@ -67,6 +70,14 @@ let copied: usize = std.mem.copy(scratch, bytes)
 
 These types are central to Zero's size and memory model. Helpers generally
 write into caller-owned storage so allocation behavior remains visible.
+
+Fixed-size locals live in one stack frame per function, and a single function
+may declare at most 131072 bytes of locals. `zero check` reports `MEM003` when
+a frame exceeds that limit; split the buffer into smaller buffers in helper
+functions so each frame stays within the limit, or process the data in
+fixed-size chunks. `PageAlloc` and `GeneralAlloc` handles type-check but do
+not lower to the direct backends yet, so they cannot replace frame-sized
+buffers today.
 
 ## Ownership
 

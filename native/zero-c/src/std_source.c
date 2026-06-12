@@ -25,6 +25,7 @@ static const ZStdSourceModule std_source_modules[] = {
   {"std.fmt", "std/fmt.0", zero_embedded_stdlib_graph_std_fmt_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_fmt_graph_bytes)},
   {"std.fs", "std/fs.0", zero_embedded_stdlib_graph_std_fs_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_fs_graph_bytes)},
   {"std.http", "std/http.0", zero_embedded_stdlib_graph_std_http_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_http_graph_bytes)},
+  {"std.inet", "std/inet.0", zero_embedded_stdlib_graph_std_inet_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_inet_graph_bytes)},
   {"std.io", "std/io.0", zero_embedded_stdlib_graph_std_io_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_io_graph_bytes)},
   {"std.json", "std/json.0", zero_embedded_stdlib_graph_std_json_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_json_graph_bytes)},
   {"std.log", "std/log.0", zero_embedded_stdlib_graph_std_log_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_log_graph_bytes)},
@@ -35,6 +36,7 @@ static const ZStdSourceModule std_source_modules[] = {
   {"std.path", "std/path.0", zero_embedded_stdlib_graph_std_path_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_path_graph_bytes)},
   {"std.proc", "std/proc.0", zero_embedded_stdlib_graph_std_proc_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_proc_graph_bytes)},
   {"std.rand", "std/rand.0", zero_embedded_stdlib_graph_std_rand_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_rand_graph_bytes)},
+  {"std.regex", "std/regex.0", zero_embedded_stdlib_graph_std_regex_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_regex_graph_bytes)},
   {"std.search", "std/search.0", zero_embedded_stdlib_graph_std_search_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_search_graph_bytes)},
   {"std.sort", "std/sort.0", zero_embedded_stdlib_graph_std_sort_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_sort_graph_bytes)},
   {"std.str", "std/str.0", zero_embedded_stdlib_graph_std_str_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_str_graph_bytes)},
@@ -42,6 +44,7 @@ static const ZStdSourceModule std_source_modules[] = {
   {"std.text", "std/text.0", zero_embedded_stdlib_graph_std_text_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_text_graph_bytes)},
   {"std.time", "std/time.0", zero_embedded_stdlib_graph_std_time_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_time_graph_bytes)},
   {"std.toml", "std/toml.0", zero_embedded_stdlib_graph_std_toml_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_toml_graph_bytes)},
+  {"std.unicode", "std/unicode.0", zero_embedded_stdlib_graph_std_unicode_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_unicode_graph_bytes)},
   {"std.url", "std/url.0", zero_embedded_stdlib_graph_std_url_graph_bytes, sizeof(zero_embedded_stdlib_graph_std_url_graph_bytes)},
 };
 
@@ -211,17 +214,33 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.mem.prefix", "__zero_std_mem_prefix", "std.mem"},
   {"std.net.localhost", "__zero_std_net_localhost", "std.net"},
   {"std.net.loopback", "__zero_std_net_loopback", "std.net"},
+  {"std.inet.isIpv4", "__zero_std_inet_is_ipv4", "std.inet"},
+  {"std.inet.parseIpv4", "__zero_std_inet_parse_ipv4", "std.inet"},
+  {"std.inet.isIpv6", "__zero_std_inet_is_ipv6", "std.inet"},
+  {"std.inet.parseIpv6", "__zero_std_inet_parse_ipv6", "std.inet"},
+  {"std.inet.isHostname", "__zero_std_inet_is_hostname", "std.inet"},
   {"std.path.join", "__zero_std_path_join", "std.path"},
   {"std.path.normalize", "__zero_std_path_normalize", "std.path"},
   {"std.path.relative", "__zero_std_path_relative", "std.path"},
   {"std.proc.runCode", "__zero_std_proc_run_code", "std.proc"},
   {"std.proc.runOk", "__zero_std_proc_run_ok", "std.proc"},
   {"std.rand.entropyHex32", "rand_entropy_hex32", "std.rand"},
+  {"std.regex.compile", "__zero_std_regex_compile", "std.regex"},
+  {"std.regex.compileStatus", "__zero_std_regex_compile_status", "std.regex"},
+  {"std.regex.statusName", "__zero_std_regex_status_name", "std.regex"},
+  {"std.regex.isMatch", "__zero_std_regex_is_match", "std.regex"},
+  {"std.regex.matches", "__zero_std_regex_matches", "std.regex"},
   {"std.search.indexOf", "__zero_std_search_index_of", "std.search"},
   {"std.search.lastIndexOf", "__zero_std_search_last_index_of", "std.search"},
   {"std.time.abs", "__zero_std_time_abs", "std.time"},
   {"std.time.between", "__zero_std_time_between", "std.time"},
   {"std.time.hasElapsed", "__zero_std_time_has_elapsed", "std.time"},
+  {"std.time.isRfc3339Date", "__zero_std_time_is_rfc3339_date", "std.time"},
+  {"std.time.isRfc3339Time", "__zero_std_time_is_rfc3339_time", "std.time"},
+  {"std.time.isRfc3339DateTime", "__zero_std_time_is_rfc3339_datetime", "std.time"},
+  {"std.time.parseRfc3339DateTimeOr", "__zero_std_time_parse_rfc3339_datetime_or", "std.time"},
+  {"std.time.isLeapYear", "__zero_std_time_is_leap_year", "std.time"},
+  {"std.time.daysInMonth", "__zero_std_time_days_in_month", "std.time"},
   {"std.toml.bool", "__zero_std_toml_bool", "std.toml"},
   {"std.toml.field", "__zero_std_toml_field", "std.toml"},
   {"std.toml.string", "__zero_std_toml_string", "std.toml"},
@@ -229,6 +248,13 @@ static const ZStdSourceCall std_source_calls[] = {
   {"std.toml.u32", "__zero_std_toml_u32", "std.toml"},
   {"std.toml.validate", "__zero_std_toml_validate", "std.toml"},
   {"std.toml.validateBytes", "__zero_std_toml_validate_bytes", "std.toml"},
+  {"std.unicode.decodeAt", "__zero_std_unicode_decode_at", "std.unicode"},
+  {"std.unicode.widthAt", "__zero_std_unicode_width_at", "std.unicode"},
+  {"std.unicode.encode", "__zero_std_unicode_encode", "std.unicode"},
+  {"std.unicode.encodedWidth", "__zero_std_unicode_encoded_width", "std.unicode"},
+  {"std.unicode.isDigit", "__zero_std_unicode_is_digit", "std.unicode"},
+  {"std.unicode.isWord", "__zero_std_unicode_is_word", "std.unicode"},
+  {"std.unicode.isSpace", "__zero_std_unicode_is_space", "std.unicode"},
   {"std.url.appendQuery", "__zero_std_url_append_query", "std.url"},
   {"std.url.appendFormField", "__zero_std_url_append_form_field", "std.url"},
   {"std.url.authority", "__zero_std_url_authority", "std.url"},
@@ -359,7 +385,7 @@ bool z_std_source_module_load_graph(const ZStdSourceModule *module, ZProgramGrap
   if (!module || !module->graph_bytes || module->graph_len == 0) {
     if (diag) {
       *diag = (ZDiag){0};
-      diag->code = 1001;
+      diag->code = 2002;
       diag->path = module ? module->path : "std";
       diag->line = 1;
       diag->column = 1;
@@ -383,7 +409,7 @@ bool z_std_source_module_load_graph(const ZStdSourceModule *module, ZProgramGrap
       ok = z_program_graph_validate(out, &validation);
       if (!ok && diag) {
         *diag = (ZDiag){0};
-        diag->code = 1001;
+        diag->code = 2002;
         diag->path = module->path;
         diag->line = 1;
         diag->column = 1;

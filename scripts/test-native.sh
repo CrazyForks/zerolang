@@ -202,6 +202,10 @@ expected_output() {
     conformance/native/pass/string-byte-ergonomics.graph) printf "string byte ergonomics ok" ;;
     conformance/native/pass/std-math-breadth.graph) printf "std math breadth ok" ;;
     conformance/native/pass/std-numeric-random-time.graph) printf "std numeric random time ok" ;;
+    conformance/native/pass/std-regex.graph) printf "std regex ok" ;;
+    conformance/native/pass/std-unicode.graph) printf "std unicode ok" ;;
+    conformance/native/pass/std-inet.graph) printf "std inet ok" ;;
+    conformance/native/pass/std-time-rfc3339.graph) printf "std time rfc3339 ok" ;;
     conformance/native/pass/std-io-lines.graph) printf "std io lines ok" ;;
     conformance/native/pass/std-path-io-breadth.graph) printf "std path io breadth ok" ;;
     conformance/native/pass/std-fs-file-helpers.graph) printf "std fs file helpers ok" ;;
@@ -248,6 +252,10 @@ examples=(
   conformance/native/pass/string-byte-ergonomics.graph
   conformance/native/pass/std-math-breadth.graph
   conformance/native/pass/std-numeric-random-time.graph
+  conformance/native/pass/std-regex.graph
+  conformance/native/pass/std-unicode.graph
+  conformance/native/pass/std-inet.graph
+  conformance/native/pass/std-time-rfc3339.graph
   conformance/native/pass/std-io-lines.graph
   conformance/native/pass/std-path-io-breadth.graph
   conformance/native/pass/std-fs-file-helpers.graph
@@ -276,7 +284,9 @@ native_case_in_scope() {
     conformance/native/pass/std-fs-bytes.graph | \
     conformance/native/pass/std-cli-helpers.graph | \
     conformance/native/pass/generic-function-basic.graph | \
-    conformance/native/pass/match-fallback.graph)
+    conformance/native/pass/match-fallback.graph | \
+    conformance/native/pass/recursive-multi-call-let.graph | \
+    conformance/native/pass/mutual-recursion.graph)
       return 0
       ;;
     *)
@@ -300,7 +310,11 @@ run_native_or_gap() {
   fi
 
   local native_case_started_at="$SECONDS"
-  bin/zero check "$input" >/dev/null
+  # Check passes, or fails with the same BLD004 buildability gate the build
+  # path reports for gated typed graph MIR constructs.
+  if ! bin/zero check "$input" >/dev/null 2>"$out.check.err"; then
+    grep -q "BLD004" "$out.check.err"
+  fi
   if bin/zero build --json --emit exe --target linux-musl-x64 "$input" --out "$out" > "$out.json"; then
     local native_output
     if ! native_output="$("$out" "$@" 2>/dev/null)"; then
@@ -365,6 +379,8 @@ run_native_or_gap conformance/native/pass/std-search-sort-widths.graph .zero/nat
 run_native_or_gap conformance/native/pass/std-codec-json-url.graph .zero/native-test/std-codec-json-url "std codec json url ok"
 run_native_or_gap conformance/native/pass/memory-types.graph .zero/native-test/memory-types "native memory types"
 run_native_or_gap conformance/native/pass/recursive-fibonacci.graph .zero/native-test/recursive-fibonacci "recursive fibonacci ok"
+run_native_or_gap conformance/native/pass/recursive-multi-call-let.graph .zero/native-test/recursive-multi-call-let "recursive multi call ok"
+run_native_or_gap conformance/native/pass/mutual-recursion.graph .zero/native-test/mutual-recursion "mutual recursion ok"
 run_native_or_gap conformance/native/pass/scratch-nested-index.graph .zero/native-test/scratch-nested-index "scratch nested index ok"
 run_native_or_gap conformance/native/pass/owned-transfer.graph .zero/native-test/owned-transfer "owned transfer ok"
 run_native_or_gap conformance/native/pass/owned-drop-cleanup.graph .zero/native-test/owned-drop-cleanup "owned drop cleanup ok"
@@ -945,7 +961,7 @@ grep -q '"path":"direct-coff-x64-object"' .zero/native-test/direct-hello-win.jso
 grep -q '"generatedCBytes": 0' .zero/native-test/direct-hello-win.json
 rm -f .zero/native-test/coff-maybe-byte-view.obj .zero/native-test/coff-maybe-byte-view.obj.c
 bin/zero build --json --emit obj --target win32-x64.exe conformance/native/pass/coff-maybe-byte-view-buildable.graph --out .zero/native-test/coff-maybe-byte-view.obj > .zero/native-test/coff-maybe-byte-view.json
-node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/coff-maybe-byte-view.json","utf8")); const b=fs.readFileSync(".zero/native-test/coff-maybe-byte-view.obj"); if (report.objectBackend.objectEmission.path!=="direct-coff-x64-object" || b.readUInt16LE(0)!==0x8664 || b.readUInt16LE(2)!==1 || !b.includes(Buffer.from("main"))) process.exit(1);'
+node -e 'const fs=require("fs"); const report=JSON.parse(fs.readFileSync(".zero/native-test/coff-maybe-byte-view.json","utf8")); const b=fs.readFileSync(".zero/native-test/coff-maybe-byte-view.obj"); if (report.objectBackend.objectEmission.path!=="direct-coff-x64-object" || b.readUInt16LE(0)!==0x8664 || b.readUInt16LE(2)!==2 || !b.includes(Buffer.from("main")) || !b.includes(Buffer.from("trap: index out of bounds"))) process.exit(1);'
 test ! -f .zero/native-test/coff-maybe-byte-view.obj.c
 rm -f .zero/native-test/direct-array-fill.o .zero/native-test/direct-array-fill.o.c
 bin/zero build --json --emit obj --target linux-musl-x64 examples/direct-array-fill.graph --out .zero/native-test/direct-array-fill.o > .zero/native-test/direct-array-fill-obj.json
@@ -1096,7 +1112,7 @@ grep -q '"generatedCBytes": 0' .zero/native-test/direct-std-fs-fallible-resource
 grep -q '"path":"direct-elf64-exe"' .zero/native-test/direct-std-fs-fallible-resources.json
 rm -f .zero/native-test/direct-std-fs-fallible .zero/native-test/direct-std-fs-fallible.c
 bin/zero build --json --emit exe --backend zero-elf64 --target linux-musl-x64 conformance/native/pass/std-fs-fallible.graph --out .zero/native-test/direct-std-fs-fallible > .zero/native-test/direct-std-fs-fallible.json
-node -e 'const fs=require("fs"); const b=fs.readFileSync(".zero/native-test/direct-std-fs-fallible"); const packed=(code)=>{const x=Buffer.alloc(10); x[0]=0x48; x[1]=0xb8; x.writeBigUInt64LE(BigInt(code)<<32n,2); return x}; if (!b.includes(packed(2)) || !b.includes(packed(3)) || !b.includes(packed(4))) process.exit(1);'
+node -e 'const fs=require("fs"); const b=fs.readFileSync(".zero/native-test/direct-std-fs-fallible"); const packed=(code)=>{const x=Buffer.alloc(10); x[0]=0x48; x[1]=0xb8; x.writeBigUInt64LE((BigInt(code)<<32n)|1n,2); return x}; if (!b.includes(packed(2)) || !b.includes(packed(3)) || !b.includes(packed(4))) process.exit(1);'
 test ! -f .zero/native-test/direct-std-fs-fallible.c
 grep -q '"generatedCBytes": 0' .zero/native-test/direct-std-fs-fallible.json
 grep -q '"path":"direct-elf64-exe"' .zero/native-test/direct-std-fs-fallible.json

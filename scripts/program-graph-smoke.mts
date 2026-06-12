@@ -30,6 +30,7 @@ try {
     "native/zero-c/src/program_graph_order.c",
     "native/zero-c/src/program_graph_format.c",
     "native/zero-c/src/program_graph_compare.c",
+    "native/zero-c/src/program_graph_reconcile.c",
     "native/zero-c/src/program_graph_reconcile_apply.c",
     "native/zero-c/src/program_graph_resolve.c",
     "native/zero-c/src/program_graph_semantics.c",

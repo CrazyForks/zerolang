@@ -36,7 +36,8 @@ bin/zero build --target win32-x64.exe examples/hello.graph --out .zero/out/hello
 
 mkdir -p .zero/ci-release
 node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/embed-skill-data.mts
-ZIG_GLOBAL_CACHE_DIR=.zero/zig-global-cache ZIG_LOCAL_CACHE_DIR=.zero/zig-local-cache zig cc -target x86_64-linux-musl -std=c11 -D_POSIX_C_SOURCE=200809L -Os -Inative/zero-c/include native/zero-c/src/*.c -o .zero/ci-release/zero-linux-musl-x64
+build_hash="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+ZIG_GLOBAL_CACHE_DIR=.zero/zig-global-cache ZIG_LOCAL_CACHE_DIR=.zero/zig-local-cache zig cc -target x86_64-linux-musl -std=c11 -D_POSIX_C_SOURCE=200809L -DZERO_BUILD_HASH="\"$build_hash\"" -Os -Inative/zero-c/include native/zero-c/src/*.c -o .zero/ci-release/zero-linux-musl-x64
 test -s .zero/ci-release/zero-linux-musl-x64
 if [[ "$(uname -s):$(uname -m)" == "Linux:x86_64" ]]; then
   ./.zero/ci-release/zero-linux-musl-x64 --version

@@ -131,7 +131,7 @@ char *z_strndup(const char *text, size_t len) {
 static void diag_io_at(ZDiag *diag, const char *diag_path, const char *io_path, const char *action) {
   if (!diag) return;
   diag->code = 1;
-  diag->path = diag_path;
+  z_diag_set_path_copy(diag, diag_path);
   diag->line = 1;
   diag->column = 1;
   snprintf(diag->message, sizeof(diag->message), "failed to %s '%s': %s", action, io_path ? io_path : "", strerror(errno));
@@ -158,7 +158,7 @@ static bool existing_path_is_directory(const char *path, const char *diag_path, 
   if (!S_ISDIR(st.st_mode)) {
     if (diag) {
       diag->code = 1;
-      diag->path = diag_path;
+      z_diag_set_path_copy(diag, diag_path);
       diag->line = 1;
       diag->column = 1;
       diag->length = 1;
@@ -286,7 +286,7 @@ static bool close_atomic_write(FILE *file, const char *path, char *temp_path, ZD
 static void diag_output_path_contract(ZDiag *diag, const char *path, const char *actual) {
   if (!diag) return;
   diag->code = 1;
-  diag->path = path;
+  z_diag_set_path_copy(diag, path);
   diag->line = 1;
   diag->column = 1;
   diag->length = 1;
@@ -966,7 +966,6 @@ bool z_resolve_manifest_graph_artifact_path(const char *input_path, char **out_a
 
   char *manifest = z_read_file(manifest_path, diag);
   if (!manifest) {
-    if (diag) diag->path = z_strdup(manifest_path);
     free(manifest_path);
     return false;
   }
@@ -1179,7 +1178,8 @@ static bool resolve_manifest_dependencies(const char *manifest_path, const ZMani
     }
     ZManifest parsed_dep = {0};
     if (!z_parse_manifest_json(dep_manifest_text, &parsed_dep, diag)) {
-      diag->path = dep_manifest_path;
+      z_diag_set_path_copy(diag, dep_manifest_path);
+      free(dep_manifest_path);
       free(dep_manifest_text);
       return false;
     }
@@ -1217,14 +1217,14 @@ bool z_map_source_diag(const SourceInput *input, ZDiag *diag) {
   if (!input || !diag || diag->line <= 0 || input->source_line_count == 0) return false;
   size_t index = (size_t)diag->line - 1;
   if (index >= input->source_line_count) return false;
-  diag->path = input->source_line_paths[index];
+  z_diag_set_path_copy(diag, input->source_line_paths[index]);
   diag->line = input->source_line_numbers[index] > 0 ? input->source_line_numbers[index] : 1;
   for (size_t i = 0; i < diag->borrow_trace_count; i++) {
     ZBorrowTrace *trace = &diag->borrow_traces[i];
     if (trace->binding_line <= 0) continue;
     size_t binding_index = (size_t)trace->binding_line - 1;
     if (binding_index >= input->source_line_count) continue;
-    trace->binding_decl_path = input->source_line_paths[binding_index];
+    trace->binding_decl_path = input->source_line_paths[binding_index] ? z_strdup(input->source_line_paths[binding_index]) : NULL;
     trace->binding_line = input->source_line_numbers[binding_index] > 0 ? input->source_line_numbers[binding_index] : 1;
   }
   return true;

@@ -396,6 +396,40 @@ static bool body_translate_row(const char *row, ZBuf *source, ZProgramGraphPatch
   return true;
 }
 
+static char *body_diag_physical_row_actual(const char *rows, const ZDiag *diag, const char *fallback) {
+  int wanted = diag && diag->line > 1 ? diag->line - 1 : 0;
+  char *copy = z_strdup(rows ? rows : "");
+  char *cursor = copy;
+  int physical = 0;
+  char *last = NULL;
+  while (*cursor) {
+    char *line = cursor;
+    char *end = strchr(cursor, '\n');
+    if (end) {
+      *end = '\0';
+      cursor = end + 1;
+    } else {
+      cursor += strlen(cursor);
+    }
+    physical++;
+    char *trimmed = body_trim(line);
+    if (!trimmed[0]) continue;
+    free(last);
+    ZBuf row;
+    zbuf_init(&row);
+    zbuf_appendf(&row, "row %d: ", physical);
+    zbuf_append(&row, trimmed);
+    last = row.data ? row.data : z_strdup("");
+    if (physical >= wanted) {
+      free(copy);
+      return last;
+    }
+  }
+  free(copy);
+  if (last) return last;
+  return z_strdup(fallback ? fallback : "");
+}
+
 static bool body_append_source_rows(ZBuf *source, const char *rows, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
   char *copy = z_strdup(rows ? rows : "");
   char *cursor = copy;
@@ -703,45 +737,85 @@ static bool body_signature_source(ZProgramGraph *graph, const char *function_nam
   return true;
 }
 
+// Parses the patch body rows into a canonical-text Program. The rows are
+// tried verbatim first so every statement line printed by `zero view` is
+// accepted unchanged (typed `let x: T = expr` bindings, parenthesized calls,
+// brace-delimited blocks). When that fails, the legacy space-separated row
+// grammar is translated to canonical text and parsed as before.
+static bool body_parse_rows_program(const char *signature, const char *rows, const char *parse_fail_message, Program *program, char **source_out, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  ZBuf raw;
+  zbuf_init(&raw);
+  zbuf_append(&raw, signature ? signature : "");
+  zbuf_append(&raw, rows ? rows : "");
+  if (raw.len > 0 && raw.data[raw.len - 1] != '\n') zbuf_append_char(&raw, '\n');
+  zbuf_append(&raw, "}\n");
+  ZDiag raw_diag = {0};
+  if (z_parse_canonical_text_program_source(raw.data ? raw.data : "", program, &raw_diag)) {
+    *source_out = raw.data ? raw.data : z_strdup("");
+    return true;
+  }
+  z_free_program(program);
+  *program = (Program){0};
+  ZBuf translated;
+  zbuf_init(&translated);
+  zbuf_append(&translated, signature ? signature : "");
+  if (!body_append_source_rows(&translated, rows, result, op)) {
+    // The rows are not legacy grammar either; the canonical parser diagnostic
+    // is the more useful report because `zero view` output is the documented
+    // row syntax.
+    char *actual = body_diag_physical_row_actual(rows, &raw_diag, raw_diag.message[0] ? raw_diag.message : (rows ? rows : ""));
+    body_fail(result, op, "GPH001", parse_fail_message, raw_diag.expected[0] ? raw_diag.expected : "statement rows in zero view syntax", actual);
+    free(actual);
+    zbuf_free(&raw);
+    zbuf_free(&translated);
+    return false;
+  }
+  zbuf_append(&translated, "}\n");
+  ZDiag translated_diag = {0};
+  if (!z_parse_canonical_text_program_source(translated.data ? translated.data : "", program, &translated_diag)) {
+    char *actual = body_diag_row_actual(rows, &translated_diag, translated_diag.message[0] ? translated_diag.message : (translated.data ? translated.data : ""));
+    body_fail(result, op, "GPH001", parse_fail_message, translated_diag.expected[0] ? translated_diag.expected : "valid body rows", actual);
+    free(actual);
+    zbuf_free(&raw);
+    zbuf_free(&translated);
+    return false;
+  }
+  zbuf_free(&raw);
+  *source_out = translated.data ? translated.data : z_strdup("");
+  return true;
+}
+
 bool z_program_graph_patch_apply_replace_function_body(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
   const char *function_name = op && op->function && op->function[0] ? op->function : "main";
   if (!body_identifier(function_name)) {
     body_fail(result, op, "GPH003", "replaceFunctionBody function must be a Zero identifier", "identifier", function_name);
     return false;
   }
-  ZBuf source;
-  zbuf_init(&source);
-  if (!body_signature_source(graph, function_name, &source, result, op)) {
-    zbuf_free(&source);
+  ZBuf signature;
+  zbuf_init(&signature);
+  if (!body_signature_source(graph, function_name, &signature, result, op)) {
+    zbuf_free(&signature);
     return false;
   }
-  if (!body_append_source_rows(&source, op ? op->value : "", result, op)) {
-    zbuf_free(&source);
-    return false;
-  }
-  zbuf_append(&source, "}\n");
   Program program = {0};
-  ZDiag diag = {0};
-  bool ok = z_parse_canonical_text_program_source(source.data ? source.data : "", &program, &diag);
-  if (!ok) {
-    char *actual = body_diag_row_actual(op ? op->value : "", &diag, diag.message[0] ? diag.message : (source.data ? source.data : ""));
-    body_fail(result, op, "GPH001", "replaceFunctionBody rows did not parse as a Zero function body", diag.expected[0] ? diag.expected : "valid body rows", actual);
-    free(actual);
-    zbuf_free(&source);
+  char *source_text = NULL;
+  if (!body_parse_rows_program(signature.data, op ? op->value : "", "replaceFunctionBody rows did not parse as a Zero function body", &program, &source_text, result, op)) {
+    zbuf_free(&signature);
     return false;
   }
+  zbuf_free(&signature);
   SourceInput input = {0};
   input.source_file = z_strdup("src/main.0");
-  input.source = z_strdup(source.data ? source.data : "");
+  input.source = z_strdup(source_text ? source_text : "");
   input.canonical_text_source = true;
   ZProgramGraph body_graph = {0};
-  ok = z_program_graph_from_program(&input, &program, &body_graph);
+  bool ok = z_program_graph_from_program(&input, &program, &body_graph);
   if (ok) ok = body_splice_function(graph, &body_graph, function_name, result, op);
-  if (!ok && result && !result->message[0]) body_fail(result, op, "GPH006", "replaceFunctionBody could not build ProgramGraph body", "lowerable Zero body rows", source.data ? source.data : "");
+  if (!ok && result && !result->message[0]) body_fail(result, op, "GPH006", "replaceFunctionBody could not build ProgramGraph body", "lowerable Zero body rows", source_text ? source_text : "");
   z_program_graph_free(&body_graph);
   z_free_source(&input);
   z_free_program(&program);
-  zbuf_free(&source);
+  free(source_text);
   if (!ok) return false;
   op->ok = true;
   return true;
@@ -754,40 +828,32 @@ bool z_program_graph_patch_apply_replace_block_body(ZProgramGraph *graph, ZProgr
   if (target_block->kind != Z_PROGRAM_GRAPH_NODE_BLOCK) { body_fail(result, op, "GPH003", "replaceBlockBody target must be a Block node", "Block", z_program_graph_node_kind_name(target_block->kind)); return false; }
   char *target_body_id = z_strdup(target_block->id ? target_block->id : "");
   char *target_path = z_strdup(target_block->path && target_block->path[0] ? target_block->path : "src/main.0");
-  ZBuf source;
-  zbuf_init(&source);
-  zbuf_append(&source, "fn __zero_patch_block() -> Void raises {\n");
-  if (!body_append_source_rows(&source, op ? op->value : "", result, op)) { free(target_body_id); free(target_path); zbuf_free(&source); return false; }
-  zbuf_append(&source, "}\n");
   Program program = {0};
-  ZDiag diag = {0};
-  bool ok = z_parse_canonical_text_program_source(source.data ? source.data : "", &program, &diag);
-  if (!ok) {
-    char *actual = body_diag_row_actual(op ? op->value : "", &diag, diag.message[0] ? diag.message : (source.data ? source.data : ""));
-    body_fail(result, op, "GPH001", "replaceBlockBody rows did not parse as a Zero block body", diag.expected[0] ? diag.expected : "valid body rows", actual);
-    free(actual);
-    free(target_body_id); free(target_path); zbuf_free(&source);
+  char *source_text = NULL;
+  if (!body_parse_rows_program("fn __zero_patch_block() -> Void raises {\n", op ? op->value : "", "replaceBlockBody rows did not parse as a Zero block body", &program, &source_text, result, op)) {
+    free(target_body_id);
+    free(target_path);
     return false;
   }
   SourceInput input = {0};
   input.source_file = z_strdup(target_path);
-  input.source = z_strdup(source.data ? source.data : "");
+  input.source = z_strdup(source_text ? source_text : "");
   input.canonical_text_source = true;
   ZProgramGraph body_graph = {0};
-  ok = z_program_graph_from_program(&input, &program, &body_graph);
+  bool ok = z_program_graph_from_program(&input, &program, &body_graph);
   if (ok) {
     ZProgramGraphNode *source_fn = body_find_function(&body_graph, "__zero_patch_block", NULL);
     ZProgramGraphNode *source_body = source_fn ? body_child(&body_graph, source_fn->id, "body") : NULL;
     if (!source_fn || !source_body) { ok = false; body_fail(result, op, "GPH004", "replaceBlockBody source body was not found", "generated Block body", "__zero_patch_block"); }
     else ok = body_splice_block(graph, &body_graph, target_body_id, source_body->id, target_path);
   }
-  if (!ok && result && !result->message[0]) body_fail(result, op, "GPH006", "replaceBlockBody could not build ProgramGraph block body", "lowerable Zero body rows", source.data ? source.data : "");
+  if (!ok && result && !result->message[0]) body_fail(result, op, "GPH006", "replaceBlockBody could not build ProgramGraph block body", "lowerable Zero body rows", source_text ? source_text : "");
   z_program_graph_free(&body_graph);
   z_free_source(&input);
   z_free_program(&program);
   free(target_body_id);
   free(target_path);
-  zbuf_free(&source);
+  free(source_text);
   if (!ok) return false;
   op->ok = true;
   return true;

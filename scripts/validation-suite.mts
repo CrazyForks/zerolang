@@ -44,11 +44,14 @@ const suites: Record<string, Suite> = {
       { name: "program-graph-smoke", command: process.execPath, args: [...nodeArgs, "scripts/program-graph-smoke.mts"] },
       { name: "program-graph-parity", command: process.execPath, args: [...nodeArgs, "scripts/program-graph-parity.mts"] },
       { name: "canonical-text-smoke", command: process.execPath, args: [...nodeArgs, "scripts/canonical-text-smoke.mts"] },
+      { name: "examples-gate", command: process.execPath, args: [...nodeArgs, "scripts/examples-gate.mts"] },
       { name: "conformance-run", command: process.execPath, args: ["conformance/run.mjs"] },
     ],
   },
   "command-contracts": {
-    setup: [],
+    setup: [
+      { name: "native-build", command: "make", args: ["-C", "native/zero-c"], setup: true },
+    ],
     phases: [
       { name: "graph-input-policy", command: process.execPath, args: [...nodeArgs, "scripts/graph-input-policy.mts"] },
       { name: "snapshot-command-contracts", command: process.execPath, args: [...nodeArgs, "scripts/snapshot-command-contracts.mts"] },

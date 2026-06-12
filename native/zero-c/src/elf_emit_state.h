@@ -90,6 +90,8 @@ typedef struct {
   bool seed_main_process_args;
   unsigned rodata_base_offset;
   uint64_t rodata_addr;
+  ZDirectTrapMessages trap_messages;
+  ZDirectTrapBranchList trap_branches[Z_DIRECT_TRAP_KIND_COUNT];
   ZDirectLoopFrame *loop;
 } ElfEmitContext;
 

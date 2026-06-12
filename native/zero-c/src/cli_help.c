@@ -21,7 +21,7 @@ static bool cli_help_is_program_graph_root_command(const char *command) {
 
 void z_cli_print_help(void) {
   printf("zero %s native bootstrap\n\n", ZERO_VERSION);
-  fputs("Usage:\n  zero --version [--json]\n  zero skills [list|get] [--json]\n  zero init [--json] [--manifest toml|json] [--format text|binary] [--template cli|lib|package] [project-path]\n  zero check [--json] [--target <target>] [--emit exe|obj|llvm-ir] [graph-input]\n  zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [graph-input] (<patch-file>|--op <operation>)\n  zero test [graph-input]\n  zero fmt <file.0|project|zero.toml|zero.json>\n  zero build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input]\n  zero run [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input] [-- args...]\n  zero tokens --json <file.0|project|zero.toml|zero.json>\n  zero parse --json <file.0|project|zero.toml|zero.json>\n  zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [graph-input]\n  zero view [--json] [--out <file.0>] [graph-input]\n  zero diff [graph-input]\n  zero status|verify-projection [--json] [project|zero.toml|zero.json|file.0]\n  zero import [--json] [--format text|binary] [--out <program-graph-artifact>] [project|zero.toml|zero.json|file.0]\n  zero export [--json] [project|zero.toml|zero.json|file.0]\n  zero dump|validate|roundtrip [--json] [--format text|binary] [--out <program-graph-artifact>] [graph-input]\n  zero source-map [--json] [graph-input]\n  zero reconcile [--json] <base-graph-input> --source <edited-file.0|project|zero.toml|zero.json>\n  zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] [--format text|binary] <project|zero.toml|zero.json|file.0>\n  zero doc [--json] [graph-input]\n  zero size [--json] [--out <artifact>] [graph-input]\n  zero mem [--json] [--target <target>] [graph-input]\n  zero dev [--json] [--trace] [graph-input]\n  zero time --json [graph-input]\n  zero abi check|dump [--json] [--target <target>] [graph-input]\n  zero explain [--json] <code>\n  zero fix --plan --json [graph-input]\n  zero doctor [--json]\n  zero clean [--all]\n  zero targets\n\nExamples:\n  zero init\n  zero init --template cli hello\n  zero run examples/add.graph\n  zero build --emit exe examples/hello.graph --out .zero/out/hello\n  zero check --json examples/hello.graph\n  zero build --target linux-musl-x64 examples/memory-package\n", stdout);
+  fputs("Usage:\n  zero --version [--json]\n  zero skills [list|get] [--json]\n  zero init [--json] [--manifest toml|json] [--format text|binary] [--template cli|lib|package] [project-path]\n  zero check [--json] [--target <target>] [--emit exe|obj|llvm-ir] [graph-input]\n  zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [graph-input] (<patch-file>|--op <operation>|--replace-fn <name> --body-file <file>)\n  zero test [graph-input]\n  zero fmt <file.0|project|zero.toml|zero.json>\n  zero build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input]\n  zero run [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input] [-- args...]\n  zero tokens --json <file.0|project|zero.toml|zero.json>\n  zero parse --json <file.0|project|zero.toml|zero.json>\n  zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [graph-input|name]\n  zero view [--json] [--fn <name>] [--out <file.0>] [graph-input]\n  zero diff [--fn <name>] [graph-input]\n  zero status|verify-projection [--json] [project|zero.toml|zero.json|file.0|zero.graph]\n  zero import [--json] [--format text|binary] [--out <program-graph-artifact>] [project|zero.toml|zero.json|file.0]\n  zero export [--json] [project|zero.toml|zero.json|file.0]\n  zero dump|validate|roundtrip [--json] [--format text|binary] [--out <program-graph-artifact>] [graph-input]\n  zero source-map [--json] [graph-input]\n  zero reconcile [--json] <base-graph-input> --source <edited-file.0|project|zero.toml|zero.json>\n  zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] [--format text|binary] <project|zero.toml|zero.json|file.0>\n  zero doc [--json] [graph-input]\n  zero size [--json] [--out <artifact>] [graph-input]\n  zero mem [--json] [--target <target>] [graph-input]\n  zero dev [--json] [--trace] [graph-input]\n  zero time --json [graph-input]\n  zero abi check|dump [--json] [--target <target>] [graph-input]\n  zero explain [--json] <code>\n  zero fix --plan --json [graph-input]\n  zero doctor [--json]\n  zero clean [--all]\n  zero targets\n\nExamples:\n  zero init\n  zero init --template cli hello\n  zero run examples/add.graph\n  zero build --emit exe examples/hello.graph --out .zero/out/hello\n  zero check --json examples/hello.graph\n  zero build --target linux-musl-x64 examples/memory-package\n", stdout);
 }
 
 void z_cli_print_graph_patch_help_text(void) {
@@ -29,7 +29,15 @@ void z_cli_print_graph_patch_help_text(void) {
   printf("accepted by zero patch --op, --patch-text, and zero-program-graph-patch v1 files\n");
   const char *const *ops = z_program_graph_patch_operation_examples();
   for (size_t i = 0; ops[i]; i++) printf("  %s\n", ops[i]);
+  printf("\nA minimal complete patch file looks exactly like this:\n");
+  fputs(z_program_graph_patch_minimal_file_example(), stdout);
   printf("\nFor larger graph edits, put these lines in a patch file under /tmp or pass --patch-text.\n");
+  printf("\nTo replace one function body without writing a patch file, use --replace-fn with --body-file.\n");
+  printf("The body file holds only the new body rows in canonical projection syntax, exactly what\n");
+  printf("zero view --fn <name> prints between the signature braces. No header, no end marker:\n");
+  printf("  $ cat /tmp/greet.body\n");
+  printf("  check world.out.write(\"hello agent\\n\")\n");
+  printf("  $ zero patch . --replace-fn greet --body-file /tmp/greet.body\n");
 }
 
 void z_cli_print_command_help(const char *command) {
@@ -52,7 +60,7 @@ void z_cli_print_command_help(const char *command) {
     printf("Usage: zero check [--json] [--target <target>] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [graph-input]\n\n");
     printf("Validate and typecheck graph-backed Zero input without emitting artifacts.\n");
   } else if (cli_help_arg_is(command, "patch")) {
-    printf("Usage: zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [graph-input] (<patch-file>|--op <operation>)\n\n");
+    printf("Usage: zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [graph-input] (<patch-file>|--op <operation>|--replace-fn <name> --body-file <file>)\n\n");
     z_cli_print_graph_patch_help_text();
   } else if (cli_help_arg_is(command, "build")) {
     printf("Usage: zero build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input]\n\n");
@@ -80,6 +88,38 @@ void z_cli_print_command_help(const char *command) {
   } else if (cli_help_arg_is(command, "abi")) {
     printf("Usage: zero abi check|dump [--json] [--target <target>] [graph-input]\n\n");
     printf("Check ABI-safe declarations or dump target-aware graph layout facts.\n");
+  } else if (cli_help_arg_is(command, "query")) {
+    printf("Usage: zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [graph-input|name]\n\n");
+    printf("Report compact module, function, body, and patch facts for agents.\n\n");
+    printf("A bare name argument that is not an existing path runs --find with that name against the current package.\n");
+    printf("--node <id> returns a node-scoped report with span, parents, and children; add --depth <n> (default 1) for a deeper child subtree, or --full for the whole-module report.\n");
+    printf("Use zero view --fn <name> when you want one function's source instead of graph facts.\n\n");
+    printf("Examples:\n");
+    printf("  zero query userTotals                         find nodes named userTotals in the current package\n");
+    printf("  zero query --json --find handleLine .         locate node ids for a name, with source spans\n");
+    printf("  zero query --json --node '#decl_12ab34cd' --depth 2 .   one node's fields, edges, and grandchildren\n");
+  } else if (cli_help_arg_is(command, "reconcile")) {
+    printf("Usage: zero reconcile [--json] <base-graph-input> --source <edited-file.0|project|zero.toml|zero.json>\n\n");
+    printf("Compare a prior graph with edited source and report durable node identity decisions before importing.\n\n");
+    printf("Examples:\n");
+    printf("  zero reconcile zero.graph --source src/main.0        report which node ids survive the edit\n");
+    printf("  zero reconcile --json . --source src/main.0          machine-readable identity decisions for the package store\n");
+    printf("  zero reconcile --json baseline.graph --source .      compare a saved artifact against the edited package\n");
+  } else if (cli_help_arg_is(command, "view")) {
+    printf("Usage: zero view [--json] [--fn <name>] [--out <file.0>] [graph-input]\n\n");
+    printf("Render ProgramGraph input as a generated Zero view.\n\n");
+    printf("--fn <name> prints just that function's canonical source; a missing name fails with close matches.\n\n");
+    printf("Examples:\n");
+    printf("  zero view --fn handleLine .          print one function's source from the current package\n");
+    printf("  zero view --out /tmp/main.0 .        write the whole canonical view to a .0 file\n");
+  } else if (cli_help_arg_is(command, "diff")) {
+    printf("Usage: zero diff [--fn <name>] [graph-input]\n\n");
+    printf("Print canonical review text for ProgramGraph input, for humans and Git textconv diff drivers.\n\n");
+    printf("--fn <name> prints just that function's canonical source; a missing name fails with close matches.\n\n");
+    printf("Examples:\n");
+    printf("  zero diff .                          print the current package's canonical review text\n");
+    printf("  zero diff --fn handleLine .          print one function's review text\n");
+    printf("  zero diff zero.graph                 render the repository graph store for git textconv\n");
   } else if (cli_help_arg_is(command, "graph") || cli_help_is_program_graph_root_command(command)) {
     z_program_graph_print_command_help();
   } else if (cli_help_arg_is(command, "doc")) {

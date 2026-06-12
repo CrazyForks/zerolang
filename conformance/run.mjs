@@ -403,7 +403,7 @@ async function assertBoundsTrap(fixture, name) {
   if (!canRunLinuxMuslX64) return;
   const failedRun = await execFileAsync(out, []).catch((error) => error);
   assert.notEqual(failedRun.code ?? (failedRun.signal ? 1 : 0), 0);
-  if (failedRun.stderr) assert.match(failedRun.stderr, /zero bounds check failed/);
+  if (failedRun.stderr) assert.match(failedRun.stderr, /zero bounds check failed|trap: index out of bounds/);
 }
 
 async function assertDirectRuntimeOrUnsupported(fixture, name, expected) {
@@ -705,25 +705,28 @@ const passCheckFixtures = [
   "conformance/run/pass/hello.0",
   "conformance/native/pass/params.0",
   "conformance/native/pass/shape.0",
+  "conformance/native/pass/mutref-shape-param.0",
+  "conformance/native/pass/mutref-shape-param-nested.0",
   "conformance/native/pass/primitive-stdlib.0",
-  "conformance/native/pass/variants-defer-stdlib.0",
-  "conformance/native/pass/defer-return-raise-nested.0",
-  "conformance/native/pass/payload-match.0",
   "conformance/native/pass/break-continue.0",
   "conformance/native/pass/nested-break-continue.0",
+  "conformance/native/pass/untyped-literal-adoption.0",
   "conformance/native/pass/for-range.0",
-  "conformance/native/pass/match-payload-binding.0",
   "conformance/native/pass/choice-payload-reference-return.0",
   "conformance/native/pass/choice-match-payload-reference-origin.0",
   "conformance/native/pass/choice-match-payload-return-origin.0",
-  "conformance/native/pass/match-choice-fallback.0",
   "conformance/native/pass/null-maybe.0",
+  "conformance/native/pass/maybe-local-null-init-return.0",
   "conformance/native/pass/meta-typed-target-type.0",
   "conformance/native/pass/std-args.0",
   "conformance/native/pass/std-env.0",
   "conformance/native/pass/std-hosted-cli.0",
   "conformance/native/pass/std-fs.0",
   "conformance/native/pass/std-fs-bytes.0",
+  "conformance/native/pass/frame-large-locals.0",
+  "conformance/native/pass/frame-limit-boundary.0",
+  "conformance/native/pass/frame-split-helpers.0",
+  "conformance/native/pass/fixed-buf-alloc-local.0",
   "conformance/native/pass/std-fs-resource.0",
   "conformance/native/pass/std-fs-readall.0",
   "conformance/native/pass/std-fs-polish.0",
@@ -731,6 +734,10 @@ const passCheckFixtures = [
   "conformance/native/pass/std-fs-file-helpers.0",
   "conformance/native/pass/std-math-breadth.0",
   "conformance/native/pass/std-numeric-random-time.0",
+  "conformance/native/pass/std-regex.0",
+  "conformance/native/pass/std-unicode.0",
+  "conformance/native/pass/std-inet.0",
+  "conformance/native/pass/std-time-rfc3339.0",
   "conformance/native/pass/std-io-lines.0",
   "conformance/native/pass/std-path-io-breadth.0",
   "conformance/native/pass/std-str-breadth.0",
@@ -774,7 +781,6 @@ const passCheckFixtures = [
   "conformance/native/pass/char-literals.0",
   "conformance/native/pass/float-primitives.0",
   "conformance/native/pass/wrapping-saturating-arithmetic.0",
-  "conformance/native/pass/maybe-error-flow.0",
   "conformance/native/pass/maybe-guard-branch-restore.0",
   "conformance/native/pass/maybe-guard-negated-conjunction.0",
   "conformance/native/pass/maybe-guard-scalar-match.0",
@@ -844,7 +850,6 @@ const passCheckFixtures = [
   "conformance/native/pass/static-method-namespace.0",
   "conformance/native/pass/c-import-type-shadowing.0",
   "conformance/native/pass/c-import-alias-later-local.0",
-  "conformance/native/pass/match-fallback.0",
   "conformance/native/pass/memory-types.0",
   "conformance/native/pass/owned-transfer.0",
   "conformance/native/pass/owned-field-move-return-branch.0",
@@ -884,7 +889,6 @@ const passCheckFixtures = [
   "conformance/native/pass/index-reference-assignment-clears-origin.0",
   "conformance/native/pass/allocator-primitives.0",
   "conformance/native/pass/std-mem-arena.0",
-  "conformance/native/pass/std-mem-collections.0",
   "conformance/native/pass/std-collections-algorithms.0",
   "conformance/native/pass/std-collections-u8.0",
   "conformance/native/pass/std-collections-mutspan-memory.0",
@@ -921,7 +925,6 @@ const passCheckFixtures = [
   "conformance/check/pass/shape-field-defaults.0",
   "conformance/check/pass/static-value-params.0",
   "conformance/check/pass/static-interface-basic.0",
-  "conformance/check/pass/call-resolution-inspection.0",
   "conformance/check/pass/call-resolution-edge-cases.0",
   "conformance/native/pass/static-interface-mutref.0",
   "conformance/native/pass/static-interface-static-param.0",
@@ -933,12 +936,10 @@ const passCheckFixtures = [
   "conformance/check/pass/c-header-import.0",
   "conformance/check/pass/c-import-local-shadowing.0",
   "conformance/check/pass/match-fallback.0",
-  "conformance/native/pass/match-choice-fallback.0",
   "conformance/check/pass/memory-types.0",
   "conformance/check/pass/std-mem-field-items.0",
   "conformance/check/pass/std-mem-field-slice.0",
-  "conformance/check/pass/checker-type-forms.0",
-  "conformance/check/pass/package",
+  "conformance/check/pass/fixed-array-length-match.0",
   "conformance/check/pass/imports",
   "examples/memory-package",
   "examples/const-arithmetic.0",
@@ -952,6 +953,23 @@ const passCheckFixtures = [
   "examples/ownership-cleanup.0",
 ];
 await mapLimit(passCheckFixtures, checkJobs, (fixture, _index, workerIndex) => checkFixtureParallel(fixture, workerIndex));
+
+// Fixtures using the gated typed graph MIR constructs fail check with the
+// same BLD004 diagnostics zero build reports for their graph stores.
+const gateBlockedCheckFixtures = [
+  "conformance/check/pass/package",
+  "conformance/native/pass/variants-defer-stdlib.0",
+  "conformance/native/pass/defer-return-raise-nested.0",
+  "conformance/native/pass/payload-match.0",
+  "conformance/native/pass/match-payload-binding.0",
+  "conformance/native/pass/match-choice-fallback.0",
+  "conformance/native/pass/maybe-error-flow.0",
+  "conformance/native/pass/match-fallback.0",
+  "conformance/native/pass/std-mem-collections.0",
+  "conformance/check/pass/call-resolution-inspection.0",
+  "conformance/check/pass/checker-type-forms.0",
+];
+await mapLimit(gateBlockedCheckFixtures, checkJobs, (fixture, _index, workerIndex) => checkFailureFixtureParallel(fixture, /BLD004/, workerIndex));
 
 const checkJsonSuccess = await execFileAsync(zero, ["check", "--json", "conformance/native/pass/explicit-casts.0"]);
 const checkJsonSuccessBody = JSON.parse(checkJsonSuccess.stdout);
@@ -1747,6 +1765,26 @@ await execFileAsync(zero, [
 const machoOpenSliceBoundsBytes = await assertMachOArm64Object(`${outDir}/macho-open-byte-slice-bounds.o`, "main");
 assert(hasAarch64CondBranch(machoOpenSliceBoundsBytes, 9));
 assert(hasAarch64Instruction(machoOpenSliceBoundsBytes, 0xd4200000));
+
+const trapMessageFixture = `${outDir}/trap-index-message.0`;
+const trapMessageGraph = await writeGraphFixture(trapMessageFixture, `pub fn main(world: World) -> Void raises {
+    var values: [4]u32 = [1, 2, 3, 4]
+    var index: usize = 4
+    index = index + 1000
+    let v: u32 = values[index]
+    if v == 1 {
+        check world.out.write("unreachable\\n")
+    }
+}
+`);
+if (runnableDirectTarget) {
+  const trapMessageOut = `${outDir}/trap-index-message`;
+  await execFileAsync(zero, ["build", "--json", "--emit", "exe", "--target", runnableDirectTarget, trapMessageGraph, "--out", trapMessageOut]);
+  const trapMessageRun = await execFileAsync(trapMessageOut, []).catch((error) => error);
+  assert.notEqual(trapMessageRun.code ?? (trapMessageRun.signal ? 1 : 0), 0, "deliberate out-of-bounds index must abort");
+  assert.match(trapMessageRun.stderr ?? "", /trap: index out of bounds/);
+  assert.equal(trapMessageRun.stdout ?? "", "");
+}
 
 const x64OpenSliceBoundsFixture = `${outDir}/x64-open-u16-slice-bounds.0`;
 await writeGraphFixture(x64OpenSliceBoundsFixture, `export c fn main() -> u32 {
@@ -3190,7 +3228,7 @@ assert(callResolutionFsReadFacts.calls.some((item) => item.kind === "stdlib" && 
 
 const callResolutionPackageGraph = await execFileAsync(zero, ["inspect", "--json", "examples/systems-package"]);
 const callResolutionPackageFacts = JSON.parse(callResolutionPackageGraph.stdout).callResolution;
-assert(callResolutionPackageFacts.calls.some((item) => item.calleeName === "cleanup" && item.path === "src/main.0" && item.line === 12));
+assert(callResolutionPackageFacts.calls.some((item) => item.calleeName === "cleanup" && item.path === "src/main.0" && item.line === 18));
 
 const callResolutionEdgeGraph = await execFileAsync(zero, ["inspect", "--json", "conformance/check/pass/call-resolution-edge-cases.0"]);
 const callResolutionEdgeFacts = JSON.parse(callResolutionEdgeGraph.stdout).callResolution;
@@ -3222,6 +3260,7 @@ const programGraphAuthoringRunAfterHumanEditPath = `${outDir}/program-graph-auth
 const programGraphBuilderOpsPackage = `${outDir}/program-graph-builder-ops`;
 const programGraphBuilderOpsRunPath = `${outDir}/program-graph-builder-ops-run`;
 const programGraphLoopTestPackage = `${outDir}/program-graph-loop-test`;
+const programGraphArrayLengthPackage = `${outDir}/program-graph-array-length-mismatch`;
 const programGraphBlockBodyPackage = `${outDir}/program-graph-block-body`;
 const programGraphBlockBodyRunPath = `${outDir}/program-graph-block-body-run`;
 const programGraphAuthoringCliPackage = `${outDir}/program-graph-authoring-cli`;
@@ -3263,6 +3302,7 @@ await rm(programGraphAuthoringRunAfterHumanEditPath, { force: true });
 await rm(programGraphBuilderOpsPackage, { recursive: true, force: true });
 await rm(programGraphBuilderOpsRunPath, { force: true });
 await rm(programGraphLoopTestPackage, { recursive: true, force: true });
+await rm(programGraphArrayLengthPackage, { recursive: true, force: true });
 await rm(programGraphBlockBodyPackage, { recursive: true, force: true });
 await rm(programGraphBlockBodyRunPath, { force: true });
 await rm(programGraphAuthoringCliPackage, { recursive: true, force: true });
@@ -3445,6 +3485,18 @@ const programGraphLoopTestAddTest = JSON.parse((await execFileAsync(zero, [
 const programGraphLoopTestCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphLoopTestPackage])).stdout);
 const programGraphLoopTestRun = JSON.parse((await execFileAsync(zero, ["test", "--json", programGraphLoopTestPackage])).stdout);
 const programGraphLoopTestView = (await execFileAsync(zero, ["view", programGraphLoopTestPackage])).stdout;
+const programGraphArrayLengthInit = JSON.parse((await execFileAsync(zero, ["init", "--json", programGraphArrayLengthPackage])).stdout);
+const programGraphArrayLengthMainPatch = JSON.parse((await execFileAsync(zero, ["patch", "--json", "--op", "addMain", programGraphArrayLengthPackage])).stdout);
+const programGraphArrayLengthRepeatBodyPath = `${outDir}/program-graph-array-length-repeat-body.0`;
+await writeFile(programGraphArrayLengthRepeatBodyPath, 'var b: [64]u8 = [0_u8; 32]\ncheck world.out.write("unreachable\\n")\n');
+const programGraphArrayLengthRepeatPatch = JSON.parse((await execFileAsync(zero, ["patch", "--json", "--replace-fn", "main", "--body-file", programGraphArrayLengthRepeatBodyPath, programGraphArrayLengthPackage]).catch((error) => error)).stdout);
+const programGraphArrayLengthListBodyPath = `${outDir}/program-graph-array-length-list-body.0`;
+await writeFile(programGraphArrayLengthListBodyPath, 'var b: [4]u8 = [1, 2]\ncheck world.out.write("unreachable\\n")\n');
+const programGraphArrayLengthListPatch = JSON.parse((await execFileAsync(zero, ["patch", "--json", "--replace-fn", "main", "--body-file", programGraphArrayLengthListBodyPath, programGraphArrayLengthPackage]).catch((error) => error)).stdout);
+const programGraphArrayLengthMatchingBodyPath = `${outDir}/program-graph-array-length-matching-body.0`;
+await writeFile(programGraphArrayLengthMatchingBodyPath, 'var b: [4]u8 = [0_u8; 4]\nb[0] = 1\ncheck world.out.write("lengths agree\\n")\n');
+const programGraphArrayLengthMatchingPatch = JSON.parse((await execFileAsync(zero, ["patch", "--json", "--replace-fn", "main", "--body-file", programGraphArrayLengthMatchingBodyPath, programGraphArrayLengthPackage])).stdout);
+const programGraphArrayLengthCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphArrayLengthPackage])).stdout);
 const programGraphBlockBodyInit = JSON.parse((await execFileAsync(zero, ["init", "--json", programGraphBlockBodyPackage])).stdout);
 const programGraphBlockBodyMainPatch = JSON.parse((await execFileAsync(zero, [
   "patch",
@@ -3651,8 +3703,9 @@ await mkdir(programGraphSourceFixtureDriftPackage, { recursive: true });
 await writeFile(`${programGraphSourceFixtureDriftPackage}/zero.toml`, await readFile(`${programGraphSourceFixturePackage}/zero.toml`, "utf8"));
 await writeFile(`${programGraphSourceFixtureDriftPackage}/zero.graph`, programGraphSourceFixtureStoreBytes);
 await writeFile(`${programGraphSourceFixtureDriftPackage}/hello.0`, programGraphSourceFixtureText.replace("hello from zero", "hello from drift"));
-const programGraphSourceFixtureDriftCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphSourceFixtureDriftPackage])).stdout);
 const programGraphSourceFixtureDriftVerify = await execFileAsync(zero, ["verify-projection", "--json", programGraphSourceFixtureDriftPackage]).catch((error) => error);
+const programGraphSourceFixtureDriftCheck = JSON.parse((await execFileAsync(zero, ["check", "--json", programGraphSourceFixtureDriftPackage])).stdout);
+const programGraphSourceFixtureDriftVerifyAfterRefresh = JSON.parse((await execFileAsync(zero, ["verify-projection", "--json", programGraphSourceFixtureDriftPackage])).stdout);
 await mkdir(programGraphTargetWebbitsPackage, { recursive: true });
 await writeFile(`${programGraphTargetWebbitsPackage}/zero.toml`, await readFile("conformance/packages/target-webbits/zero.toml", "utf8"));
 await mkdir(`${programGraphTargetIncompatiblePackage}/src`, { recursive: true });
@@ -3963,6 +4016,20 @@ assert.equal(programGraphLoopTestRun.testBackend, "direct-program-graph");
 assert.equal(programGraphLoopTestRun.passedTests, 1);
 assert.match(programGraphLoopTestView, /while i < n \{/);
 assert.match(programGraphLoopTestView, /i = i \+ 1/);
+assert.equal(programGraphArrayLengthInit.ok, true);
+assert.equal(programGraphArrayLengthMainPatch.ok, true);
+assert.equal(programGraphArrayLengthRepeatPatch.ok, false);
+assert.equal(programGraphArrayLengthRepeatPatch.diagnostics[0].code, "TYP002");
+assert.equal(programGraphArrayLengthRepeatPatch.diagnostics[0].expected, "[64]u8");
+assert.equal(programGraphArrayLengthRepeatPatch.diagnostics[0].actual, "repeat count 32");
+assert.match(programGraphArrayLengthRepeatPatch.diagnostics[0].help, /make the lengths agree/);
+assert.equal(programGraphArrayLengthListPatch.ok, false);
+assert.equal(programGraphArrayLengthListPatch.diagnostics[0].code, "TYP002");
+assert.equal(programGraphArrayLengthListPatch.diagnostics[0].expected, "[4]u8");
+assert.equal(programGraphArrayLengthListPatch.diagnostics[0].actual, "2 element(s)");
+assert.equal(programGraphArrayLengthMatchingPatch.ok, true);
+assert.equal(programGraphArrayLengthCheck.ok, true);
+assertRepositoryGraphNativeCheck(programGraphArrayLengthCheck, "missing");
 assert.equal(programGraphBlockBodyInit.ok, true);
 assert.equal(programGraphBlockBodyMainPatch.ok, true);
 assert.equal(programGraphBlockBodyMainPatch.operationCount, 1);
@@ -4106,8 +4173,9 @@ assert.equal(programGraphInvalidStoreBody.diagnostics[0].path, programGraphInval
 assert.match(programGraphInvalidStoreBody.repairCommands.join("\n"), /zero import/);
 assert.equal(programGraphSourceFixtureDriftCheck.ok, true);
 assert.equal(programGraphSourceFixtureDriftCheck.graph.lowering, "graph-native-check");
-assert.equal(programGraphSourceFixtureDriftCheck.graph.sourceProjectionState, "stale");
-assertRepositoryGraphNativeCheck(programGraphSourceFixtureDriftCheck, "stale");
+assert.equal(programGraphSourceFixtureDriftCheck.graph.sourceProjectionState, "clean");
+assertRepositoryGraphNativeCheck(programGraphSourceFixtureDriftCheck, "clean");
+assert.equal(programGraphSourceFixtureDriftVerifyAfterRefresh.ok, true);
 assert.notEqual(programGraphSourceFixtureDriftVerify.code, 0);
 const programGraphSourceFixtureDriftBody = JSON.parse(programGraphSourceFixtureDriftVerify.stdout);
 assert.equal(programGraphSourceFixtureDriftBody.ok, false);
@@ -4809,16 +4877,26 @@ assert.equal(packageGraph.selfHostRouting.cBridge.policy, "removed");
 for (const runtimeFixture of [
   ["conformance/native/pass/break-continue.0", "break-continue", { stdout: "loop tick\nloop tick\n" }],
   ["conformance/native/pass/nested-break-continue.0", "nested-break-continue", { stdout: "inner tick\ninner tick\nouter tick\ninner tick\ninner tick\nnested break continue ok\n" }],
+  ["conformance/native/pass/mutref-shape-param.0", "mutref-shape-param", { stdout: "mutref x ok\nmutref y ok\nref sum ok\n" }],
+  ["conformance/native/pass/mutref-shape-param-nested.0", "mutref-shape-param-nested", { stdout: "nested count ok\nnested total ok\nnested flag ok\nnested copy ok\nnested bytes ok\ngeneric mutref ok\n" }],
+  ["conformance/native/pass/untyped-literal-adoption.0", "untyped-literal-adoption", { stdout: "usize literal adoption ok\nflipped literal adoption ok\nliteral arithmetic adoption ok\nu8 literal adoption ok\n" }],
   ["conformance/native/pass/for-range.0", "for-range", { stdout: "range tick\nrange tick\nrange tick\n" }],
   ["conformance/native/pass/match-payload-binding.0", "match-payload-binding", { stdout: /payload binding ok/ }],
   ["conformance/native/pass/match-fallback.0", "match-fallback", { stdout: "match fallback ok\n" }],
   ["conformance/native/pass/match-choice-fallback.0", "match-choice-fallback", { stdout: "choice fallback ok\n" }],
   ["conformance/native/pass/null-maybe.0", "null-maybe", { stdout: /null maybe ok/ }],
+  ["conformance/native/pass/maybe-local-null-init-return.0", "maybe-local-null-init-return", { stdout: "maybe local found 42\nmaybe local none\nmaybe local sum 5\n" }],
+  ["conformance/native/pass/top-level-const.0", "top-level-const", { stdout: "const ok\n" }],
+  ["conformance/native/pass/const-arithmetic.0", "const-arithmetic", { stdout: "const arithmetic ok\n" }],
   ["conformance/native/pass/std-args.0", "std-args", { stdout: "alpha\n", args: ["alpha", "beta"] }],
   ["conformance/native/pass/std-env.0", "std-env", { stdout: "env ok\n", env: { ZERO_CONFORMANCE_ENV: "agent-env" } }],
   ["conformance/native/pass/std-hosted-cli.0", "std-hosted-cli", { stdout: "std hosted cli ok\n", args: ["run", "7", "--json", "--name", "agent", "--count", "3"], env: { ZERO_CONFORMANCE_MODE: "test", ZERO_CONFORMANCE_VERBOSE: "true", ZERO_CONFORMANCE_LIMIT: "9" } }],
   ["conformance/native/pass/std-fs.0", "std-fs", { stdout: "fs ok\n", file: { name: "std-fs-write.txt", text: "zero write\n" } }],
   ["conformance/native/pass/std-fs-bytes.0", "std-fs-bytes", { stdout: "fs bytes ok\n", stderr: "fs bytes err ok\n" }],
+  ["conformance/native/pass/frame-large-locals.0", "frame-large-locals", { stdout: "frame large locals ok alpha\n", args: ["alpha"] }],
+  ["conformance/native/pass/frame-limit-boundary.0", "frame-limit-boundary", { stdout: "frame limit boundary ok\n" }],
+  ["conformance/native/pass/frame-split-helpers.0", "frame-split-helpers", { stdout: "frame split helpers ok\n" }],
+  ["conformance/native/pass/fixed-buf-alloc-local.0", "fixed-buf-alloc-local", { stdout: "fixed buf alloc local ok\n" }],
   ["conformance/native/pass/std-fs-resource.0", "std-fs-resource", { stdout: "fs resource ok\n", file: { name: "std-fs-resource.txt", text: "zero file\n" } }],
   ["conformance/native/pass/std-fs-file-helpers.0", "std-fs-file-helpers", { stdout: "std fs file helpers ok\n" }],
   ["conformance/native/pass/std-io-lines.0", "std-io-lines", { stdout: "std io lines ok\n" }],
@@ -4834,6 +4912,7 @@ for (const runtimeFixture of [
   ["conformance/native/pass/char-literals.0", "char-literals", { stdout: "char literals ok\n" }],
   ["conformance/native/pass/float-primitives.0", "float-primitives", { stdout: "float primitives ok\n" }],
   ["conformance/native/pass/recursive-fibonacci.0", "recursive-fibonacci", { stdout: "recursive fibonacci ok\n" }],
+  ["conformance/native/pass/mutual-recursion.0", "mutual-recursion", { stdout: "mutual recursion ok\n" }],
   ["conformance/native/pass/scratch-nested-index.0", "scratch-nested-index", { stdout: "scratch nested index ok\n" }],
   ["conformance/native/pass/checked-bounds-get.0", "checked-bounds-get", { stdout: "checked bounds get ok\n" }],
   ["conformance/native/pass/check-maybe-fallibility.0", "check-maybe-fallibility", { stdout: "check maybe fallibility ok\n" }],
@@ -4849,8 +4928,64 @@ for (const runtimeFixture of [
   await assertDirectRuntimeOrUnsupported(...runtimeFixture);
 }
 
+await assertDirectRuntimeRequired("conformance/native/pass/untyped-literal-adoption.0", "untyped-literal-adoption-required", { stdout: "usize literal adoption ok\nflipped literal adoption ok\nliteral arithmetic adoption ok\nu8 literal adoption ok\n" });
+
+await assertDirectRuntimeRequired("conformance/native/pass/recursive-multi-call-let.0", "recursive-multi-call-let-required", { stdout: "recursive multi call ok\n" });
+
+const literalAdoptionInitOverflowFixture = `${outDir}/untyped-literal-adoption-init-overflow.0`;
+const literalAdoptionInitOverflowBody = await writeImportFailureFixture(literalAdoptionInitOverflowFixture, `pub fn main(world: World) -> Void raises {
+    var small: u8 = 300
+    check world.out.write("unreachable\\n")
+}
+`);
+assert.equal(literalAdoptionInitOverflowBody.diagnostics[0].code, "TYP016");
+assert.equal(literalAdoptionInitOverflowBody.diagnostics[0].expected, "u8");
+assert.equal(literalAdoptionInitOverflowBody.diagnostics[0].actual, "300 overflows u8");
+
+const literalAdoptionCompareOverflowFixture = `${outDir}/untyped-literal-adoption-compare-overflow.0`;
+const literalAdoptionCompareOverflowBody = await writeImportFailureFixture(literalAdoptionCompareOverflowFixture, `pub fn main(world: World) -> Void raises {
+    var small: u8 = 7
+    if 300 > small {
+        check world.out.write("unreachable\\n")
+    }
+}
+`);
+assert.equal(literalAdoptionCompareOverflowBody.diagnostics[0].code, "TYP016");
+assert.equal(literalAdoptionCompareOverflowBody.diagnostics[0].expected, "u8");
+assert.equal(literalAdoptionCompareOverflowBody.diagnostics[0].actual, "300 overflows u8");
+assert.match(literalAdoptionCompareOverflowBody.diagnostics[0].help, /smaller literal or a wider integer type/);
+
+const fixedArrayRepeatLengthFixture = `${outDir}/fixed-array-repeat-length-mismatch.0`;
+const fixedArrayRepeatLengthBody = await writeImportFailureFixture(fixedArrayRepeatLengthFixture, `pub fn main(world: World) -> Void raises {
+    var b: [64]u8 = [0_u8; 32]
+    b[0] = 1
+    check world.out.write("unreachable\\n")
+}
+`);
+assert.equal(fixedArrayRepeatLengthBody.diagnostics[0].code, "TYP002");
+assert.equal(fixedArrayRepeatLengthBody.diagnostics[0].expected, "[64]u8");
+assert.equal(fixedArrayRepeatLengthBody.diagnostics[0].actual, "repeat count 32");
+assert.match(fixedArrayRepeatLengthBody.diagnostics[0].help, /make the lengths agree/);
+
+const fixedArrayListLengthFixture = `${outDir}/fixed-array-list-length-mismatch.0`;
+const fixedArrayListLengthBody = await writeImportFailureFixture(fixedArrayListLengthFixture, `pub fn main(world: World) -> Void raises {
+    var b: [4]u8 = [1, 2]
+    b[0] = 1
+    check world.out.write("unreachable\\n")
+}
+`);
+assert.equal(fixedArrayListLengthBody.diagnostics[0].code, "TYP002");
+assert.equal(fixedArrayListLengthBody.diagnostics[0].expected, "[4]u8");
+assert.equal(fixedArrayListLengthBody.diagnostics[0].actual, "2 element(s)");
+assert.match(fixedArrayListLengthBody.diagnostics[0].help, /annotate the intended array length/);
+
 await assertDirectRuntimeRequired("conformance/native/pass/break-continue.0", "break-continue-required", { stdout: "loop tick\nloop tick\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/maybe-local-null-init-return.0", "maybe-local-null-init-return-required", { stdout: "maybe local found 42\nmaybe local none\nmaybe local sum 5\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/top-level-const.0", "top-level-const-required", { stdout: "const ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/const-arithmetic.0", "const-arithmetic-required", { stdout: "const arithmetic ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/nested-break-continue.0", "nested-break-continue-required", { stdout: "inner tick\ninner tick\nouter tick\ninner tick\ninner tick\nnested break continue ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/mutref-shape-param.0", "mutref-shape-param-required", { stdout: "mutref x ok\nmutref y ok\nref sum ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/mutref-shape-param-nested.0", "mutref-shape-param-nested-required", { stdout: "nested count ok\nnested total ok\nnested flag ok\nnested copy ok\nnested bytes ok\ngeneric mutref ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-function-basic.0", "generic-function-basic-required", { stdout: "generic function ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-nested-calls.0", "generic-nested-calls-required", { stdout: "generic nested calls ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-inferred-specialized-call.0", "generic-inferred-specialized-call-required", { stdout: "generic inferred specialized call ok\n" });
@@ -4858,6 +4993,147 @@ await assertDirectRuntimeRequired("conformance/native/pass/generic-nested-local-
 await assertDirectRuntimeRequired("conformance/native/pass/generic-static-array-specialization.0", "generic-static-array-specialization-required", { stdout: "generic static array specialization ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/generic-static-forwarded-array-specialization.0", "generic-static-forwarded-array-specialization-required", { stdout: "generic static forwarded array specialization ok\n" });
 await assertDirectRuntimeRequired("conformance/native/pass/explicit-cast-narrow-direct.0", "explicit-cast-narrow-direct-required", { stdout: "explicit cast narrow direct ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/frame-large-locals.0", "frame-large-locals-required", { stdout: "frame large locals ok alpha\n", args: ["alpha"] });
+await assertDirectRuntimeRequired("conformance/native/pass/frame-limit-boundary.0", "frame-limit-boundary-required", { stdout: "frame limit boundary ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/frame-split-helpers.0", "frame-split-helpers-required", { stdout: "frame split helpers ok\n" });
+await assertDirectRuntimeRequired("conformance/native/pass/fixed-buf-alloc-local.0", "fixed-buf-alloc-local-required", { stdout: "fixed buf alloc local ok\n" });
+
+const frameLimitOverFixture = `${outDir}/frame-limit-over.0`;
+const frameLimitOverBody = await writeImportFailureFixture(frameLimitOverFixture, `pub fn main(world: World) -> Void raises {
+    var buffer: [262144]u8 = [0; 262144]
+    buffer[0] = 1
+    check world.out.write("unreachable\\n")
+}
+`);
+assert.equal(frameLimitOverBody.diagnostics[0].code, "MEM003");
+assert.match(frameLimitOverBody.diagnostics[0].expected, /131072 bytes of locals/);
+assert.match(frameLimitOverBody.diagnostics[0].actual, /262144 bytes of locals/);
+assert.match(frameLimitOverBody.diagnostics[0].help, /smaller buffers in helper functions/);
+
+// Typed graph MIR constructs outside the buildable subset fail at import
+// time with the same BLD004 diagnostics zero build would report later.
+const pageAllocLocalBody = await writeImportFailureFixture(`${outDir}/page-alloc-local.0`, `pub fn main(world: World) -> Void raises {
+    let page: PageAlloc = std.mem.pageAlloc()
+    let bytes: Maybe<MutSpan<u8>> = std.mem.allocBytes(page, 4096)
+    if bytes.has {
+        check world.out.write("unreachable\\n")
+    }
+}
+`);
+assert.equal(pageAllocLocalBody.diagnostics[0].code, "BLD004");
+assert.match(pageAllocLocalBody.diagnostics[0].message, /allocator local requires FixedBufAlloc/);
+assert.equal(pageAllocLocalBody.diagnostics[0].actual, "PageAlloc");
+assert.equal(pageAllocLocalBody.diagnostics[0].line, 2);
+assert.match(pageAllocLocalBody.diagnostics[0].help, /std\.mem\.fixedBufAlloc/);
+assert.match(pageAllocLocalBody.diagnostics[0].help, /do not lower to direct backends yet/);
+
+const generalAllocLocalBody = await writeImportFailureFixture(`${outDir}/general-alloc-local.0`, `pub fn main(world: World) -> Void raises {
+    let general: GeneralAlloc = std.mem.generalAlloc()
+    let bytes: Maybe<MutSpan<u8>> = std.mem.allocBytes(general, 64)
+    if bytes.has {
+        check world.out.write("unreachable\\n")
+    }
+}
+`);
+assert.equal(generalAllocLocalBody.diagnostics[0].code, "BLD004");
+assert.equal(generalAllocLocalBody.diagnostics[0].actual, "GeneralAlloc");
+assert.equal(generalAllocLocalBody.diagnostics[0].line, 2);
+
+const deferStatementBody = await writeImportFailureFixture(`${outDir}/defer-statement-gate.0`, `pub fn main(world: World) -> Void raises {
+    defer check world.out.write("bye\\n")
+    check world.out.write("hi\\n")
+}
+`);
+assert.equal(deferStatementBody.diagnostics[0].code, "BLD004");
+assert.match(deferStatementBody.diagnostics[0].message, /statement kind is unsupported/);
+assert.equal(deferStatementBody.diagnostics[0].actual, "Defer");
+assert.equal(deferStatementBody.diagnostics[0].line, 2);
+assert.equal(deferStatementBody.diagnostics[0].column, 5);
+
+const rescueNonPrimitiveBody = await writeImportFailureFixture(`${outDir}/rescue-non-primitive-gate.0`, `fn label(ok: Bool) -> String raises [Invalid] {
+    if ok {
+        return "primary"
+    }
+    raise Invalid
+}
+
+pub fn main(world: World) -> Void raises {
+    let value: String = rescue label(false) err "fallback"
+    check world.out.write(value)
+}
+`);
+assert.equal(rescueNonPrimitiveBody.diagnostics[0].code, "BLD004");
+assert.equal(rescueNonPrimitiveBody.diagnostics[0].actual, "String");
+assert.equal(rescueNonPrimitiveBody.diagnostics[0].line, 1);
+
+const refByteBufParamBody = await writeImportFailureFixture(`${outDir}/ref-bytebuf-param-gate.0`, `fn buffered(buf: ref<ByteBuf>) -> usize {
+    return std.mem.bufLen(buf)
+}
+
+pub fn main(world: World) -> Void raises {
+    var storage: [8]u8 = [0, 0, 0, 0, 0, 0, 0, 0]
+    var alloc: FixedBufAlloc = std.mem.fixedBufAlloc(storage)
+    let maybe: Maybe<owned<ByteBuf>> = std.mem.byteBuf(alloc, 4)
+    if !maybe.has {
+        return
+    }
+    let buf: owned<ByteBuf> = maybe.value
+    if buffered(&buf) == 4 {
+        check world.out.write("buffered\\n")
+    }
+}
+`);
+assert.equal(refByteBufParamBody.diagnostics[0].code, "BLD004");
+assert.equal(refByteBufParamBody.diagnostics[0].actual, "ref<ByteBuf>");
+assert.equal(refByteBufParamBody.diagnostics[0].line, 1);
+
+const codecReadU32Body = await writeImportFailureFixture(`${outDir}/codec-readu32-gate.0`, `use std.codec
+
+pub fn main(world: World) -> Void raises {
+    let value: u32 = std.codec.readU32("abcd")
+    if value > 0 {
+        check world.out.write("read\\n")
+    }
+}
+`);
+assert.equal(codecReadU32Body.diagnostics[0].code, "BLD004");
+assert.match(codecReadU32Body.diagnostics[0].message, /call target is unsupported/);
+assert.equal(codecReadU32Body.diagnostics[0].actual, "readU32");
+assert.equal(codecReadU32Body.diagnostics[0].line, 4);
+
+const enumLocalPackage = `${outDir}/enum-local-package`;
+await mkdir(`${enumLocalPackage}/src`, { recursive: true });
+await writeZeroToml(enumLocalPackage, {
+  package: { name: "enum-local-package", version: "0.1.0" },
+  targets: { cli: { kind: "exe", main: "src/main.0" } },
+  deps: {},
+});
+await writeFile(`${enumLocalPackage}/src/main.0`, `enum Status {
+    ready,
+    failed,
+}
+
+choice Outcome {
+    ok,
+    failed: i32,
+}
+
+pub fn main(world: World) -> Void raises {
+    let status: Status = Status.ready
+    let outcome: Outcome = Outcome.ok
+    if status == Status.ready {
+        check world.out.write("ready\\n")
+    }
+}
+`);
+const enumLocalImport = await execFileAsync(zero, ["import", "--json", enumLocalPackage]).catch((error) => error);
+assert.notEqual(enumLocalImport.code, 0);
+const enumLocalImportBody = JSON.parse(enumLocalImport.stdout);
+assert.equal(enumLocalImportBody.diagnostics[0].code, "BLD004");
+assert.match(enumLocalImportBody.diagnostics[0].message, /local type is unsupported/);
+assert.equal(enumLocalImportBody.diagnostics[0].actual, "Status");
+assert.match(enumLocalImportBody.diagnostics[0].path, /src\/main\.0$/);
+assert.equal(enumLocalImportBody.diagnostics[0].line, 12);
 
 const abiDump = await execFileAsync(zero, ["abi", "dump", "--json", "conformance/native/pass/const-layout.0"]);
 const abiDumpBody = JSON.parse(abiDump.stdout);
@@ -4879,6 +5155,10 @@ for (const runtimeFixture of [
   ["conformance/native/pass/byte-view-call-single-eval.0", "byte-view-call-single-eval", { stdout: "byte view call single eval ok\n" }],
   ["conformance/native/pass/std-math-breadth.0", "std-math-breadth", { stdout: "std math breadth ok\n" }],
   ["conformance/native/pass/std-numeric-random-time.0", "std-numeric-random-time", { stdout: "std numeric random time ok\n" }],
+  ["conformance/native/pass/std-regex.0", "std-regex", { stdout: "std regex ok\n" }],
+  ["conformance/native/pass/std-unicode.0", "std-unicode", { stdout: "std unicode ok\n" }],
+  ["conformance/native/pass/std-inet.0", "std-inet", { stdout: "std inet ok\n" }],
+  ["conformance/native/pass/std-time-rfc3339.0", "std-time-rfc3339", { stdout: "std time rfc3339 ok\n" }],
   ["conformance/native/pass/std-str-breadth.0", "std-str-breadth", { stdout: "std str breadth ok\n" }],
   ["conformance/native/pass/std-mem-generic-items.0", "std-mem-generic-items", { stdout: "std mem generic items ok\n" }],
   ["conformance/native/pass/std-mem-field-items.0", "std-mem-field-items", { stdout: "std mem field items ok\n" }],

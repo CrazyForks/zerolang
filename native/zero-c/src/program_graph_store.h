@@ -3,6 +3,8 @@
 
 #include "program_graph.h"
 
+#include <stdint.h>
+
 typedef enum {
   Z_PROGRAM_GRAPH_STORE_FORMAT_TEXT,
   Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY,
@@ -21,6 +23,13 @@ typedef struct {
   char **projection_texts;
   size_t projection_len;
   size_t projection_cap;
+  /*
+   * Hash of the on-disk .0 source projection files as the store writer last
+   * saw them. Recorded at every store write so sync classification can
+   * decide by content instead of file mtimes. NULL for stores written by
+   * older compilers; those degrade to one reconciling source refresh.
+   */
+  char *source_projection_hash;
   ZProgramGraph graph;
 } ZProgramGraphStore;
 
@@ -42,9 +51,15 @@ bool z_program_graph_store_write_generated_path_format(const char *path, const Z
 bool z_program_graph_store_save_path(const char *path, const ZProgramGraph *graph, ZDiag *diag);
 bool z_program_graph_store_save_path_format(const char *path, const ZProgramGraph *graph, ZProgramGraphStoreFormat format, ZDiag *diag);
 bool z_program_graph_store_save_for_input(const char *input, const ZProgramGraph *graph, ZProgramGraphStore *out, ZDiag *diag);
+void z_program_graph_store_normalize_source_graph(ZProgramGraph *graph, const char *root);
 bool z_program_graph_store_save_for_input_format(const char *input, const ZProgramGraph *graph, ZProgramGraphStoreFormat format, ZProgramGraphStore *out, ZDiag *diag);
 bool z_program_graph_store_graph_matches_source(const ZProgramGraphStore *store, const ZProgramGraph *source_graph);
 bool z_program_graph_store_source_path_is_local(const char *path);
 const char *z_program_graph_store_projection_text(const ZProgramGraphStore *store, const char *path);
+uint64_t z_program_graph_store_source_hash_seed(void);
+uint64_t z_program_graph_store_source_hash_fold(uint64_t state, const char *path, const char *text);
+char *z_program_graph_store_source_hash_text(uint64_t state);
+char *z_program_graph_store_projection_table_hash(const ZProgramGraphStore *store);
+char *z_program_graph_store_disk_projection_hash(const ZProgramGraphStore *store);
 
 #endif

@@ -55,7 +55,7 @@ static bool build_check_aarch64_byte_view_ptr_spill(const ZBuildability *ctx, co
 static bool build_check_aarch64_byte_view_len_spill(const ZBuildability *ctx, const IrFunction *fun, const IrValue *view, unsigned scratch_slot, unsigned slot_count, const char *message, ZDiag *diag) {
   if (!view || view->kind != IR_VALUE_BYTE_SLICE) return true;
   unsigned len = 0;
-  if (build_byte_view_const_len(view, &len) && len <= 65535u) return true;
+  if (build_byte_view_const_len(view, &len) && len <= Z_DIRECT_FRAME_LOCAL_LIMIT_BYTES) return true;
   if (!view->index && !view->right) {
     if (!build_check_aarch64_byte_view_ptr_spill(ctx, fun, view->left, scratch_slot, slot_count, message, diag)) return false;
     return build_check_aarch64_byte_view_len_spill(ctx, fun, view->left, scratch_slot, slot_count, message, diag);
@@ -118,10 +118,10 @@ static bool build_aarch64_byte_view_ptr(const ZBuildability *ctx, const IrFuncti
 
 bool z_build_check_aarch64_byte_view_len(const ZBuildability *ctx, const IrFunction *fun, const IrValue *view, ZDiag *diag) {
   unsigned len = 0;
-  if (build_byte_view_const_len(view, &len)) return len <= 65535u || z_build_diag(ctx, diag, "direct AArch64 byte-view length is too large for this backend", view->line, view->column, "large byte view");
+  if (build_byte_view_const_len(view, &len)) return len <= Z_DIRECT_FRAME_LOCAL_LIMIT_BYTES || z_build_diag(ctx, diag, "direct AArch64 byte-view length is too large for this backend", view->line, view->column, "large byte view");
   if (!view) return z_build_diag(ctx, diag, "direct AArch64 byte view is missing", 1, 1, "missing byte view");
   if (view->kind == IR_VALUE_STRING_LITERAL || view->kind == IR_VALUE_ARRAY_BYTE_VIEW) {
-    if (view->data_len > 65535u) return z_build_diag(ctx, diag, "direct AArch64 byte-view length is too large for this backend", view->line, view->column, "large byte view");
+    if (view->data_len > Z_DIRECT_FRAME_LOCAL_LIMIT_BYTES) return z_build_diag(ctx, diag, "direct AArch64 byte-view length is too large for this backend", view->line, view->column, "large byte view");
     return true;
   }
   if (view->kind == IR_VALUE_LOCAL && fun && view->local_index < fun->local_len && fun->locals[view->local_index].type == IR_TYPE_BYTE_VIEW) return true;
@@ -546,8 +546,8 @@ bool z_build_check_aarch64_function_shape(const ZBuildability *ctx, const IrFunc
       fun->return_type != IR_TYPE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_BYTE_VIEW && fun->return_type != IR_TYPE_MAYBE_SCALAR) {
     return z_build_diag(ctx, diag, "direct AArch64 buildability currently supports Void, primitive scalars, byte views, Maybe byte views, and Maybe scalar returns", fun->line, fun->column, z_build_type_name(fun->return_type));
   }
-  size_t frame_bytes = (fun->frame_bytes ? fun->frame_bytes : fun->local_len * 8u) + BUILD_AARCH64_SCRATCH_SLOT_COUNT * 8u;
-  if (frame_bytes > 4095u) return z_build_diag(ctx, diag, "direct AArch64 stack frame exceeds current immediate-offset support", fun->line, fun->column, fun->name);
+  size_t frame_bytes = fun->frame_bytes ? fun->frame_bytes : fun->local_len * 8u;
+  if (frame_bytes > Z_DIRECT_FRAME_LOCAL_LIMIT_BYTES) return z_build_diag(ctx, diag, "direct AArch64 stack frame exceeds the supported per-function locals limit", fun->line, fun->column, fun->name);
   for (size_t i = 0; i < fun->local_len; i++) {
     const IrLocal *local = &fun->locals[i];
     if (local->type == IR_TYPE_BYTE_VIEW) continue;

@@ -8,6 +8,10 @@
 
 #define ZERO_VERSION "0.3.2"
 
+#ifndef ZERO_BUILD_HASH
+#define ZERO_BUILD_HASH "unknown"
+#endif
+
 typedef struct ZTargetInfo ZTargetInfo;
 typedef struct ZProgramGraph ZProgramGraph;
 
@@ -490,7 +494,8 @@ typedef enum {
   IR_VALUE_HTTP_STATUS_CLASS,
   IR_VALUE_FIELD_LOAD,
   IR_VALUE_CHECK,
-  IR_VALUE_RESCUE
+  IR_VALUE_RESCUE,
+  IR_VALUE_RECORD_ADDR
 } IrValueKind;
 
 typedef enum {
@@ -732,7 +737,9 @@ typedef struct {
   bool is_param;
   bool is_array;
   bool is_record;
+  bool is_record_ref;
   bool is_mutable;
+  unsigned ref_byte_size;
   char *shape_name;
   int line;
   int column;
@@ -822,6 +829,7 @@ typedef struct {
   char **active_local_names;
   size_t active_local_len;
   size_t active_local_cap;
+  size_t const_lower_depth;
 } IrProgram;
 
 typedef struct {
@@ -970,6 +978,28 @@ typedef enum {
 } ZDirectBackend;
 
 typedef enum {
+  Z_DIRECT_TRAP_INDEX_BOUNDS = 0,
+  Z_DIRECT_TRAP_VALUE_BOUNDS,
+  Z_DIRECT_TRAP_WRITE_FAILED,
+  Z_DIRECT_TRAP_KIND_COUNT
+} ZDirectTrapKind;
+
+typedef struct {
+  unsigned offsets[Z_DIRECT_TRAP_KIND_COUNT];
+  unsigned lens[Z_DIRECT_TRAP_KIND_COUNT];
+} ZDirectTrapMessages;
+
+typedef struct {
+  size_t *items;
+  size_t len;
+  size_t cap;
+} ZDirectTrapBranchList;
+
+Z_RET_BORROWED const char *z_direct_trap_message(ZDirectTrapKind kind);
+bool z_direct_trap_branches_record(Z_INOUT ZDirectTrapBranchList *list, size_t patch_offset);
+void z_direct_trap_branches_free(Z_INOUT ZDirectTrapBranchList *lists, size_t count);
+
+typedef enum {
   Z_BACKEND_FAMILY_UNKNOWN,
   Z_BACKEND_FAMILY_DIRECT,
   Z_BACKEND_FAMILY_LLVM
@@ -1069,6 +1099,7 @@ bool z_read_file_prefix(Z_IN const char *path, Z_OUT void *bytes, size_t len, Z_
 bool z_write_file(Z_IN const char *path, Z_IN const char *text, Z_OUT ZDiag *diag);
 bool z_write_binary_file(Z_IN const char *path, Z_IN const unsigned char *data, size_t len, Z_OUT ZDiag *diag);
 bool z_map_source_diag(Z_IN const SourceInput *input, Z_INOUT ZDiag *diag);
+void z_diag_set_path_copy(Z_INOUT ZDiag *diag, Z_OPTIONAL Z_IN const char *path);
 void z_free_source(Z_INOUT SourceInput *input);
 bool z_parse_manifest_json(Z_IN const char *manifest, Z_OUT ZManifest *out, Z_OUT ZDiag *diag);
 bool z_resolve_package_metadata(Z_IN const char *manifest_path, Z_IN const char *manifest, Z_IN const ZManifest *parsed_manifest, Z_OUT SourceInput *out, Z_OUT ZDiag *diag);
@@ -1091,6 +1122,8 @@ void z_free_program(Z_INOUT Program *program);
 
 bool z_check_program(Z_IN const Program *program, Z_OUT ZDiag *diag);
 bool z_check_program_library(Z_IN const Program *program, Z_OUT ZDiag *diag);
+#define Z_DIRECT_FRAME_LOCAL_LIMIT_BYTES 131072u
+bool z_function_frame_locals_within_limit(Z_IN const Program *program, Z_IN const Function *fun, size_t limit, Z_OUT size_t *out_total, Z_OUT const Stmt **out_over);
 void z_append_call_resolution_facts_json(Z_INOUT ZBuf *buf, Z_IN const SourceInput *input, Z_IN const Program *program);
 void z_set_check_target(Z_OPTIONAL Z_IN const ZTargetInfo *target);
 ZMetaCacheStats z_meta_cache_stats(void);
