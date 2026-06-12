@@ -14,7 +14,7 @@ The core loop for changing an existing package:
 ```sh
 zero query <name>        # locate: bare name searches the graph, prints matches with spans
 zero view --fn <name>    # read: one function's canonical source
-# edit: zero patch for structured edits, or edit the .0 source text directly
+# edit: zero patch; direct .0 text edits only when no patch op fits
 zero check               # validate; refreshes a stale zero.graph from edited source
 zero run . -- <args>     # execute the changed code
 ```
@@ -43,10 +43,17 @@ zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name
 
 ## Edit
 
-Both edit surfaces write the same `zero.graph` store:
+Edit through the graph: `zero patch` covers everything from one-line ops (`addCheckWrite`, `rename`, `set`) to whole function bodies, in one call with a heredoc:
 
-- `zero patch --op '...'` for structured edits; `zero patch --op help` lists operation shapes. A successful patch has already validated and saved the graph; do not run `zero check` just to confirm it.
-- Direct `.0` text edits: `zero check`, `zero run`, `zero test`, and `zero build` refresh a stale `zero.graph` automatically; `zero import` refreshes it explicitly. Never delete `zero.graph` to force a reimport.
+```sh
+zero patch --replace-fn main --body-file - <<'EOF'
+  check world.out.write("hello agent\n")
+EOF
+```
+
+`zero patch --op help` lists operation shapes. A successful patch has already validated and saved the graph; do not run `zero check` just to confirm it.
+
+Direct `.0` text edits are a last resort for changes no patch op expresses: `zero check`, `zero run`, `zero test`, and `zero build` refresh a stale `zero.graph` automatically, but patch keeps the loop faster and preserves node identity for queries. Never delete `zero.graph` to force a reimport.
 
 Load the `graph` topic for patch operations, import/export, identity (RGP007) recovery, and merge.
 

@@ -13065,7 +13065,7 @@ static void print_graph_patch_summary_text(const ZProgramGraph *graph, const ZPr
 
 static const char *graph_patch_source_label(const Command *command) {
   if (command && command->patch_file) return command->patch_file;
-  if (command && command->patch_body_file) return command->patch_body_file;
+  if (command && command->patch_body_file) return strcmp(command->patch_body_file, "-") == 0 ? "<stdin>" : command->patch_body_file;
   if (command && (command->patch_text || command->patch_op_len > 0)) return "<inline>";
   return "<patch>";
 }
@@ -13684,15 +13684,15 @@ static bool validate_graph_patch_sources(const Command *command, bool *has_file,
   diag->length = 1;
   if (has_body && (!command->patch_replace_fn || !command->patch_body_file)) {
     snprintf(diag->message, sizeof(diag->message), "graph patch body replacement needs both --replace-fn and --body-file");
-    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] --replace-fn <function> --body-file <body-rows-file>");
+    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] --replace-fn <function> --body-file <body-rows-file|->");
     snprintf(diag->actual, sizeof(diag->actual), "missing %s", command->patch_replace_fn ? "--body-file" : "--replace-fn");
-    snprintf(diag->help, sizeof(diag->help), "the body file holds only the new body rows, exactly what zero view --fn prints between the signature braces");
+    snprintf(diag->help, sizeof(diag->help), "the body file holds only the new body rows, exactly what zero view --fn prints between the signature braces; --body-file - reads them from stdin");
     return false;
   }
   int source_count = (*has_file ? 1 : 0) + (*has_patch_text ? 1 : 0) + (*has_ops ? 1 : 0) + (has_body ? 1 : 0);
   if (source_count == 0) {
     snprintf(diag->message, sizeof(diag->message), "graph patch requires patch operations");
-    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] (<patch-file>|--op <operation>|--patch-text <text>|--replace-fn <function> --body-file <file>)");
+    snprintf(diag->expected, sizeof(diag->expected), "zero patch [graph-input] (<patch-file>|--op <operation>|--patch-text <text>|--replace-fn <function> --body-file <file|->)");
     snprintf(diag->actual, sizeof(diag->actual), "missing patch input");
     snprintf(diag->help, sizeof(diag->help), "pass a zero-program-graph-patch v1 file, one or more --op lines, or --replace-fn with --body-file");
     return false;
@@ -14259,7 +14259,7 @@ static int resolve_manifest_graph_input_sync(const Command *command, const ZTarg
   z_program_graph_free(&source_graph);
   z_free_program(&source_program);
   z_free_source(&source_input);
-  if (rc == 0) fprintf(stderr, "note: zero %s refreshed zero.graph from the edited package source projection\n", command->command ? command->command : "build");
+  if (rc == 0) fprintf(stderr, "note: zero %s refreshed zero.graph from the edited package source projection; tip: zero patch --replace-fn <fn> --body-file - edits the graph directly and skips this reconcile\n", command->command ? command->command : "build");
   return rc;
 }
 

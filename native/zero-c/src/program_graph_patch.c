@@ -70,6 +70,46 @@ static char *patch_read_file(const char *path, size_t *out_len, ZDiag *diag) {
   return (char *)bytes;
 }
 
+static char *patch_read_stdin(size_t *out_len, ZDiag *diag) {
+  size_t cap = 4096;
+  size_t len = 0;
+  char *data = z_checked_malloc(cap);
+  for (;;) {
+    if (len == cap) {
+      cap *= 2;
+      data = z_checked_reallocarray(data, cap, 1);
+    }
+    size_t got = fread(data + len, 1, cap - len, stdin);
+    len += got;
+    if (got == 0) {
+      if (ferror(stdin)) {
+        free(data);
+        if (diag) {
+          diag->code = 2002;
+          diag->path = "<stdin>";
+          diag->line = 1;
+          diag->column = 1;
+          diag->length = 1;
+          snprintf(diag->message, sizeof(diag->message), "failed to read function body rows from stdin");
+          snprintf(diag->expected, sizeof(diag->expected), "body rows on stdin terminated by EOF");
+          snprintf(diag->actual, sizeof(diag->actual), "stdin read error");
+        }
+        return NULL;
+      }
+      break;
+    }
+  }
+  data = z_checked_reallocarray(data, len + 1, 1);
+  data[len] = '\0';
+  if (out_len) *out_len = len;
+  return data;
+}
+
+static char *patch_read_body_source(const char *path, size_t *out_len, ZDiag *diag) {
+  if (path && strcmp(path, "-") == 0) return patch_read_stdin(out_len, diag);
+  return patch_read_file(path, out_len, diag);
+}
+
 static char *patch_trim(char *line) {
   while (*line && isspace((unsigned char)*line)) line++;
   char *end = line + strlen(line);
@@ -774,7 +814,8 @@ bool z_program_graph_apply_replace_fn_body_file(const char *function_name, const
   *result = (ZProgramGraphPatchResult){0};
   result->actual_graph_hash = z_strdup(graph && graph->graph_hash ? graph->graph_hash : "");
   size_t text_len = 0;
-  char *text = patch_read_file(path, &text_len, diag);
+  bool from_stdin = path && strcmp(path, "-") == 0;
+  char *text = patch_read_body_source(path, &text_len, diag);
   if (!text) return false;
   if (memchr(text, '\0', text_len)) {
     free(text);
@@ -785,7 +826,7 @@ bool z_program_graph_apply_replace_fn_body_file(const char *function_name, const
   for (size_t i = 0; blank && i < text_len; i++) blank = isspace((unsigned char)text[i]) != 0;
   if (blank) {
     free(text);
-    patch_result_fail(result, "GPH001", "function body file is empty", "body rows in zero view syntax", path);
+    patch_result_fail(result, "GPH001", "function body file is empty", "body rows in zero view syntax", from_stdin ? "<stdin>" : path);
     return false;
   }
   if (expect_graph_hash) patch_replace_text(&result->expected_graph_hash, expect_graph_hash);

@@ -42,6 +42,8 @@ zero status                # store format and projection state
 
 ## Patches
 
+Edit through the graph: `zero patch` covers everything from one-line changes (`addCheckWrite`, `rename`, `set`) to whole function bodies (`--replace-fn <fn> --body-file -` with a heredoc). Direct `.0` text edits are a last resort for changes no patch op expresses; the compiler will refresh the graph from edited source, but patch keeps the loop faster (0.2s validation, no reconcile pass) and preserves node identity for queries.
+
 A successful patch loads, applies, validates, and saves `zero.graph`, and prints the saved path, new graph hash, functions, and tests. Do not run `zero check` or `zero query` just to confirm that the patch applied.
 
 ```sh
@@ -70,7 +72,22 @@ replaceFunctionBody main
 end
 ```
 
-To replace one function body without patch syntax or shell quoting, run `zero patch --replace-fn <name> --body-file <file>`; the file holds only the new body rows, exactly what `zero view --fn <name>` prints between the signature braces (no header, no `end`).
+To replace one function body without patch syntax or shell quoting, use `--replace-fn` with `--body-file`. `--body-file -` reads the body rows from stdin, so a heredoc does the whole edit in one call:
+
+```sh
+zero patch --replace-fn main --body-file - <<'EOF'
+  let name: Maybe<String> = std.args.get(1)
+  if name.has {
+    check world.out.write("hello ")
+    check world.out.write(name.value)
+    check world.out.write("\n")
+  } else {
+    check world.out.write("hello anonymous\n")
+  }
+EOF
+```
+
+The body holds only the new rows, exactly what `zero view --fn <name>` prints between the signature braces (no header, no `end`). Quotes, `$variables`, and backslashes pass through a quoted heredoc untouched. The alternative is a file path: `zero patch --replace-fn <name> --body-file /tmp/main.body`.
 
 To patch one branch instead of rewriting the whole function, find the block handle first:
 
