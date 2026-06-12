@@ -3304,7 +3304,11 @@ static size_t elf_emit_start_stub(ZBuf *text, const IrFunction *main_fun) {
     z_x64_emit_mov_reg_u32(text, 7, 1);
     size_t exit_patch = z_x64_emit_jmp32_placeholder(text, 0xe9);
     z_x64_patch_rel32(text, success_patch, text->len);
-    z_x64_emit_mov_reg_from_reg(text, 7, 0, false);
+    /* A fallible Void main leaves the last call's result in rax; the process
+       exit status must not inherit it (a trailing 15-byte write exited 15).
+       The raise envelope makes return_type I64, so test the source-level type. */
+    if (main_fun && main_fun->value_return_type == IR_TYPE_VOID) z_x64_emit_mov_reg_u32(text, 7, 0);
+    else z_x64_emit_mov_reg_from_reg(text, 7, 0, false);
     z_x64_patch_rel32(text, exit_patch, text->len);
   } else if (main_fun && main_fun->return_type == IR_TYPE_VOID) {
     z_x64_emit_mov_reg_u32(text, 7, 0);
