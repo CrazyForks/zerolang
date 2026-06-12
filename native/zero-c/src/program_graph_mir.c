@@ -626,22 +626,158 @@ static void ir_graph_mark_unsupported(IrProgram *ir, const ZProgramGraphNode *no
   ir_mark_unsupported_at(ir, message, node && node->path && node->path[0] ? node->path : NULL, ir_graph_line(node), ir_graph_column(node), actual);
 }
 
-static const ZProgramGraphNode *ir_graph_find_node(const ZProgramGraph *graph, const char *id) {
-  for (size_t i = 0; graph && id && i < graph->node_len; i++) {
-    if (ir_text_eq(graph->nodes[i].id, id)) return &graph->nodes[i];
+/*
+ * Graph lowering walks node and edge relations constantly; linear scans over
+ * the whole table per lookup made lowering quadratic in graph size. This
+ * index sorts node, edge, and function-name handles once per graph so every
+ * lookup touches only its own run. The cache stores table indexes rather
+ * than captured pointers and revalidates against the graph identity, table
+ * addresses, lengths, and graph hash, so a rebuilt graph that happens to
+ * reuse an address can never serve stale entries. Runs preserve table order
+ * through the index tiebreak, keeping lowering output byte-identical.
+ */
+typedef struct {
+  const ZProgramGraph *graph;
+  const ZProgramGraphNode *nodes;
+  const ZProgramGraphEdge *edges;
+  size_t node_len;
+  size_t edge_len;
+  char *graph_hash;
+  size_t *nodes_by_id;
+  size_t *parent_edges;
+  size_t parent_len;
+  size_t *child_edges;
+  size_t child_len;
+  size_t *functions_by_name;
+  size_t function_len;
+} IrGraphIndex;
+
+static IrGraphIndex ir_graph_index_cache;
+static const ZProgramGraph *ir_graph_index_sort_graph;
+
+static int ir_text_cmp(const char *left, const char *right) {
+  return strcmp(left ? left : "", right ? right : "");
+}
+
+static int ir_graph_index_tiebreak(const void *left, const void *right, int cmp) {
+  if (cmp != 0) return cmp;
+  return *(const size_t *)left < *(const size_t *)right ? -1 : 1;
+}
+
+static int ir_graph_index_node_id_cmp(const void *left, const void *right) {
+  const ZProgramGraphNode *nodes = ir_graph_index_sort_graph->nodes;
+  return ir_graph_index_tiebreak(left, right, ir_text_cmp(nodes[*(const size_t *)left].id, nodes[*(const size_t *)right].id));
+}
+
+static int ir_graph_index_parent_cmp(const void *left, const void *right) {
+  const ZProgramGraphEdge *edges = ir_graph_index_sort_graph->edges;
+  return ir_graph_index_tiebreak(left, right, ir_text_cmp(edges[*(const size_t *)left].to, edges[*(const size_t *)right].to));
+}
+
+static int ir_graph_index_child_cmp(const void *left, const void *right) {
+  const ZProgramGraphEdge *edges = ir_graph_index_sort_graph->edges;
+  return ir_graph_index_tiebreak(left, right, ir_text_cmp(edges[*(const size_t *)left].from, edges[*(const size_t *)right].from));
+}
+
+static int ir_graph_index_function_cmp(const void *left, const void *right) {
+  const ZProgramGraphNode *nodes = ir_graph_index_sort_graph->nodes;
+  return ir_graph_index_tiebreak(left, right, ir_text_cmp(nodes[*(const size_t *)left].name, nodes[*(const size_t *)right].name));
+}
+
+static const IrGraphIndex *ir_graph_index(const ZProgramGraph *graph) {
+  IrGraphIndex *cache = &ir_graph_index_cache;
+  if (cache->graph == graph &&
+      cache->nodes == graph->nodes &&
+      cache->edges == graph->edges &&
+      cache->node_len == graph->node_len &&
+      cache->edge_len == graph->edge_len &&
+      ir_text_eq(cache->graph_hash, graph->graph_hash)) {
+    return cache;
   }
-  return NULL;
+  free(cache->graph_hash);
+  free(cache->nodes_by_id);
+  free(cache->parent_edges);
+  free(cache->child_edges);
+  free(cache->functions_by_name);
+  *cache = (IrGraphIndex){
+    .graph = graph,
+    .nodes = graph->nodes,
+    .edges = graph->edges,
+    .node_len = graph->node_len,
+    .edge_len = graph->edge_len,
+    .graph_hash = z_strdup(graph->graph_hash ? graph->graph_hash : ""),
+    .nodes_by_id = z_checked_calloc(graph->node_len ? graph->node_len : 1, sizeof(size_t)),
+    .parent_edges = z_checked_calloc(graph->edge_len ? graph->edge_len : 1, sizeof(size_t)),
+    .child_edges = z_checked_calloc(graph->edge_len ? graph->edge_len : 1, sizeof(size_t)),
+    .functions_by_name = z_checked_calloc(graph->node_len ? graph->node_len : 1, sizeof(size_t)),
+  };
+  for (size_t i = 0; i < graph->node_len; i++) {
+    cache->nodes_by_id[i] = i;
+    if (graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_FUNCTION) cache->functions_by_name[cache->function_len++] = i;
+  }
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    if (graph->edges[i].target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE) continue;
+    cache->parent_edges[cache->parent_len] = i;
+    cache->child_edges[cache->child_len] = i;
+    cache->parent_len++;
+    cache->child_len++;
+  }
+  ir_graph_index_sort_graph = graph;
+  qsort(cache->nodes_by_id, graph->node_len, sizeof(size_t), ir_graph_index_node_id_cmp);
+  qsort(cache->parent_edges, cache->parent_len, sizeof(size_t), ir_graph_index_parent_cmp);
+  qsort(cache->child_edges, cache->child_len, sizeof(size_t), ir_graph_index_child_cmp);
+  qsort(cache->functions_by_name, cache->function_len, sizeof(size_t), ir_graph_index_function_cmp);
+  return cache;
+}
+
+typedef const char *(*IrGraphIndexKeyFn)(const ZProgramGraph *graph, size_t index);
+
+static const char *ir_graph_index_node_id_key(const ZProgramGraph *graph, size_t index) { return graph->nodes[index].id; }
+static const char *ir_graph_index_node_name_key(const ZProgramGraph *graph, size_t index) { return graph->nodes[index].name; }
+static const char *ir_graph_index_edge_to_key(const ZProgramGraph *graph, size_t index) { return graph->edges[index].to; }
+static const char *ir_graph_index_edge_from_key(const ZProgramGraph *graph, size_t index) { return graph->edges[index].from; }
+
+/* Returns the [start, start+run_len) span of entries whose key equals text. */
+static void ir_graph_index_run(const ZProgramGraph *graph, const size_t *items, size_t len, IrGraphIndexKeyFn key, const char *text, size_t *start, size_t *run_len) {
+  size_t low = 0;
+  size_t high = len;
+  while (low < high) {
+    size_t mid = low + (high - low) / 2;
+    if (ir_text_cmp(key(graph, items[mid]), text) < 0) low = mid + 1;
+    else high = mid;
+  }
+  size_t first = low;
+  while (low < len && ir_text_eq(key(graph, items[low]), text ? text : "")) low++;
+  *start = first;
+  *run_len = low - first;
+}
+
+static void ir_graph_child_edge_run(const ZProgramGraph *graph, const IrGraphIndex **index, const char *from, size_t *start, size_t *run_len) {
+  *start = 0;
+  *run_len = 0;
+  if (!graph || !from) return;
+  *index = ir_graph_index(graph);
+  ir_graph_index_run(graph, (*index)->child_edges, (*index)->child_len, ir_graph_index_edge_from_key, from, start, run_len);
+}
+
+static const ZProgramGraphNode *ir_graph_find_node(const ZProgramGraph *graph, const char *id) {
+  if (!graph || !id) return NULL;
+  const IrGraphIndex *index = ir_graph_index(graph);
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_index_run(graph, index->nodes_by_id, index->node_len, ir_graph_index_node_id_key, id, &start, &run_len);
+  return run_len ? &graph->nodes[index->nodes_by_id[start]] : NULL;
 }
 
 static const ZProgramGraphEdge *ir_graph_ordered_edge(const ZProgramGraph *graph, const char *from, const char *kind, size_t order) {
-  for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
-    const ZProgramGraphEdge *edge = &graph->edges[i];
-    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE &&
-        edge->order == order &&
-        ir_text_eq(edge->from, from) &&
-        ir_text_eq(edge->kind, kind)) {
-      return edge;
-    }
+  if (!kind) return NULL;
+  const IrGraphIndex *index = NULL;
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_child_edge_run(graph, &index, from, &start, &run_len);
+  for (size_t i = 0; i < run_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[index->child_edges[start + i]];
+    if (edge->order == order && ir_text_eq(edge->kind, kind)) return edge;
   }
   return NULL;
 }
@@ -652,29 +788,29 @@ static const ZProgramGraphNode *ir_graph_ordered_node(const ZProgramGraph *graph
 }
 
 static const ZProgramGraphEdge *ir_graph_next_edge_by_order(const ZProgramGraph *graph, const char *from, const char *kind, bool have_last, size_t last_order) {
+  if (!kind) return NULL;
   const ZProgramGraphEdge *best = NULL;
-  for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
-    const ZProgramGraphEdge *edge = &graph->edges[i];
-    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE ||
-        !ir_text_eq(edge->from, from) ||
-        !ir_text_eq(edge->kind, kind) ||
-        (have_last && edge->order <= last_order)) {
-      continue;
-    }
+  const IrGraphIndex *index = NULL;
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_child_edge_run(graph, &index, from, &start, &run_len);
+  for (size_t i = 0; i < run_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[index->child_edges[start + i]];
+    if (!ir_text_eq(edge->kind, kind) || (have_last && edge->order <= last_order)) continue;
     if (!best || edge->order < best->order) best = edge;
   }
   return best;
 }
 
 static size_t ir_graph_edge_count(const ZProgramGraph *graph, const char *from, const char *kind) {
+  if (!kind) return 0;
   size_t count = 0;
-  for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
-    const ZProgramGraphEdge *edge = &graph->edges[i];
-    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE &&
-        ir_text_eq(edge->from, from) &&
-        ir_text_eq(edge->kind, kind)) {
-      count++;
-    }
+  const IrGraphIndex *index = NULL;
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_child_edge_run(graph, &index, from, &start, &run_len);
+  for (size_t i = 0; i < run_len; i++) {
+    if (ir_text_eq(graph->edges[index->child_edges[start + i]].kind, kind)) count++;
   }
   return count;
 }
@@ -776,11 +912,12 @@ static const char *ir_graph_concrete_type_text_for_node(const ZProgramGraph *gra
 }
 
 static const ZProgramGraphNode *ir_graph_find_function_by_name(const ZProgramGraph *graph, const char *name) {
-  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION && ir_text_eq(node->name, name)) return node;
-  }
-  return NULL;
+  if (!graph || !name) return NULL;
+  const IrGraphIndex *index = ir_graph_index(graph);
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_index_run(graph, index->functions_by_name, index->function_len, ir_graph_index_node_name_key, name, &start, &run_len);
+  return run_len ? &graph->nodes[index->functions_by_name[start]] : NULL;
 }
 
 static bool ir_graph_has_concrete_function_named(const ZProgramGraph *graph, const char *name) {
@@ -4580,12 +4717,23 @@ static char *ir_graph_call_parent_expected_type_dup_depth(const ZProgramGraph *g
   return NULL;
 }
 
+static void ir_graph_parent_edge_run(const ZProgramGraph *graph, const IrGraphIndex **index, const char *to, size_t *start, size_t *run_len) {
+  *start = 0;
+  *run_len = 0;
+  if (!graph || !to) return;
+  *index = ir_graph_index(graph);
+  ir_graph_index_run(graph, (*index)->parent_edges, (*index)->parent_len, ir_graph_index_edge_to_key, to, start, run_len);
+}
+
 static bool ir_graph_node_reaches_ancestor(const ZProgramGraph *graph, const char *node_id, const char *ancestor_id, unsigned depth) {
   if (!graph || !node_id || !ancestor_id || depth > 64) return false;
   if (ir_text_eq(node_id, ancestor_id)) return true;
-  for (size_t i = 0; i < graph->edge_len; i++) {
-    const ZProgramGraphEdge *edge = &graph->edges[i];
-    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !ir_text_eq(edge->to, node_id)) continue;
+  const IrGraphIndex *index = NULL;
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_parent_edge_run(graph, &index, node_id, &start, &run_len);
+  for (size_t i = 0; i < run_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[index->parent_edges[start + i]];
     if (ir_graph_node_reaches_ancestor(graph, edge->from, ancestor_id, depth + 1)) return true;
   }
   return false;
@@ -4595,9 +4743,12 @@ static const ZProgramGraphNode *ir_graph_enclosing_function_for_node(const ZProg
   if (!graph || !node_id || depth > 64) return NULL;
   const ZProgramGraphNode *node = ir_graph_find_node(graph, node_id);
   if (node && node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION) return node;
-  for (size_t i = 0; i < graph->edge_len; i++) {
-    const ZProgramGraphEdge *edge = &graph->edges[i];
-    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !ir_text_eq(edge->to, node_id)) continue;
+  const IrGraphIndex *index = NULL;
+  size_t start = 0;
+  size_t run_len = 0;
+  ir_graph_parent_edge_run(graph, &index, node_id, &start, &run_len);
+  for (size_t i = 0; i < run_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[index->parent_edges[start + i]];
     const ZProgramGraphNode *parent = ir_graph_find_node(graph, edge->from);
     if (parent && parent->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION) return parent;
     const ZProgramGraphNode *enclosing = ir_graph_enclosing_function_for_node(graph, edge->from, depth + 1);
@@ -4683,9 +4834,11 @@ static bool ir_graph_add_nested_generic_specialization_orders(const ZProgramGrap
   }
   return true; }
 static bool ir_graph_add_reachable_function_order(const ZProgramGraph *graph, IrProgram *ir, IrFunctionOrder **order, char ***stable_ids, size_t *len, size_t *cap, const ZProgramGraphNode *function);
-static bool ir_graph_add_reachable_child_orders(const ZProgramGraph *graph, IrProgram *ir, IrFunctionOrder **order, char ***stable_ids, size_t *len, size_t *cap, const char *parent_id, unsigned depth) { if (!parent_id || depth > 128) return true;
-  for (size_t i = 0; graph && i < graph->edge_len; i++) {
-    const ZProgramGraphEdge *edge = &graph->edges[i]; if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !ir_text_eq(edge->from, parent_id)) continue;
+static bool ir_graph_add_reachable_child_orders(const ZProgramGraph *graph, IrProgram *ir, IrFunctionOrder **order, char ***stable_ids, size_t *len, size_t *cap, const char *parent_id, unsigned depth) { if (!graph || !parent_id || depth > 128) return true;
+  const IrGraphIndex *index = NULL; size_t run_start = 0; size_t run_len = 0;
+  ir_graph_child_edge_run(graph, &index, parent_id, &run_start, &run_len);
+  for (size_t i = 0; i < run_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[index->child_edges[run_start + i]];
     const ZProgramGraphNode *child = ir_graph_find_node(graph, edge->to); if (!child) continue;
     if (child->kind == Z_PROGRAM_GRAPH_NODE_CALL || child->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL) { if (!ir_graph_add_generic_specialization_order_context(graph, ir, order, stable_ids, len, cap, NULL, child)) return false;
       char *qualified = ir_graph_expr_qualified_name(graph, child); const char *callee = qualified && qualified[0] ? qualified : child->name;
