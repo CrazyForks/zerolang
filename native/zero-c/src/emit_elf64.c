@@ -956,7 +956,7 @@ static bool elf_emit_fs_file_handle_value(ZBuf *code, const IrFunction *fun, con
 
 static bool elf_emit_fs_path_io_value(ZBuf *code, const IrFunction *fun, const IrValue *value, ElfEmitContext *ctx, ZDiag *diag) {
   switch (value->kind) {
-    case IR_VALUE_FS_READ_PATH: case IR_VALUE_FS_READ_BYTES_PATH: {
+    case IR_VALUE_FS_READ_PATH: {
       if (!elf_emit_openat_path(code, fun, value->left, 0, 0, ctx, diag)) return false;
       z_x64_emit_test_rax_rax(code, true);
       size_t open_fail = elf_emit_js_placeholder(code);
@@ -971,6 +971,46 @@ static bool elf_emit_fs_path_io_value(ZBuf *code, const IrFunction *fun, const I
       z_x64_emit_pop_rax(code);
       size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
       z_x64_patch_rel32(code, open_fail, code->len);
+      z_x64_emit_mov_reg_i32(code, 0, -1);
+      z_x64_patch_rel32(code, end, code->len);
+      return true;
+    }
+    case IR_VALUE_FS_READ_BYTES_PATH: {
+      if (!elf_emit_openat_path(code, fun, value->left, 0, 0, ctx, diag)) return false;
+      z_x64_emit_test_rax_rax(code, true);
+      size_t open_fail = elf_emit_js_placeholder(code);
+      z_x64_emit_push_rax(code);
+      if (!elf_emit_byte_view_pair(code, fun, value->right, 6, 2, ctx, diag)) return false;
+      z_x64_emit_pop_reg64(code, 7);
+      z_x64_emit_push_reg64(code, 7);
+      z_x64_emit_xor_eax_eax(code);
+      z_x64_emit_syscall(code);
+      z_x64_emit_push_rax(code);
+      /* snprintf convention: lseek(fd, 0, SEEK_END) reports the total file size
+         so values above the buffer length signal truncation. */
+      z_x64_emit_load_rsp_offset_reg(code, 7, 8, true);
+      z_x64_emit_xor_reg_reg(code, 6, true);
+      z_x64_emit_mov_reg_u32(code, 2, 2);
+      z_x64_emit_mov_eax_u32(code, 8);
+      z_x64_emit_syscall(code);
+      z_x64_emit_push_rax(code);
+      z_x64_emit_load_rsp_offset_reg(code, 0, 16, true);
+      elf_emit_close_rax_fd(code);
+      z_x64_emit_pop_rax(code);
+      z_x64_emit_pop_reg64(code, 1);
+      z_x64_emit_add_rsp(code, 8);
+      z_x64_emit_test_reg_reg(code, 1, true);
+      size_t read_fail = elf_emit_js_placeholder(code);
+      z_x64_emit_test_rax_rax(code, true);
+      size_t size_fail = elf_emit_js_placeholder(code);
+      z_x64_emit_cmp_rax_rcx(code, true);
+      size_t keep_total = z_x64_emit_jcc32_placeholder(code, 0x8d);
+      z_x64_emit_mov_reg_from_reg(code, 0, 1, true);
+      z_x64_patch_rel32(code, keep_total, code->len);
+      size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
+      z_x64_patch_rel32(code, open_fail, code->len);
+      z_x64_patch_rel32(code, read_fail, code->len);
+      z_x64_patch_rel32(code, size_fail, code->len);
       z_x64_emit_mov_reg_i32(code, 0, -1);
       z_x64_patch_rel32(code, end, code->len);
       return true;

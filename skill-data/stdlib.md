@@ -404,6 +404,12 @@ readFileEquals(arg0: Fs, arg1: String, arg2: MutSpan<u8>, arg3: Span<u8>) -> Boo
 copyFile(arg0: String, arg1: String, arg2: MutSpan<u8>) -> Bool
 ```
 
+`readBytes` and `readFile` fill the caller buffer and return the TOTAL file size
+(snprintf convention): a value above `len(buffer)` means the buffer holds only the
+first `len(buffer)` bytes, so compare the result against the buffer length instead
+of assuming the whole file arrived. `readFileBytes` returns `null` when the file
+exceeds the buffer.
+
 ### std.http
 
 ```text

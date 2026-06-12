@@ -53,10 +53,12 @@ static int zero_runtime_open_readonly(const char *path) {
   return fd;
 }
 
-static int zero_runtime_fd_is_regular_file(int fd) {
+static int zero_runtime_fd_regular_size(int fd, uint64_t *size_out) {
   ZeroRuntimeStat st;
   if (ZERO_RUNTIME_FSTAT(fd, &st) != 0) return 0;
-  return ZERO_RUNTIME_IS_REGULAR(st.st_mode);
+  if (!ZERO_RUNTIME_IS_REGULAR(st.st_mode)) return 0;
+  if (size_out) *size_out = st.st_size < 0 ? 0 : (uint64_t)st.st_size;
+  return 1;
 }
 
 static int zero_runtime_close_fd(int fd) {
@@ -106,11 +108,15 @@ ZeroMaybeUsize zero_fs_read_bytes(ZeroByteView path, ZeroMutByteView buffer) {
   int fd = zero_runtime_open_readonly(path_buf);
   if (fd < 0) return zero_runtime_none_usize();
 
+  uint64_t total = 0;
   uint64_t read_len = 0;
-  int ok = zero_runtime_fd_is_regular_file(fd) && zero_runtime_read_fd(fd, buffer, &read_len);
+  int ok = zero_runtime_fd_regular_size(fd, &total) && zero_runtime_read_fd(fd, buffer, &read_len);
   int closed = zero_runtime_close_fd(fd);
   if (!ok || !closed) return zero_runtime_none_usize();
-  return (ZeroMaybeUsize){1, read_len};
+  /* snprintf convention: report the total file size so callers can detect
+     truncation when the value exceeds the buffer length. */
+  if (read_len > total) total = read_len;
+  return (ZeroMaybeUsize){1, total};
 }
 
 uint64_t zero_parse_u32(ZeroByteView text) {
