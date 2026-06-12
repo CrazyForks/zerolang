@@ -170,6 +170,42 @@ static bool projection_real_path_inside_root(const char *root, const char *path)
   return strncmp(path, root, root_len) == 0 && path[root_len] == '/';
 }
 
+#if !defined(_WIN32)
+/*
+ * Projection safety checks resolve the same store root and source parent
+ * directories once per projection row; realpath dominates warm status and
+ * check runs without this memo. Only successful resolutions are cached, so
+ * paths that come into existence mid-process are still re-resolved.
+ */
+#define PROJECTION_REALPATH_CACHE_SLOTS 4
+
+typedef struct {
+  char *path;
+  char *real;
+} ProjectionRealPathCacheEntry;
+
+static ProjectionRealPathCacheEntry projection_realpath_cache[PROJECTION_REALPATH_CACHE_SLOTS];
+static size_t projection_realpath_cache_next;
+
+static char *projection_realpath_cached(const char *path) {
+  if (!path) return NULL;
+  for (size_t i = 0; i < PROJECTION_REALPATH_CACHE_SLOTS; i++) {
+    if (projection_realpath_cache[i].path && projection_text_eq(projection_realpath_cache[i].path, path)) {
+      return z_strdup(projection_realpath_cache[i].real);
+    }
+  }
+  char *real = realpath(path, NULL);
+  if (!real) return NULL;
+  ProjectionRealPathCacheEntry *slot = &projection_realpath_cache[projection_realpath_cache_next];
+  projection_realpath_cache_next = (projection_realpath_cache_next + 1) % PROJECTION_REALPATH_CACHE_SLOTS;
+  free(slot->path);
+  free(slot->real);
+  slot->path = z_strdup(path);
+  slot->real = z_strdup(real);
+  return real;
+}
+#endif
+
 static bool projection_target_parent_inside_root(const ZProgramGraphStore *store, const char *path, ZDiag *diag) {
 #if defined(_WIN32)
   (void)store;
@@ -177,13 +213,13 @@ static bool projection_target_parent_inside_root(const ZProgramGraphStore *store
   (void)diag;
   return true;
 #else
-  char *root_real = realpath(store && store->root && store->root[0] ? store->root : ".", NULL);
+  char *root_real = projection_realpath_cached(store && store->root && store->root[0] ? store->root : ".");
   if (!root_real) {
     projection_set_io_diag(diag, store && store->root ? store->root : ".", "inspect");
     return false;
   }
   char *parent = projection_dirname(path);
-  char *parent_real = realpath(parent, NULL);
+  char *parent_real = projection_realpath_cached(parent);
   if (!parent_real) {
     char *ancestor = z_strdup(parent);
     while (ancestor && !projection_path_exists(ancestor)) {
