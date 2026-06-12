@@ -56,6 +56,22 @@ const ZProgramGraphNode *z_program_graph_query_enclosing_function(const ZProgram
   return NULL;
 }
 
+/* Innermost statement that owns the node: walking owner edges upward, the
+ * first node reached through a "statement" edge is the enclosing statement. */
+const ZProgramGraphNode *z_program_graph_query_enclosing_statement(const ZProgramGraph *graph, const char *node_id) {
+  const char *current = node_id;
+  for (size_t depth = 0; graph && current && depth < graph->node_len; depth++) {
+    const ZProgramGraphEdge *owner = query_refs_owner_edge(graph, current);
+    if (!owner) return NULL;
+    if (z_program_graph_query_text_eq(owner->kind, "statement")) return z_program_graph_query_node_by_id(graph, current);
+    const ZProgramGraphNode *node = z_program_graph_query_node_by_id(graph, owner->from);
+    if (!node) return NULL;
+    if (node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION || node->kind == Z_PROGRAM_GRAPH_NODE_MODULE) return NULL;
+    current = node->id;
+  }
+  return NULL;
+}
+
 bool z_program_graph_query_reference_matches(const ZProgramGraphResolutionReference *ref, const char *filter) {
   if (!filter || !filter[0]) return true;
   return ref &&
@@ -88,6 +104,7 @@ static bool query_refs_include(const ZProgramGraph *graph, const ZProgramGraphRe
 
 static void query_refs_append_one_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphResolutionReference *ref) {
   const ZProgramGraphNode *function = z_program_graph_query_enclosing_function(graph, ref ? ref->node_id : NULL);
+  const ZProgramGraphNode *statement = z_program_graph_query_enclosing_statement(graph, ref ? ref->node_id : NULL);
   zbuf_append(buf, "{\"node\":");
   query_refs_append_json_string_or_null(buf, ref ? ref->node_id : NULL);
   zbuf_append(buf, ",\"kind\":");
@@ -98,6 +115,8 @@ static void query_refs_append_one_json(ZBuf *buf, const ZProgramGraph *graph, co
   query_refs_append_json_string_or_null(buf, ref ? ref->qualified_name : NULL);
   zbuf_append(buf, ",\"function\":");
   query_refs_append_json_string_or_null(buf, function ? function->name : NULL);
+  zbuf_append(buf, ",\"stmt\":");
+  query_refs_append_json_string_or_null(buf, statement ? statement->id : NULL);
   zbuf_append(buf, ",\"targetKind\":");
   query_refs_append_json_string_or_null(buf, ref ? ref->target_kind : NULL);
   zbuf_append(buf, ",\"targetNode\":");
@@ -139,10 +158,14 @@ void z_program_graph_query_append_function_calls_json(ZBuf *buf, const ZProgramG
   zbuf_append_char(buf, ']');
 }
 
-static void query_refs_print_one(const ZProgramGraph *graph, const ZProgramGraphResolutionReference *ref, const char *indent) {
+static void query_refs_print_one(const ZProgramGraph *graph, const ZProgramGraphResolutionReference *ref, const char *indent, bool handles) {
   const ZProgramGraphNode *function = z_program_graph_query_enclosing_function(graph, ref ? ref->node_id : NULL);
   printf("%s%s %s", indent ? indent : "", ref && ref->kind ? ref->kind : "ref", ref && ref->node_id ? ref->node_id : "");
   if (function && query_ref_text_present(function->name)) printf(" fn:%s", function->name);
+  if (handles) {
+    const ZProgramGraphNode *statement = z_program_graph_query_enclosing_statement(graph, ref ? ref->node_id : NULL);
+    if (statement && statement->id) printf(" stmt:%s", statement->id);
+  }
   if (ref && query_ref_text_present(ref->name)) printf(" name:%s", ref->name);
   if (ref && query_ref_text_present(ref->qualified_name)) printf(" qualified:%s", ref->qualified_name);
   if (ref && query_ref_text_present(ref->target_kind)) printf(" target:%s", ref->target_kind);
@@ -154,25 +177,25 @@ static void query_refs_print_one(const ZProgramGraph *graph, const ZProgramGraph
   printf("\n");
 }
 
-void z_program_graph_query_print_function_calls_text(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *function, const char *filter, const char *indent) {
+void z_program_graph_query_print_function_calls_text(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *function, const char *filter, const char *indent, bool handles) {
   size_t count = 0;
   for (size_t i = 0; resolution && function && i < resolution->reference_len; i++) {
     const ZProgramGraphResolutionReference *ref = &resolution->references[i];
     if (!z_program_graph_query_text_eq(ref->kind, "call") || !query_refs_under_function(graph, ref, function) || !z_program_graph_query_reference_matches(ref, filter)) continue;
     if (count == 0) printf("%scalls:\n", indent ? indent : "");
-    query_refs_print_one(graph, ref, indent && indent[0] ? "      " : "  ");
+    query_refs_print_one(graph, ref, indent && indent[0] ? "      " : "  ", handles);
     count++;
   }
 }
 
-void z_program_graph_query_print_reference_section_text(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *title, const char *filter, bool calls_only, const char *function_filter) {
+void z_program_graph_query_print_reference_section_text(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *title, const char *filter, bool calls_only, const char *function_filter, bool handles) {
   if (!filter || !filter[0]) return;
   printf("\n%s:\n", title ? title : "references");
   size_t count = 0;
   for (size_t i = 0; resolution && i < resolution->reference_len; i++) {
     const ZProgramGraphResolutionReference *ref = &resolution->references[i];
     if (!query_refs_include(graph, ref, filter, calls_only, function_filter)) continue;
-    query_refs_print_one(graph, ref, "  ");
+    query_refs_print_one(graph, ref, "  ", handles);
     count++;
   }
   if (count == 0) printf("  (none)\n");

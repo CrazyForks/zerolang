@@ -1003,7 +1003,7 @@ for (const code of [...emittableDiagnosticCodes].sort()) {
 
 const graphHelp = zero(["inspect", "--help"]).stdout;
 assert.match(graphHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[graph-input\]; zero import \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[project\|zero\.toml\|zero\.json\|file\.0\]/);
-assert.match(graphHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(graphHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\|--handles\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(graphHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(graphHelp, /zero source-map \[--json\] \[graph-input\]/);
 assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
@@ -1038,7 +1038,7 @@ assert.match(rootHelp, /zero check \[--json\] \[--target <target>\] \[--emit exe
 assert.match(rootHelp, /zero fix --plan --json \[graph-input\]/);
 assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file\|->\|--replace-in-fn <name> --old <text> --new <text>\)/);
 assert.match(rootHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\]/);
-assert.match(rootHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(rootHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\|--handles\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(rootHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(rootHelp, /zero source-map \[--json\] \[graph-input\]/);
 assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
@@ -1067,7 +1067,7 @@ assert(graphPatchHelp.indexOf("--body-file - <<'EOF'") < graphPatchHelp.indexOf(
 assert.match(graphPatchHelp, /--replace-in-fn/);
 assert.match(graphPatchHelp, /zero patch \. --replace-in-fn greet --old 'return 1' --new 'return 2'/);
 assert.match(graphPatchHelp, /--old must match the body text zero view --fn <name> prints exactly once/);
-assert.match(graphPatchHelp, /advanced: node-level ops \(see zero query --handles\)/);
+assert.match(graphPatchHelp, /advanced: node-level ops \(see zero view --fn <name> --handles\)/);
 const patchHelpInFnIdx = graphPatchHelp.indexOf("--replace-in-fn greet");
 const patchHelpReplaceFnIdx = graphPatchHelp.indexOf("--replace-fn greet --body-file - <<'EOF'");
 const patchHelpGrammarIdx = graphPatchHelp.indexOf("zero-program-graph-patch v1 files");
@@ -1262,11 +1262,58 @@ assert.match(reconcileHelp, /zero reconcile zero\.graph --source src\/main\.0/);
 assert.match(reconcileHelp, /zero reconcile --json \. --source src\/main\.0/);
 assert.match(reconcileHelp, /zero reconcile --json baseline\.graph --source \./);
 const viewHelp = zero(["view", "--help"]).stdout;
-assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name> \[--around <text>\|--handles\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(viewHelp, /zero view --fn handleLine \./);
 assert.match(viewHelp, /--outline <module-or-file> prints function signatures/);
 assert.match(viewHelp, /--around <text> prints only the enclosing block/);
 assert.match(viewHelp, /close matches/);
+// --- think-in-graph addressing: zero view --fn <name> --handles ---
+const viewPlainMain = zero(["view", "--fn", "main", queryScopeRoot]).stdout;
+const viewHandlesMain = zero(["view", "--fn", "main", "--handles", queryScopeRoot]).stdout;
+assert.equal(viewHandlesMain.replace(/  \/\/ [^\n]*$/gm, ""), viewPlainMain, "--handles must only add margin comments");
+assert.match(viewHandlesMain, /let total: usize = dealsTotal\(41\)  \/\/ #\S+\n/, "every statement line gains a trailing handle comment");
+assert.match(viewHandlesMain, /if total == 42 \{  \/\/ #\S+ #\S+\n/, "compound headers show the stmt handle and the clause block handle");
+assert(viewHandlesMain.length <= viewPlainMain.length * 1.3, `--handles annotation overhead must stay under 30%, got ${Math.round((viewHandlesMain.length / viewPlainMain.length - 1) * 1000) / 10}%`);
+const viewHandlesNoFn = zero(["view", "--handles", queryScopeRoot], { allowFailure: true });
+assert.notEqual(viewHandlesNoFn.code, 0);
+assert.match(`${viewHandlesNoFn.stdout}${viewHandlesNoFn.stderr}`, /--handles requires --fn <name>/);
+
+// refs and find rows gain the enclosing statement handle with --handles
+const refsHandlesText = execFileSync(zeroBin, ["query", "--refs", "dealsTotal", "--handles"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(refsHandlesText, /call #expr_\S+ fn:main stmt:#stmt_\S+/, "--refs --handles rows show the enclosing statement handle");
+const refsPlainText = execFileSync(zeroBin, ["query", "--refs", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.doesNotMatch(refsPlainText, / stmt:#/, "--refs without --handles stays unchanged");
+const refsHandlesJson = json(["query", "--json", "--refs", "dealsTotal", queryScopeRoot]).body;
+assert(refsHandlesJson.references.some((ref: any) => typeof ref.stmt === "string" && ref.stmt.startsWith("#stmt_")), "refs JSON rows carry the enclosing statement handle");
+const findHandlesText = execFileSync(zeroBin, ["query", "--find", "dealsTotal", "--handles"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(findHandlesText, /Identifier #expr_\S+ name:dealsTotal stmt:#stmt_\S+/, "--find --handles match rows show the enclosing statement handle");
+
+// the printed handles are the identifiers zero patch accepts: set-by-handle round trip
+const letHandle = viewHandlesMain.match(/let total[^\n]*  \/\/ (#\S+)$/m)?.[1];
+assert(letHandle, "let statement line carries a handle");
+const letNode = json(["query", "--json", "--node", letHandle, "--depth", "2", queryScopeRoot]).body;
+assert.equal(letNode.node.selected.kind, "Let", "short handles resolve in zero query --node");
+const letCall = letNode.node.children.find((edge: any) => edge.kind === "expr");
+const letLiteralId = letCall?.children?.find((edge: any) => edge.kind === "arg")?.node?.id;
+assert(letLiteralId, "literal argument node is reachable from the statement handle");
+const setByHandle = zero(["patch", queryScopeRoot, "--op", `set node="${letLiteralId}" field="value" expect="41" value="43"`]);
+assert.equal(setByHandle.code, 0);
+const viewAfterSet = zero(["view", "--fn", "main", "--handles", queryScopeRoot]).stdout;
+assert.match(viewAfterSet, /let total: usize = dealsTotal\(43\)  \/\/ #\S+\n/, "set-by-handle edit shows up in the handles view");
+
+// clause block handles drive replaceBlockBody directly from the view output
+const ifClause = viewAfterSet.match(/if total == 42 \{  \/\/ (#\S+) (#\S+)$/m);
+assert(ifClause, "if header carries stmt and clause block handles");
+const clausePatch = zero(["patch", queryScopeRoot, "--patch-text", `zero-program-graph-patch v1\nreplaceBlockBody ${ifClause[2]}\n  check world.out.write "clause by handle\\n"\nend\n`]);
+assert.equal(clausePatch.code, 0);
+assert.match(zero(["view", "--fn", "main", queryScopeRoot]).stdout, /clause by handle/, "replaceBlockBody accepts the clause handle printed by --handles");
+
+// GPH004 with a near-miss handle names the nearest existing handle
+const nearMiss = `${letHandle.slice(0, -1)}${letHandle.endsWith("z") ? "y" : "z"}`;
+const nearMissPatch = zero(["patch", queryScopeRoot, "--op", `set node="${nearMiss}" field="value" value="9"`], { allowFailure: true });
+assert.notEqual(nearMissPatch.code, 0);
+assert.match(nearMissPatch.stderr, /patch node was not found; nearest: #/, "GPH004 suggests the nearest handle");
+
 rmSync(queryScopeRoot, { force: true, recursive: true });
 const repoGraphStatus = json(["status", "--json", "."]).body;
 assert.equal(repoGraphStatus.ok, true);

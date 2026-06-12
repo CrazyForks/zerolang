@@ -4526,6 +4526,10 @@ static bool parse_graph_query_option(int argc, char **argv, int *index, Command 
     else command->view_around = argv[++(*index)];
     return true;
   }
+  if (handles_selector && view_command) {
+    command->query_handles = true;
+    return true;
+  }
   if (!query_command) {
     command->unknown_flag = arg;
     return true;
@@ -13537,6 +13541,19 @@ static int run_graph_dump_input_command(const Command *command, const ZTargetInf
 }
 
 static int run_graph_view_command(const Command *command, ZDiag *diag) {
+  if (command->query_handles && (!command->query_function || command->view_around || command->view_outline)) {
+    diag->code = 2002;
+    diag->path = command->input;
+    diag->line = 1;
+    diag->column = 1;
+    diag->length = 1;
+    snprintf(diag->message, sizeof(diag->message), "--handles requires --fn <name>%s", command->view_around || command->view_outline ? " without --around or --outline" : "");
+    snprintf(diag->expected, sizeof(diag->expected), "zero view --fn <name> --handles [graph-input]");
+    snprintf(diag->actual, sizeof(diag->actual), "--handles");
+    snprintf(diag->help, sizeof(diag->help), "--handles prints one function's source with a trailing // #handle comment per statement; the handles are the node ids zero patch --op accepts");
+    print_command_diag(command, command->input, diag);
+    return 1;
+  }
   if (command->view_around && !command->query_function) {
     diag->code = 2002;
     diag->path = command->input;
@@ -13595,6 +13612,8 @@ static int run_graph_view_command(const Command *command, ZDiag *diag) {
     view_ok = z_program_graph_append_view_outline(&view, &graph, command->input, command->view_outline, diag);
   } else if (command->query_function && command->view_around) {
     view_ok = z_program_graph_append_view_function_around(&view, &graph, command->input, command->query_function, command->view_around, diag);
+  } else if (command->query_function && command->query_handles) {
+    view_ok = z_program_graph_append_view_function_handles(&view, &graph, command->input, command->query_function, diag);
   } else if (command->query_function) {
     view_ok = z_program_graph_append_view_function(&view, &graph, command->input, command->query_function, diag);
   } else {

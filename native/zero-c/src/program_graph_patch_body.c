@@ -1,5 +1,6 @@
 #include "program_graph_patch_body.h"
 #include "canonical_text.h"
+#include "program_graph_handle.h"
 #include "program_graph_import.h"
 
 #include <ctype.h>
@@ -709,7 +710,27 @@ static bool body_signature_source(ZProgramGraph *graph, const char *function_nam
   size_t count = 0;
   ZProgramGraphNode *fn = body_find_function(graph, function_name, &count);
   if (!fn) {
-    body_fail(result, op, count > 1 ? "GPH003" : "GPH004", count > 1 ? "replaceFunctionBody function name is ambiguous" : "replaceFunctionBody function was not found", function_name, "");
+    if (count > 1) {
+      body_fail(result, op, "GPH003", "replaceFunctionBody function name is ambiguous", function_name, "");
+      return false;
+    }
+    const ZProgramGraphNode *nearest = NULL;
+    size_t nearest_distance = 0;
+    size_t threshold = (function_name ? strlen(function_name) : 0) / 3 + 2;
+    for (size_t i = 0; graph && function_name && i < graph->node_len; i++) {
+      const ZProgramGraphNode *node = &graph->nodes[i];
+      if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->name || !node->name[0]) continue;
+      size_t distance = z_program_graph_handle_distance(function_name, node->name);
+      if (distance > threshold) continue;
+      if (!nearest || distance < nearest_distance) {
+        nearest = node;
+        nearest_distance = distance;
+      }
+    }
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "replaceFunctionBody function was not found; nearest: %s %s", nearest->name, nearest->id ? nearest->id : "");
+    else snprintf(message, sizeof(message), "replaceFunctionBody function was not found");
+    body_fail(result, op, "GPH004", message, function_name, "");
     return false;
   }
   if (fn->is_public) zbuf_append(source, "pub ");
@@ -823,8 +844,20 @@ bool z_program_graph_patch_apply_replace_function_body(ZProgramGraph *graph, ZPr
 
 bool z_program_graph_patch_apply_replace_block_body(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
   const char *block_id = op && op->node && op->node[0] ? op->node : "";
-  ZProgramGraphNode *target_block = body_find_node(graph, block_id);
-  if (!target_block) { body_fail(result, op, "GPH004", "replaceBlockBody block was not found", "Block node id", block_id); return false; }
+  bool block_ambiguous = false;
+  ZProgramGraphNode *target_block = (ZProgramGraphNode *)z_program_graph_resolve_handle(graph, block_id, &block_ambiguous);
+  if (!target_block) {
+    if (block_ambiguous) {
+      body_fail(result, op, "GPH003", "replaceBlockBody block handle is ambiguous", "a unique node id or handle prefix", block_id);
+      return false;
+    }
+    const char *nearest = z_program_graph_nearest_handle(graph, block_id);
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "replaceBlockBody block was not found; nearest: %s", nearest);
+    else snprintf(message, sizeof(message), "replaceBlockBody block was not found");
+    body_fail(result, op, "GPH004", message, "Block node id", block_id);
+    return false;
+  }
   if (target_block->kind != Z_PROGRAM_GRAPH_NODE_BLOCK) { body_fail(result, op, "GPH003", "replaceBlockBody target must be a Block node", "Block", z_program_graph_node_kind_name(target_block->kind)); return false; }
   char *target_body_id = z_strdup(target_block->id ? target_block->id : "");
   char *target_path = z_strdup(target_block->path && target_block->path[0] ? target_block->path : "src/main.0");
@@ -858,3 +891,4 @@ bool z_program_graph_patch_apply_replace_block_body(ZProgramGraph *graph, ZProgr
   op->ok = true;
   return true;
 }
+

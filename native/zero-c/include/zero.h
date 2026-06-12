@@ -180,6 +180,7 @@ struct MatchArm {
   char *payload_name;
   Expr *guard;
   StmtVec body;
+  char *body_graph_id;
   int line;
   int column;
 };
@@ -202,6 +203,9 @@ struct Stmt {
   StmtVec then_body;
   StmtVec else_body;
   MatchArmVec match_arms;
+  char *graph_id;
+  char *then_graph_id;
+  char *else_graph_id;
   int line;
   int column;
 };

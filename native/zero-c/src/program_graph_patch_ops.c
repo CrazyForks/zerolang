@@ -1,4 +1,5 @@
 #include "program_graph_patch.h"
+#include "program_graph_handle.h"
 #include "program_graph_patch_body.h"
 #include "program_graph_patch_builders.h"
 #include "type_core.h"
@@ -102,6 +103,25 @@ static const ZProgramGraphNode *patch_find_node_const(const ZProgramGraph *graph
   for (size_t i = 0; graph && i < graph->node_len; i++) {
     if (patch_text_eq(graph->nodes[i].id, node_id)) return &graph->nodes[i];
   }
+  return NULL;
+}
+
+/* Resolves a node handle (full id, segment, or unique segment prefix) and
+ * reports GPH003/GPH004 with the nearest existing handle on failure. */
+static ZProgramGraphNode *patch_resolve_node_handle(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, const char *handle, const char *role) {
+  bool ambiguous = false;
+  const ZProgramGraphNode *node = z_program_graph_resolve_handle(graph, handle, &ambiguous);
+  if (node) return (ZProgramGraphNode *)node;
+  char message[160];
+  if (ambiguous) {
+    snprintf(message, sizeof(message), "patch %s handle is ambiguous", role ? role : "node");
+    patch_op_fail(result, op, "GPH003", message, "a unique node id or handle prefix; zero view --fn <name> --handles prints them", handle);
+    return NULL;
+  }
+  const char *nearest = z_program_graph_nearest_handle(graph, handle);
+  if (nearest) snprintf(message, sizeof(message), "patch %s was not found; nearest: %s", role ? role : "node", nearest);
+  else snprintf(message, sizeof(message), "patch %s was not found", role ? role : "node");
+  patch_op_fail(result, op, "GPH004", message, handle, "");
   return NULL;
 }
 
@@ -474,7 +494,27 @@ static ZProgramGraphNode *patch_require_function(ZProgramGraph *graph, ZProgramG
   size_t count = 0;
   ZProgramGraphNode *function = patch_find_function_named(graph, name, &count);
   if (function) return function;
-  patch_op_fail(result, op, count > 1 ? "GPH003" : "GPH004", count > 1 ? "patch function name is ambiguous" : "patch function was not found", name, "");
+  if (count > 1) {
+    patch_op_fail(result, op, "GPH003", "patch function name is ambiguous", name, "");
+    return NULL;
+  }
+  const ZProgramGraphNode *nearest = NULL;
+  size_t nearest_distance = 0;
+  size_t threshold = (name ? strlen(name) : 0) / 3 + 2;
+  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->name || !node->name[0]) continue;
+    size_t distance = z_program_graph_handle_distance(name, node->name);
+    if (distance > threshold) continue;
+    if (!nearest || distance < nearest_distance) {
+      nearest = node;
+      nearest_distance = distance;
+    }
+  }
+  char message[160];
+  if (nearest) snprintf(message, sizeof(message), "patch function was not found; nearest: %s %s", nearest->name, nearest->id ? nearest->id : "");
+  else snprintf(message, sizeof(message), "patch function was not found");
+  patch_op_fail(result, op, "GPH004", message, name, "");
   return NULL;
 }
 
@@ -820,21 +860,28 @@ static bool patch_apply_insert_edge(ZProgramGraph *graph, ZProgramGraphPatchResu
     patch_op_fail(result, op, "GPH003", "patch edge kind must be a simple ProgramGraph edge name", "edge identifier", op->edge);
     return false;
   }
-  if (!patch_find_node(graph, op->from)) {
-    patch_op_fail(result, op, "GPH004", "patch edge source was not found", op->from, "");
-    return false;
-  }
-  if (!patch_edge_target_exists(graph, target, op->to)) {
+  ZProgramGraphNode *from_node = patch_resolve_node_handle(graph, result, op, op->from, "edge source");
+  if (!from_node) return false;
+  const char *to_id = op->to;
+  if (target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE) {
+    ZProgramGraphNode *to_node = patch_resolve_node_handle(graph, result, op, op->to, "edge target");
+    if (!to_node) return false;
+    to_id = to_node->id;
+  } else if (!patch_edge_target_exists(graph, target, op->to)) {
     patch_op_fail(result, op, "GPH004", "patch edge target was not found", op->to, "");
     return false;
   }
-  if (patch_duplicate_ordered_edge(graph, op->from, op->edge, target, op->order)) {
+  char *from_id = z_strdup(from_node->id ? from_node->id : "");
+  char *to_copy = z_strdup(to_id ? to_id : "");
+  if (patch_duplicate_ordered_edge(graph, from_id, op->edge, target, op->order)) {
     patch_op_fail(result, op, "GPH005", "patch edge order is already occupied", "unused ordered edge slot", op->edge);
+    free(from_id);
+    free(to_copy);
     return false;
   }
   ZProgramGraphEdge *edge = patch_append_edge(graph);
-  edge->from = z_strdup(op->from);
-  edge->to = z_strdup(op->to);
+  edge->from = from_id;
+  edge->to = to_copy;
   edge->kind = z_strdup(op->edge);
   edge->target = target;
   edge->order = op->order;
@@ -851,21 +898,23 @@ static bool patch_apply_insert(ZProgramGraph *graph, ZProgramGraphPatchResult *r
     patch_op_fail(result, op, "GPH005", "insert node id already exists", "unused node id", op->node);
     return false;
   }
-  if (!patch_find_node(graph, op->parent)) {
-    patch_op_fail(result, op, "GPH004", "insert parent node was not found", op->parent, "");
-    return false;
-  }
+  ZProgramGraphNode *parent_node = patch_resolve_node_handle(graph, result, op, op->parent, "insert parent node");
+  if (!parent_node) return false;
+  char *parent_id = z_strdup(parent_node->id ? parent_node->id : "");
   if (!patch_edge_kind_valid(op->edge)) {
     patch_op_fail(result, op, "GPH003", "insert edge kind must be a simple ProgramGraph edge name", "edge identifier", op->edge);
+    free(parent_id);
     return false;
   }
   ZProgramGraphNodeKind kind = Z_PROGRAM_GRAPH_NODE_EXPRESSION;
   if (!patch_parse_node_kind(op->kind, &kind)) {
     patch_op_fail(result, op, "GPH003", "insert kind must name a ProgramGraph node kind", "ProgramGraph node kind", op->kind);
+    free(parent_id);
     return false;
   }
-  if (patch_duplicate_ordered_edge(graph, op->parent, op->edge, Z_PROGRAM_GRAPH_EDGE_TARGET_NODE, op->order)) {
+  if (patch_duplicate_ordered_edge(graph, parent_id, op->edge, Z_PROGRAM_GRAPH_EDGE_TARGET_NODE, op->order)) {
     patch_op_fail(result, op, "GPH005", "insert edge order is already occupied", "unused ordered edge slot", op->edge);
+    free(parent_id);
     return false;
   }
   ZProgramGraphNode candidate = {
@@ -883,13 +932,16 @@ static bool patch_apply_insert(ZProgramGraph *graph, ZProgramGraphPatchResult *r
     .fallible = op->has_fallible_value && op->fallible_value,
     .export_c = op->has_export_c_value && op->export_c_value,
   };
-  if (!patch_validate_node_payload(&candidate, result, op)) return false;
+  if (!patch_validate_node_payload(&candidate, result, op)) {
+    free(parent_id);
+    return false;
+  }
   ZProgramGraphNode *node = patch_append_node(graph);
   node->id = z_strdup(op->node);
   node->kind = kind;
   patch_copy_node_attrs(node, op);
   ZProgramGraphEdge *edge = patch_append_edge(graph);
-  edge->from = z_strdup(op->parent);
+  edge->from = parent_id;
   edge->to = z_strdup(op->node);
   edge->kind = z_strdup(op->edge);
   edge->target = Z_PROGRAM_GRAPH_EDGE_TARGET_NODE;
@@ -899,11 +951,8 @@ static bool patch_apply_insert(ZProgramGraph *graph, ZProgramGraphPatchResult *r
 }
 
 static bool patch_apply_replace(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
-  ZProgramGraphNode *node = patch_find_node(graph, op->node);
-  if (!node) {
-    patch_op_fail(result, op, "GPH004", "patch node was not found", op->node, "");
-    return false;
-  }
+  ZProgramGraphNode *node = patch_resolve_node_handle(graph, result, op, op->node, "node");
+  if (!node) return false;
   patch_replace_text(&op->actual, node->node_hash);
   if (op->has_expected && !patch_text_eq(op->expected, op->actual)) {
     patch_op_fail(result, op, "GPH005", "patch node hash precondition failed", op->expected, op->actual);
@@ -935,11 +984,8 @@ static bool patch_apply_replace(ZProgramGraph *graph, ZProgramGraphPatchResult *
 }
 
 static bool patch_apply_rename(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
-  ZProgramGraphNode *node = patch_find_node(graph, op->node);
-  if (!node) {
-    patch_op_fail(result, op, "GPH004", "patch node was not found", op->node, "");
-    return false;
-  }
+  ZProgramGraphNode *node = patch_resolve_node_handle(graph, result, op, op->node, "node");
+  if (!node) return false;
   patch_replace_text(&op->actual, node->name);
   if (op->has_expected && !patch_text_eq(op->expected, op->actual)) {
     patch_op_fail(result, op, "GPH005", "patch rename precondition failed", op->expected, op->actual);
@@ -1091,7 +1137,9 @@ static bool patch_delete_external_reference_allowed(const ZProgramGraph *graph, 
   return edge == root_parent_edge;
 }
 static bool patch_apply_delete(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
-  size_t root = patch_node_index(graph, op->node);
+  ZProgramGraphNode *root_node = patch_resolve_node_handle(graph, result, op, op->node, "node");
+  if (!root_node) return false;
+  size_t root = patch_node_index(graph, root_node->id);
   if (root == (size_t)-1) {
     patch_op_fail(result, op, "GPH004", "patch node was not found", op->node, "");
     return false;
@@ -1117,7 +1165,7 @@ static bool patch_apply_delete(ZProgramGraph *graph, ZProgramGraphPatchResult *r
     patch_op_fail(result, op, "GPH003", "patch delete subtree cannot include the module root", "non-module owned subtree", graph->nodes[i].id);
     return false;
   }
-  const ZProgramGraphEdge *root_parent_edge = patch_delete_root_parent_edge(graph, marked, op->node);
+  const ZProgramGraphEdge *root_parent_edge = patch_delete_root_parent_edge(graph, marked, graph->nodes[root].id);
   for (size_t i = 0; i < graph->edge_len; i++) {
     const ZProgramGraphEdge *edge = &graph->edges[i];
     if (!patch_edge_target_removed_by_delete(graph, edge, marked)) continue;
@@ -1187,11 +1235,8 @@ bool z_program_graph_patch_apply_operation(ZProgramGraph *graph, ZProgramGraphPa
   if (patch_text_eq(op->op, "replaceFunctionBody")) return z_program_graph_patch_apply_replace_function_body(graph, result, op);
   if (patch_text_eq(op->op, "replaceBlockBody")) return z_program_graph_patch_apply_replace_block_body(graph, result, op);
 
-  ZProgramGraphNode *node = patch_find_node(graph, op->node);
-  if (!node) {
-    patch_op_fail(result, op, "GPH004", "patch node was not found", op->node, "");
-    return false;
-  }
+  ZProgramGraphNode *node = patch_resolve_node_handle(graph, result, op, op->node, "node");
+  if (!node) return false;
 
   char **text_slot = patch_node_text_field(node, op->field);
   if (text_slot) {

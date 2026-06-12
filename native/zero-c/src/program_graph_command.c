@@ -121,7 +121,7 @@ void z_program_graph_print_command_help(void) {
   printf("Usage: zero init [--template cli|lib|package] [project-path]; zero query|view|diff|dump|inspect|validate|source-map|roundtrip [--json] [graph-input]; zero status|verify-projection|import|export|merge [--json] [project|zero.toml|zero.json|file.0]\n\n");
   printf("Graph-first project usage: zero init [--json] [--manifest toml|json] [--format text|binary] [--template cli|lib|package] [project-path]\n");
   printf("Output usage: zero dump|validate|roundtrip [--json] [--format text|binary] --out <program-graph-artifact> [graph-input]; zero import [--json] [--format text|binary] --out <program-graph-artifact> [project|zero.toml|zero.json|file.0]\n");
-  printf("View output usage: zero view [--json] [--fn <name> [--around <text>]] [--outline <module-or-file>] [--out <file.0>] [graph-input]\n");
+  printf("View output usage: zero view [--json] [--fn <name> [--around <text>|--handles]] [--outline <module-or-file>] [--out <file.0>] [graph-input]\n");
   printf("Diff textconv usage: zero diff [--fn <name>] [graph-input]\n");
   printf("Source map usage: zero source-map [--json] [graph-input]\n");
   printf("Query usage: zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [--handles] [graph-input|name]\n");
