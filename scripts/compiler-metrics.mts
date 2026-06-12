@@ -94,7 +94,7 @@ const fileBudgets: Record<string, FileBudget> = {
   "native/zero-c/src/emit_macho_x64.c": { maxLines: 2188, maxStrcmpCalls: 1 },
   "native/zero-c/src/macho_emit_state.c": { maxLines: 231, maxStrcmpCalls: 0 },
   "native/zero-c/src/macho_emit_state.h": { maxLines: 116, maxStrcmpCalls: 0 },
-  "native/zero-c/src/emit_elf64.c": { maxLines: 3410, maxStrcmpCalls: 3 },
+  "native/zero-c/src/emit_elf64.c": { maxLines: 3430, maxStrcmpCalls: 3 },
   "native/zero-c/src/emit_elf_aarch64.c": { maxLines: 469, maxStrcmpCalls: 1 },
   "native/zero-c/src/emit_llvm_ir.c": { maxLines: 970, maxStrcmpCalls: 9 },
   "native/zero-c/src/emit_coff.c": { maxLines: 2089, maxStrcmpCalls: 1 },

@@ -12377,9 +12377,14 @@ static bool repository_graph_oracle_collect(const Command *command, const ZTarge
   ZDiag attach_diag = {0};
   if (manifest_input && !z_program_graph_manifest_attach_metadata_to_input(&input, manifest_input, &attach_diag)) {
     if (fatal) {
+      const char *attach_path = attach_diag.path;
       *fatal = attach_diag;
-      if (fatal->path) z_diag_set_path_copy(fatal, fatal->path);
+      if (attach_path) z_diag_set_path_copy(fatal, attach_path);
       else z_diag_set_path_copy(fatal, diag_path);
+      /* fatal now owns its own copy; release the attach diag's original */
+      free((char *)attach_path);
+    } else {
+      free((char *)attach_diag.path);
     }
     z_free_source(&input);
     return false;
@@ -14182,6 +14187,8 @@ static int run_repository_graph_check_command(Command *command, const ZTargetInf
   if (!z_program_graph_manifest_attach_metadata_to_input(&input, command->input, &diag)) {
     if (command->json) print_command_diag_json(command, diag.path ? diag.path : command->input, &diag);
     else print_diag(diag.path ? diag.path : command->input, &diag);
+    /* metadata attach diags always own their path copies */
+    free((char *)diag.path);
     z_free_source(&input);
     z_program_graph_store_free(&store);
     return 1;

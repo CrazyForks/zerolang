@@ -695,11 +695,14 @@ function assertMachOLoadCommand(bytes, expectedCommand, expectedSize) {
   assert.fail(`missing Mach-O load command 0x${expectedCommand.toString(16)}`);
 }
 
-function elfPackedErrorBytes(code) {
+function elfPackedErrorBytes(code, flagged = false) {
+  // Raises functions pack (code << 32); world-main envelopes fold the error
+  // flag into the same movabs as (code << 32) | 1, since a separate 32-bit
+  // flag mov would zero-extend over the code.
   const bytes = Buffer.alloc(10);
   bytes[0] = 0x48;
   bytes[1] = 0xb8;
-  bytes.writeBigUInt64LE(BigInt(code) << 32n, 2);
+  bytes.writeBigUInt64LE((BigInt(code) << 32n) | (flagged ? 1n : 0n), 2);
   return bytes;
 }
 
@@ -6845,9 +6848,9 @@ const directElfFsFallibleReport = json(["build", "--json", "--emit", "exe", "--b
 const directElfFsFallibleBytes = readFileSync(directElfFsFalliblePath);
 assert.equal(directElfFsFallibleReport.generatedCBytes, 0);
 assert.equal(directElfFsFallibleReport.objectBackend.objectEmission.path, "direct-elf64-exe");
-assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(2)));
-assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(3)));
-assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(4)));
+assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(2, true)));
+assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(3, true)));
+assert(directElfFsFallibleBytes.includes(elfPackedErrorBytes(4, true)));
 const directArm64ElfPath = join(outDir, "direct-arm64.o");
 rmSync(directArm64ElfPath, { force: true });
 const directArm64ElfReport = json(["build", "--json", "--emit", "obj", "--target", "linux-arm64", "examples/direct-call-add.graph", "--out", directArm64ElfPath]).body;

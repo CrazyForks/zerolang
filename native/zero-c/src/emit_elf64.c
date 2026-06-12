@@ -432,8 +432,11 @@ static void elf_emit_packed_error_rax(ZBuf *code, unsigned code_value) {
 }
 
 static void elf_emit_packed_error_epilogue(ZBuf *code, const IrFunction *fun, const ElfEmitContext *ctx, unsigned code_value) {
-  elf_emit_packed_error_rax(code, code_value);
-  if (!fun->raises) z_x64_emit_mov_eax_u32(code, 1);
+  /* Non-raises (world-main) envelopes carry the error flag in the low bits.
+     A 32-bit mov after the movabs zero-extends and erases the packed code,
+     so fold the flag into the one 64-bit immediate. */
+  if (!fun->raises) z_x64_emit_mov_rax_u64(code, (((uint64_t)code_value) << 32) | 1u);
+  else elf_emit_packed_error_rax(code, code_value);
   elf_emit_epilogue(code, fun, ctx);
 }
 
@@ -2510,6 +2513,14 @@ static bool elf_emit_read_all_open_and_tell(ZBuf *text, const IrFunction *fun, c
   z_x64_emit_syscall(text);
   z_x64_emit_test_rax_rax(text, true);
   *tell_fail = elf_emit_js_placeholder(text);
+  /* The size probe parked the cursor at EOF; rewind before reading or the
+     read returns 0 bytes and an empty buffer masquerades as success. */
+  z_x64_emit_push_rax(text);
+  z_x64_emit_xor_reg_reg(text, 6, true);
+  z_x64_emit_xor_reg_reg(text, 2, true);
+  z_x64_emit_mov_eax_u32(text, 8);
+  z_x64_emit_syscall(text);
+  z_x64_emit_pop_rax(text);
   return true;
 }
 
@@ -2519,7 +2530,9 @@ static bool elf_emit_read_all_limit_check(ZBuf *text, const IrFunction *fun, con
   if (!elf_emit_value(text, fun, value->right, ctx, diag)) return false;
   z_x64_emit_pop_reg64(text, 1);
   z_x64_emit_cmp_reg_reg(text, 1, 0, true);
-  size_t size_ok = z_x64_emit_jcc32_placeholder(text, 0x83);
+  /* proceed when size <= limit (JBE); JAE inverted this and raised TooLarge
+     for every file smaller than its read limit */
+  size_t size_ok = z_x64_emit_jcc32_placeholder(text, 0x86);
   z_x64_emit_pop_rax(text);
   elf_emit_close_rax_fd(text);
   elf_emit_packed_error_epilogue(text, fun, ctx, IR_ERROR_TOO_LARGE);
