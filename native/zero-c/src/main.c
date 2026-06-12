@@ -2188,6 +2188,9 @@ static void touch_program_graph_compiler_caches(SourceInput *input, const ZTarge
   input->interface_cache_hit = compiler_cache_touch("interface", graph_interface_cache_key(input, graph_hash));
   input->check_cache_hit = compiler_cache_touch("checked-body", graph_compile_cache_key(input, target, NULL, "checked-body", graph_hash));
   input->specialization_cache_hit = compiler_cache_touch("specialization", graph_compile_cache_key(input, target, profile ? profile : "release", "specialization", graph_hash));
+  /* Compile commands write caches, so any projection match verdicts that
+   * read-only verification left pending can persist alongside them. */
+  z_program_graph_projection_match_verdicts_flush();
 }
 
 static void append_compiler_phases_json(ZBuf *buf, const SourceInput *input) {

@@ -273,19 +273,46 @@ static bool projection_match_verdict_known(const ZProgramGraphStore *store, uint
   return known;
 }
 
+static char *projection_match_pending[PROJECTION_MATCH_MEMO_SLOTS];
+static size_t projection_match_pending_len;
+
 static void projection_match_verdict_remember(const ZProgramGraphStore *store, uint64_t fingerprint) {
   projection_match_memo[projection_match_memo_next] = fingerprint;
   projection_match_memo_next = (projection_match_memo_next + 1) % PROJECTION_MATCH_MEMO_SLOTS;
   if (projection_match_memo_len < PROJECTION_MATCH_MEMO_SLOTS) projection_match_memo_len++;
-  /* Persist only when the cache directory already exists so read-only
-   * commands such as status never create workspace state. */
   char *path = projection_match_cache_path(store, fingerprint);
-  FILE *file = fopen(path, "wb");
-  if (file) {
-    fputs("ok\n", file);
-    fclose(file);
+  const char *override = getenv("ZERO_CACHE_DIR");
+  if (!override || !override[0]) {
+    /* Persist only when the workspace already carries compiler state so
+     * read-only commands such as status never create .zero. Compile
+     * commands flush pending verdicts once their cache writes land. */
+    char *dir = projection_dirname_of(store->path ? store->path : "zero.graph");
+    char *state_dir = projection_join_path(dir, ".zero");
+    bool has_state = z_program_graph_store_path_exists(state_dir);
+    free(state_dir);
+    free(dir);
+    if (!has_state) {
+      if (projection_match_pending_len < PROJECTION_MATCH_MEMO_SLOTS) {
+        projection_match_pending[projection_match_pending_len++] = path;
+      } else {
+        free(path);
+      }
+      return;
+    }
   }
+  ZDiag write_diag = {0};
+  (void)z_write_file(path, "ok\n", &write_diag);
   free(path);
+}
+
+void z_program_graph_projection_match_verdicts_flush(void) {
+  for (size_t i = 0; i < projection_match_pending_len; i++) {
+    ZDiag write_diag = {0};
+    (void)z_write_file(projection_match_pending[i], "ok\n", &write_diag);
+    free(projection_match_pending[i]);
+    projection_match_pending[i] = NULL;
+  }
+  projection_match_pending_len = 0;
 }
 
 static bool projection_source_input_from_store(const ZProgramGraphStore *store, SourceInput *input, ZDiag *diag) {

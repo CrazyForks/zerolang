@@ -28,5 +28,6 @@ const char *z_program_graph_projection_state_label(const ZProgramGraphStore *sto
 bool z_program_graph_projection_write_sources(const ZProgramGraphStore *store, const ZTargetInfo *target, ZProgramGraphProjection *projection, ZDiag *diag);
 bool z_program_graph_projection_graph_from_store(const ZProgramGraphStore *store, const ZTargetInfo *target, ZProgramGraph *graph, ZDiag *diag);
 bool z_program_graph_projection_store_matches_graph(const ZProgramGraphStore *store, const ZTargetInfo *target, ZDiag *diag);
+void z_program_graph_projection_match_verdicts_flush(void);
 
 #endif
