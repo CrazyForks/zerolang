@@ -2696,13 +2696,6 @@ static bool graph_check_target_capabilities_ok(const ZProgramGraph *graph, const
   return true;
 }
 
-static bool graph_native_compiler_input_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const SourceInput *input, const ZTargetInfo *target, const char *path, ZDiag *diag) {
-  if (!graph_check_resolution_ok(graph, resolution, path, diag)) return false;
-  if (!z_program_graph_semantic_contracts_ok(graph, resolution, path, diag)) return false;
-  if (!graph_check_target_capabilities_ok(graph, resolution, target, diag)) return false;
-  return validate_package_dependencies_for_target(input, target, diag);
-}
-
 static bool graph_stored_compiler_input_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const SourceInput *input, const ZTargetInfo *target, const char *path, ZDiag *diag) {
   if (!graph_check_resolution_ok(graph, resolution, path, diag)) return false;
   if (!z_program_graph_fixed_array_length_contracts_ok(graph, resolution, path, diag)) return false;
@@ -3848,50 +3841,19 @@ static void append_backend_blocker_json(ZBuf *buf, const ZBackendBlocker *blocke
   zbuf_append(buf, "}");
 }
 
-static void print_diag_json_ex(const char *path, const ZDiag *diag, const char *safety_profile) {
+static void append_error_diag_json_object(ZBuf *bufp, const char *path, const ZDiag *diag);
+
+static void print_diag_json_list_ex(const char *path, const ZDiag *diags, size_t len, const char *safety_profile) {
   ZBuf buf;
   zbuf_init(&buf);
-  zbuf_append(&buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": false,\n  \"diagnostics\": [\n    {\n");
-  zbuf_append(&buf, "      \"severity\": \"error\",\n      \"code\": ");
-  append_json_string(&buf, diag_code(diag->code));
-  zbuf_append(&buf, ",\n      \"message\": ");
-  append_json_string(&buf, diag->message);
-  zbuf_append(&buf, ",\n      \"path\": ");
-  append_json_string(&buf, diag->path ? diag->path : path);
-  zbuf_appendf(&buf, ",\n      \"line\": %d,\n      \"column\": %d,\n      \"length\": %d,\n", diag->line, diag->column, diag->length > 0 ? diag->length : 1);
-  zbuf_append(&buf, "      \"expected\": ");
-  append_json_string(&buf, diag->expected);
-  zbuf_append(&buf, ",\n      \"actual\": ");
-  append_json_string(&buf, diag->actual);
-  zbuf_append(&buf, ",\n      \"help\": ");
-  append_json_string(&buf, diag->help);
-  zbuf_append(&buf, ",\n      \"fixSafety\": ");
-  append_json_string(&buf, diag_fix_safety(diag->code));
-  zbuf_append(&buf, ",\n      \"repair\": {\"id\": ");
-  append_json_string(&buf, diag_repair_id(diag->code));
-  zbuf_append(&buf, ", \"summary\": ");
-  append_json_string(&buf, diag_repair_summary(diag->code));
-  zbuf_append(&buf, "}");
-  if (diag->backend_blocker.present) {
-    zbuf_append(&buf, ",\n      \"backendBlocker\": ");
-    append_backend_blocker_json(&buf, &diag->backend_blocker);
+  zbuf_append(&buf, "{\n  \"schemaVersion\": 1,\n  \"ok\": false,\n  \"diagnostics\": [\n");
+  for (size_t i = 0; i < len; i++) {
+    if (i > 0) zbuf_append(&buf, ",\n");
+    zbuf_append(&buf, "    {\n");
+    append_error_diag_json_object(&buf, path, &diags[i]);
+    zbuf_append(&buf, "\n    }");
   }
-  if (diag_has_borrow_trace(diag)) {
-    zbuf_append(&buf, ",\n      \"borrowTrace\": ");
-    append_diag_borrow_trace_json(&buf, path, diag);
-  }
-  zbuf_append(&buf, ",\n      \"related\": [");
-  if ((diag->code == 7001 || diag->code == 7002 || diag->code == 7003 || diag->code == 1002 || diag->code == 1003 ||
-       diag->code == 6001 || diag->code == 6002 ||
-       diag->code == 3010 || diag->code == 3011 || diag->code == 3012 || diag->code == 3028 || diag->code == 3029) && diag->actual[0]) {
-    zbuf_append(&buf, "{\"path\":");
-    append_json_string(&buf, diag->path ? diag->path : path);
-    zbuf_appendf(&buf, ",\"line\":%d,\"column\":%d,\"message\":", diag->line, diag->column);
-    append_json_string(&buf, diag->actual);
-    zbuf_append(&buf, "}");
-  }
-  zbuf_append(&buf, "]");
-  zbuf_append(&buf, "\n    }\n  ]");
+  zbuf_append(&buf, "\n  ]");
   if (safety_profile) {
     zbuf_append(&buf, ",\n  \"safetyFacts\": ");
     append_safety_facts_json(&buf, safety_profile);
@@ -3899,6 +3861,52 @@ static void print_diag_json_ex(const char *path, const ZDiag *diag, const char *
   zbuf_append(&buf, "\n}\n");
   fputs(buf.data, stdout);
   zbuf_free(&buf);
+}
+
+static void print_diag_json_ex(const char *path, const ZDiag *diag, const char *safety_profile) {
+  print_diag_json_list_ex(path, diag, 1, safety_profile);
+}
+
+static void append_error_diag_json_object(ZBuf *buf, const char *path, const ZDiag *diag) {
+  zbuf_append(buf, "      \"severity\": \"error\",\n      \"code\": ");
+  append_json_string(buf, diag_code(diag->code));
+  zbuf_append(buf, ",\n      \"message\": ");
+  append_json_string(buf, diag->message);
+  zbuf_append(buf, ",\n      \"path\": ");
+  append_json_string(buf, diag->path ? diag->path : path);
+  zbuf_appendf(buf, ",\n      \"line\": %d,\n      \"column\": %d,\n      \"length\": %d,\n", diag->line, diag->column, diag->length > 0 ? diag->length : 1);
+  zbuf_append(buf, "      \"expected\": ");
+  append_json_string(buf, diag->expected);
+  zbuf_append(buf, ",\n      \"actual\": ");
+  append_json_string(buf, diag->actual);
+  zbuf_append(buf, ",\n      \"help\": ");
+  append_json_string(buf, diag->help);
+  zbuf_append(buf, ",\n      \"fixSafety\": ");
+  append_json_string(buf, diag_fix_safety(diag->code));
+  zbuf_append(buf, ",\n      \"repair\": {\"id\": ");
+  append_json_string(buf, diag_repair_id(diag->code));
+  zbuf_append(buf, ", \"summary\": ");
+  append_json_string(buf, diag_repair_summary(diag->code));
+  zbuf_append(buf, "}");
+  if (diag->backend_blocker.present) {
+    zbuf_append(buf, ",\n      \"backendBlocker\": ");
+    append_backend_blocker_json(buf, &diag->backend_blocker);
+  }
+  if (diag_has_borrow_trace(diag)) {
+    zbuf_append(buf, ",\n      \"borrowTrace\": ");
+    append_diag_borrow_trace_json(buf, path, diag);
+  }
+  zbuf_append(buf, ",\n      \"related\": [");
+  if ((diag->code == 7001 || diag->code == 7002 || diag->code == 7003 || diag->code == 1002 || diag->code == 1003 ||
+       diag->code == 6001 || diag->code == 6002 ||
+       diag->code == 3010 || diag->code == 3011 || diag->code == 3012 || diag->code == 3028 || diag->code == 3029) && diag->actual[0]) {
+    zbuf_append(buf, "{\"path\":");
+    append_json_string(buf, diag->path ? diag->path : path);
+    zbuf_appendf(buf, ",\"line\":%d,\"column\":%d,\"message\":", diag->line, diag->column);
+    append_json_string(buf, diag->actual);
+    zbuf_append(buf, "}");
+  }
+  zbuf_append(buf, "]");
 }
 
 static void print_diag_json(const char *path, const ZDiag *diag) {
@@ -12038,13 +12046,6 @@ static bool import_init_template_graph_store(const char *root, ZProgramGraphStor
   return ok;
 }
 
-static bool load_graph_from_checked_current_source(const Command *command, const ZTargetInfo *target, SourceInput *input, Program *program, ZProgramGraph *graph, GraphInputKind *kind, ZDiag *diag) {
-  if (!compile_input(command->input, target, "release", input, program, diag)) return false;
-  if (!graph_build_from_source_program(input, program, input->canonical_text_source, graph, diag)) return false;
-  if (kind) *kind = input->canonical_text_source ? GRAPH_INPUT_CANONICAL_SOURCE : GRAPH_INPUT_CURRENT_SOURCE;
-  return true;
-}
-
 typedef struct {
   const Command *command;
   const ZTargetInfo *target;
@@ -12055,7 +12056,7 @@ static bool load_repository_graph_checked_source_graph(void *ctx, ZProgramGraph 
   if (!loader || !loader->command) return false;
   SourceInput input = {0};
   Program program = {0};
-  bool ok = load_graph_from_checked_current_source(loader->command, loader->target, &input, &program, graph, NULL, diag);
+  bool ok = load_graph_from_current_source(loader->command, loader->target, &input, &program, graph, NULL, diag);
   z_free_program(&program);
   z_free_source(&input);
   if (!ok) z_program_graph_free(graph);
@@ -12128,23 +12129,442 @@ static bool load_graph_input_for_patch(const Command *command, SourceInput *inpu
   return reject_graph_source_input_without_store(command, diag);
 }
 
-static bool validate_repository_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, ZDiag *diag) {
-  SourceInput input = {.source_file = z_strdup(command && command->input ? command->input : "<repository-graph>")};
-  z_program_graph_seed_source_metadata(&input, graph);
-  const char *manifest_input = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
-  bool ok = z_program_graph_manifest_attach_metadata_to_input(&input, manifest_input, diag);
-  ZProgramGraphResolutionFacts resolution; z_program_graph_resolution_facts_init(&resolution);
-  if (ok) ok = z_program_graph_name_contracts_ok(graph, command->input, diag);
-  if (ok) ok = z_program_graph_collect_resolution_facts(graph, &resolution);
-  if (ok) ok = graph_native_compiler_input_ok(graph, &resolution, &input, target, command->input, diag);
-  if (!ok) {
-    if (diag->path) z_diag_set_path_copy(diag, diag->path);
-    else if (input.source_file) z_diag_set_path_copy(diag, input.source_file);
-    else diag->path = command->input;
+/*
+ * One diagnostic oracle for the repository graph sync verbs (friction #52).
+ * zero patch revalidation, zero import, and the stale-store auto-refresh all
+ * collect diagnostics through the same phases zero check runs on a package
+ * store: name contracts, reference resolution, fixed-array length contracts,
+ * target capabilities, package dependencies, and the check-time buildability
+ * gate. The active phase reports every diagnostic it finds instead of only
+ * the first, and callers diff the set against the pre-operation baseline so
+ * pre-existing diagnostics never wall an unrelated operation.
+ */
+#define GRAPH_ORACLE_MAX_PHASE_DIAGS 64
+
+typedef struct {
+  ZDiag *items;
+  char **keys;
+  size_t len;
+  size_t cap;
+} GraphOracleDiags;
+
+static void graph_oracle_diags_free(GraphOracleDiags *list) {
+  if (!list) return;
+  for (size_t i = 0; i < list->len; i++) {
+    free((char *)list->items[i].path);
+    free(list->keys[i]);
   }
+  free(list->items);
+  free(list->keys);
+  *list = (GraphOracleDiags){0};
+}
+
+static const char *graph_oracle_path_tail(const char *path) {
+  const char *slash = path ? strrchr(path, '/') : NULL;
+  return slash ? slash + 1 : (path ? path : "");
+}
+
+static void graph_oracle_diags_push(GraphOracleDiags *list, const ZDiag *diag, char *key) {
+  if (list->len == list->cap) {
+    size_t next = z_grow_capacity(list->cap, list->len + 1, 8);
+    list->items = z_checked_reallocarray(list->items, next, sizeof(ZDiag));
+    list->keys = z_checked_reallocarray(list->keys, next, sizeof(char *));
+    list->cap = next;
+  }
+  list->items[list->len] = *diag;
+  list->keys[list->len] = key;
+  list->len++;
+}
+
+/*
+ * The match key deliberately omits line and column so edits elsewhere in a
+ * file cannot turn a pre-existing diagnostic into a falsely introduced one;
+ * the salient detail (symbol name, capability, mismatch facts) plus code and
+ * file name identify the diagnostic across graph rebuilds.
+ */
+static void graph_oracle_diags_add(GraphOracleDiags *list, const ZDiag *diag, const char *fallback_path, const char *salient) {
+  ZDiag copy = *diag;
+  const char *path = diag->path && diag->path[0] ? diag->path : fallback_path;
+  copy.path = path ? z_strdup(path) : NULL;
+  ZBuf key;
+  zbuf_init(&key);
+  zbuf_appendf(&key, "%s|%s|%s|%s", diag_code(diag->code), graph_oracle_path_tail(path), diag->message, salient && salient[0] ? salient : diag->actual);
+  graph_oracle_diags_push(list, &copy, key.data ? key.data : z_strdup(""));
+}
+
+static void graph_oracle_collect_resolution(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *facts, const char *path, GraphOracleDiags *out) {
+  if (!facts || facts->diagnostic_len == 0) return;
+  for (size_t i = 0; i < facts->reference_len; i++) {
+    const ZProgramGraphResolutionReference *ref = &facts->references[i];
+    if (ref->resolved && !ref->ambiguous) continue;
+    const ZProgramGraphNode *node = graph_check_node_by_id(graph, ref->node_id);
+    ZDiag diag = {0};
+    diag.code = ref->ambiguous ? 3004 : 3003;
+    diag.path = node && node->path && node->path[0] ? node->path : path;
+    diag.line = node && node->line > 0 ? node->line : 1;
+    diag.column = node && node->column > 0 ? node->column : 1;
+    diag.length = 1;
+    snprintf(diag.message, sizeof(diag.message), "%s", ref->ambiguous ? "ambiguous graph reference" : "unresolved graph reference");
+    snprintf(diag.expected, sizeof(diag.expected), "resolved graph symbol reference");
+    snprintf(diag.actual, sizeof(diag.actual), "node %s name %s", ref->node_id ? ref->node_id : "<unknown>", ref->name ? ref->name : "<unknown>");
+    snprintf(diag.help, sizeof(diag.help), "inspect zero query and zero source-map, then repair the referenced graph node or import binding");
+    graph_oracle_diags_add(out, &diag, path, ref->name);
+  }
+}
+
+static void graph_oracle_collect_capabilities(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZTargetInfo *target, const char *path, GraphOracleDiags *out) {
+  ZProgramGraphCapabilitySummary caps;
+  z_program_graph_collect_capabilities(graph, resolution, &caps);
+#define COLLECT_GRAPH_CAP(field, cap_name, label) do { \
+    if (caps.field && !capability_available_on_target(target, cap_name)) { \
+      ZDiag cap_diag = {0}; \
+      graph_check_target_capability_diag(&cap_diag, caps.field##_node, target, cap_name, label); \
+      graph_oracle_diags_add(out, &cap_diag, path, cap_name); \
+    } \
+  } while (0)
+  COLLECT_GRAPH_CAP(fs, "fs", "Fs");
+  COLLECT_GRAPH_CAP(args, "args", "Args");
+  COLLECT_GRAPH_CAP(env, "env", "Env");
+  COLLECT_GRAPH_CAP(time, "time", "Clock");
+  COLLECT_GRAPH_CAP(rand, "rand", "Rand");
+  COLLECT_GRAPH_CAP(net, "net", "Net");
+  COLLECT_GRAPH_CAP(proc, "proc", "Proc");
+  COLLECT_GRAPH_CAP(web, "web", "Web");
+  COLLECT_GRAPH_CAP(world, "world", "World");
+#undef COLLECT_GRAPH_CAP
+}
+
+static bool repository_graph_oracle_collect(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, const char *manifest_input, const char *diag_path, bool with_semantic_contracts, GraphOracleDiags *out, ZDiag *fatal) {
+  SourceInput input = {.source_file = z_strdup(diag_path ? diag_path : "<repository-graph>")};
+  z_program_graph_seed_source_metadata(&input, graph);
+  ZDiag attach_diag = {0};
+  if (manifest_input && !z_program_graph_manifest_attach_metadata_to_input(&input, manifest_input, &attach_diag)) {
+    if (fatal) {
+      *fatal = attach_diag;
+      if (fatal->path) z_diag_set_path_copy(fatal, fatal->path);
+      else z_diag_set_path_copy(fatal, diag_path);
+    }
+    z_free_source(&input);
+    return false;
+  }
+  ZDiag *scratch = z_checked_calloc(GRAPH_ORACLE_MAX_PHASE_DIAGS, sizeof(ZDiag));
+  size_t found = z_program_graph_name_contract_violations(graph, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+  if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+  for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+  ZProgramGraphResolutionFacts resolution;
+  z_program_graph_resolution_facts_init(&resolution);
+  if (out->len == 0) {
+    if (!z_program_graph_collect_resolution_facts(graph, &resolution)) {
+      ZDiag facts_diag = {0};
+      facts_diag.code = 1002;
+      facts_diag.path = diag_path;
+      facts_diag.line = 1;
+      facts_diag.column = 1;
+      facts_diag.length = 1;
+      snprintf(facts_diag.message, sizeof(facts_diag.message), "failed to collect graph resolution facts");
+      graph_oracle_diags_add(out, &facts_diag, diag_path, "resolution-facts");
+    } else {
+      graph_oracle_collect_resolution(graph, &resolution, diag_path, out);
+      if (out->len == 0) {
+        memset(scratch, 0, GRAPH_ORACLE_MAX_PHASE_DIAGS * sizeof(ZDiag));
+        found = z_program_graph_fixed_array_length_contract_violations(graph, &resolution, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+        if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+        for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+      }
+      if (out->len == 0) graph_oracle_collect_capabilities(graph, &resolution, target, diag_path, out);
+      if (with_semantic_contracts && out->len == 0) {
+        ZDiag dep_diag = {0};
+        if (!validate_package_dependencies_for_target(&input, target, &dep_diag)) graph_oracle_diags_add(out, &dep_diag, diag_path, dep_diag.actual);
+      }
+      if (out->len == 0 && graph_check_buildability_gate_applies(graph)) {
+        ZDiag gate_diag = {0};
+        if (check_gate_merged_graph_blocked(command, &input, target, graph, &gate_diag)) {
+          graph_oracle_diags_add(out, &gate_diag, diag_path, gate_diag.actual);
+          free((char *)gate_diag.path);
+        }
+      }
+      /*
+       * Graph semantic contracts (return types, checked fallible calls,
+       * Maybe guards, borrows) run last and only for patch revalidation:
+       * they are stricter than zero check, so their findings only fail an
+       * operation when the baseline diff proves the operation introduced
+       * them. Import and refresh validate the same facts with the compiler
+       * typecheck instead, which is much faster on large packages.
+       */
+      if (with_semantic_contracts && out->len == 0) {
+        memset(scratch, 0, GRAPH_ORACLE_MAX_PHASE_DIAGS * sizeof(ZDiag));
+        found = z_program_graph_effect_contract_violations(graph, &resolution, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+        if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+        for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+      }
+      if (with_semantic_contracts && out->len == 0) {
+        memset(scratch, 0, GRAPH_ORACLE_MAX_PHASE_DIAGS * sizeof(ZDiag));
+        found = z_program_graph_memory_contract_violations(graph, &resolution, diag_path, scratch, GRAPH_ORACLE_MAX_PHASE_DIAGS);
+        if (found > GRAPH_ORACLE_MAX_PHASE_DIAGS) found = GRAPH_ORACLE_MAX_PHASE_DIAGS;
+        for (size_t i = 0; i < found; i++) graph_oracle_diags_add(out, &scratch[i], diag_path, scratch[i].actual);
+      }
+      if (with_semantic_contracts && out->len == 0) {
+        ZDiag borrow_diag = {0};
+        if (!z_program_graph_borrow_contracts_ok(graph, diag_path, &borrow_diag)) graph_oracle_diags_add(out, &borrow_diag, diag_path, borrow_diag.actual);
+      }
+    }
+  }
+  free(scratch);
   z_program_graph_resolution_facts_free(&resolution);
   z_free_source(&input);
-  return ok;
+  return true;
+}
+
+static bool graph_oracle_key_present(const GraphOracleDiags *list, const char *key) {
+  for (size_t i = 0; list && key && i < list->len; i++) {
+    if (graph_check_text_eq(list->keys[i], key)) return true;
+  }
+  return false;
+}
+
+/* Moves every post entry into introduced or preexisting; post ends empty. */
+static void repository_graph_oracle_diff(GraphOracleDiags *post, const GraphOracleDiags *pre, GraphOracleDiags *introduced, GraphOracleDiags *preexisting) {
+  for (size_t i = 0; post && i < post->len; i++) {
+    GraphOracleDiags *target_list = graph_oracle_key_present(pre, post->keys[i]) ? preexisting : introduced;
+    graph_oracle_diags_push(target_list, &post->items[i], post->keys[i]);
+  }
+  if (post) {
+    free(post->items);
+    free(post->keys);
+    *post = (GraphOracleDiags){0};
+  }
+}
+
+static void print_command_diag_list(const Command *command, const char *fallback_path, const GraphOracleDiags *list) {
+  if (!list || list->len == 0) return;
+  if (command && command->json) {
+    if (graph_check_text_eq(command->command, "check")) print_diag_json_list_ex(fallback_path, list->items, list->len, command->profile ? command->profile : "release");
+    else print_diag_json_list_ex(fallback_path, list->items, list->len, NULL);
+    return;
+  }
+  for (size_t i = 0; i < list->len; i++) {
+    print_diag(list->items[i].path ? list->items[i].path : fallback_path, &list->items[i]);
+  }
+}
+
+static void print_preexisting_diag_notes(const char *verb, const GraphOracleDiags *list) {
+  if (!list || list->len == 0) return;
+  fprintf(stderr, "note: %zu pre-existing diagnostic%s predate%s this %s and did not block it; zero check reports the same set\n",
+          list->len, list->len == 1 ? "" : "s", list->len == 1 ? "s" : "", verb);
+  for (size_t i = 0; i < list->len; i++) {
+    const ZDiag *diag = &list->items[i];
+    fprintf(stderr, "note:   %s:%d:%d %s: %s\n", diag->path ? diag->path : "<package>", diag->line, diag->column, diag_code(diag->code), diag->message);
+  }
+}
+
+/*
+ * Whole-graph revalidation for zero patch with baseline-diff semantics: the
+ * patched graph is validated with the shared oracle, and when diagnostics
+ * surface they are compared against the unpatched store so only diagnostics
+ * the patch introduced fail the operation. Returns false with fatal set when
+ * validation infrastructure itself failed, false with introduced entries
+ * when the patch added diagnostics, and true otherwise (preexisting carries
+ * the diagnostics that predate the patch).
+ */
+static bool revalidate_repository_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *patched, GraphOracleDiags *introduced, GraphOracleDiags *preexisting, ZDiag *fatal) {
+  GraphOracleDiags post = {0};
+  const char *manifest_input = command->repository_graph_source_input ? command->repository_graph_source_input : command->input;
+  if (!repository_graph_oracle_collect(command, target, patched, manifest_input, command->input, true, &post, fatal)) {
+    graph_oracle_diags_free(&post);
+    return false;
+  }
+  if (post.len == 0) return true;
+  GraphOracleDiags pre = {0};
+  ZProgramGraphStore base;
+  ZDiag base_diag = {0};
+  if (z_program_graph_store_load_path(command->input, &base, &base_diag)) {
+    ZDiag pre_fatal = {0};
+    (void)repository_graph_oracle_collect(command, target, &base.graph, manifest_input, command->input, true, &pre, &pre_fatal);
+    free((char *)pre_fatal.path);
+    z_program_graph_store_free(&base);
+  }
+  repository_graph_oracle_diff(&post, &pre, introduced, preexisting);
+  graph_oracle_diags_free(&pre);
+  return introduced->len == 0;
+}
+
+/*
+ * A compiler typecheck failure predates the operation when the file it
+ * points at is byte-identical to the source projection recorded in the
+ * package store: the diagnostic was already in the store at the last sync,
+ * so the current operation did not introduce it.
+ */
+static bool repository_graph_checker_diag_is_preexisting(const char *input, const ZDiag *diag) {
+  if (!diag || !diag->path || !diag->path[0]) return false;
+  char *root = z_program_graph_store_root_for_input(input);
+  char *store_path = root ? z_program_graph_store_path_for_root(root) : NULL;
+  bool preexisting = false;
+  ZProgramGraphStore store;
+  ZDiag load_diag = {0};
+  if (store_path && z_program_graph_store_path_exists(store_path) && z_program_graph_store_load_path(store_path, &store, &load_diag)) {
+    const char *diag_file = diag->path;
+    while (diag_file[0] == '.' && diag_file[1] == '/') diag_file += 2;
+    size_t diag_len = strlen(diag_file);
+    for (size_t i = 0; i < store.projection_len; i++) {
+      const char *projection_path = store.projection_paths[i];
+      size_t projection_len = strlen(projection_path);
+      bool matches = graph_check_text_eq(projection_path, diag_file) ||
+                     (diag_len > projection_len && strcmp(diag_file + diag_len - projection_len, projection_path) == 0 && diag_file[diag_len - projection_len - 1] == '/');
+      if (!matches) continue;
+      char *joined = direct_join_path(store.root && store.root[0] ? store.root : ".", projection_path);
+      ZDiag read_diag = {0};
+      char *current = z_read_file(joined, &read_diag);
+      preexisting = current && graph_check_text_eq(current, store.projection_texts[i]);
+      free(current);
+      free(joined);
+      break;
+    }
+    z_program_graph_store_free(&store);
+  }
+  free(store_path);
+  free(root);
+  return preexisting;
+}
+
+/*
+ * Shared validation gate for zero import and the stale-store auto-refresh:
+ * the source-projection graph is validated with the zero check oracle,
+ * diffed against the existing package store so only diagnostics the edited
+ * source introduces fail the operation, with every introduced diagnostic
+ * reported in one shot. A compiler typecheck then guards type facts the
+ * graph oracle does not model; its failure is skipped with a note when the
+ * pointed-at file is unchanged since the last sync. Returns an exit code.
+ */
+/*
+ * Diffs the zero check oracle findings for a source-projection graph
+ * against the existing package store so callers see only the diagnostics
+ * the edited source introduced; the rest are pre-existing.
+ */
+static bool repository_graph_source_oracle_diff(const Command *load_command, const ZTargetInfo *target, ZProgramGraph *source_graph, const char *input, GraphOracleDiags *introduced, GraphOracleDiags *preexisting, ZDiag *fatal) {
+  GraphOracleDiags post = {0};
+  if (!repository_graph_oracle_collect(load_command, target, source_graph, input, input, false, &post, fatal)) {
+    graph_oracle_diags_free(&post);
+    return false;
+  }
+  if (post.len == 0) {
+    graph_oracle_diags_free(&post);
+    return true;
+  }
+  GraphOracleDiags pre = {0};
+  char *root = z_program_graph_store_root_for_input(input);
+  char *store_path = root ? z_program_graph_store_path_for_root(root) : NULL;
+  if (store_path && z_program_graph_store_path_exists(store_path)) {
+    ZProgramGraphStore base;
+    ZDiag base_diag = {0};
+    if (z_program_graph_store_load_path(store_path, &base, &base_diag)) {
+      ZDiag pre_fatal = {0};
+      (void)repository_graph_oracle_collect(load_command, target, &base.graph, input, input, false, &pre, &pre_fatal);
+      free((char *)pre_fatal.path);
+      z_program_graph_store_free(&base);
+    }
+  }
+  free(store_path);
+  free(root);
+  repository_graph_oracle_diff(&post, &pre, introduced, preexisting);
+  graph_oracle_diags_free(&pre);
+  graph_oracle_diags_free(&post);
+  return true;
+}
+
+static int repository_graph_report_introduced(const Command *print_command, const char *input, const char *verb, const GraphOracleDiags *introduced) {
+  print_command_diag_list(print_command, input, introduced);
+  if (!(print_command && print_command->json)) {
+    fprintf(stderr, "zero %s failed validation: %zu diagnostic%s introduced by the edited source projection\n", verb, introduced->len, introduced->len == 1 ? "" : "s");
+  }
+  return 1;
+}
+
+/*
+ * Validation failure path for import/refresh when the compiler typecheck
+ * rejected the edited source: report every diagnostic in one shot when the
+ * edit introduced them, or skip with a note when the failure predates the
+ * operation (the pointed-at file is unchanged since the last sync).
+ */
+static int repository_graph_handle_checker_failure(const Command *print_command, const Command *load_command, const ZTargetInfo *target, const char *verb, const char *input, const ZDiag *check_diag, ZProgramGraph *source_graph) {
+  bool checker_preexisting = repository_graph_checker_diag_is_preexisting(input, check_diag);
+  GraphOracleDiags introduced = {0};
+  GraphOracleDiags preexisting = {0};
+  ZDiag fatal = {0};
+  if (!repository_graph_source_oracle_diff(load_command, target, source_graph, input, &introduced, &preexisting, &fatal)) {
+    print_command_diag(print_command, fatal.path ? fatal.path : input, &fatal);
+    free((char *)fatal.path);
+    return 1;
+  }
+  int rc = 0;
+  if (!checker_preexisting) {
+    GraphOracleDiags combined = {0};
+    graph_oracle_diags_add(&combined, check_diag, input, check_diag->actual);
+    for (size_t i = 0; i < introduced.len; i++) {
+      const ZDiag *diag = &introduced.items[i];
+      bool duplicate = diag->code == check_diag->code && diag->line == check_diag->line &&
+                       graph_check_text_eq(graph_oracle_path_tail(diag->path), graph_oracle_path_tail(check_diag->path));
+      if (!duplicate) graph_oracle_diags_add(&combined, diag, input, NULL);
+    }
+    rc = repository_graph_report_introduced(print_command, input, verb, &combined);
+    graph_oracle_diags_free(&combined);
+  } else if (introduced.len > 0) {
+    rc = repository_graph_report_introduced(print_command, input, verb, &introduced);
+  } else {
+    fprintf(stderr, "note: a pre-existing diagnostic predates this %s and did not block it (the file is unchanged since the last sync): %s:%d:%d %s: %s\n",
+            verb, check_diag->path ? check_diag->path : input, check_diag->line, check_diag->column, diag_code(check_diag->code), check_diag->message);
+  }
+  print_preexisting_diag_notes(verb, &preexisting);
+  graph_oracle_diags_free(&introduced);
+  graph_oracle_diags_free(&preexisting);
+  return rc;
+}
+
+/*
+ * Loads and validates the source projection for zero import and the
+ * stale-store auto-refresh. The compiler typecheck builds the checked
+ * source graph (so stored graphs keep evaluated meta facts); its failure
+ * is skipped with a note when it predates the operation, in which case the
+ * graph comes from a parse-only load. The zero check oracle then runs with
+ * baseline-diff semantics so only diagnostics the edited source introduced
+ * fail the operation, all reported in one shot. Returns an exit code and
+ * fills input/program/graph on success.
+ */
+static int load_and_validate_repository_graph_source(const Command *print_command, const Command *load_command, const ZTargetInfo *target, const char *verb, SourceInput *source_input, Program *source_program, ZProgramGraph *source_graph) {
+  const char *input = load_command && load_command->input ? load_command->input : ".";
+  memset(source_input, 0, sizeof(*source_input));
+  memset(source_program, 0, sizeof(*source_program));
+  memset(source_graph, 0, sizeof(*source_graph));
+  ZDiag check_diag = {0};
+  if (!compile_input(input, target, "release", source_input, source_program, &check_diag)) {
+    z_free_program(source_program);
+    z_free_source(source_input);
+    memset(source_input, 0, sizeof(*source_input));
+    memset(source_program, 0, sizeof(*source_program));
+    ZDiag parse_diag = {0};
+    if (!load_graph_from_current_source(load_command, target, source_input, source_program, source_graph, NULL, &parse_diag)) {
+      print_command_diag(print_command, parse_diag.path ? parse_diag.path : input, &parse_diag);
+      return 1;
+    }
+    return repository_graph_handle_checker_failure(print_command, load_command, target, verb, input, &check_diag, source_graph);
+  }
+  if (!graph_build_from_source_program(source_input, source_program, source_input->canonical_text_source, source_graph, &check_diag)) {
+    print_command_diag(print_command, check_diag.path ? check_diag.path : input, &check_diag);
+    return 1;
+  }
+  GraphOracleDiags introduced = {0};
+  GraphOracleDiags preexisting = {0};
+  ZDiag fatal = {0};
+  if (!repository_graph_source_oracle_diff(load_command, target, source_graph, input, &introduced, &preexisting, &fatal)) {
+    print_command_diag(print_command, fatal.path ? fatal.path : input, &fatal);
+    free((char *)fatal.path);
+    return 1;
+  }
+  int rc = 0;
+  if (introduced.len > 0) rc = repository_graph_report_introduced(print_command, input, verb, &introduced);
+  print_preexisting_diag_notes(verb, &preexisting);
+  graph_oracle_diags_free(&introduced);
+  graph_oracle_diags_free(&preexisting);
+  return rc;
 }
 
 static void append_graph_check_json(ZBuf *buf, const Command *command, const ZTargetInfo *target, const SourceInput *input, const ZProgramGraph *graph, bool ok, const ZDiag *diag, const char *phase, const char *target_readiness_json, long long lower_ms, bool graph_mir_used) {
@@ -13010,6 +13430,7 @@ static void print_graph_patch_help_json(void) {
 
 static bool save_graph_patch_output(const Command *command, const ZTargetInfo *target, ZProgramGraph *graph, GraphInputKind input_kind, const SourceInput *input, const char **saved_path, ZDiag *diag) {
   (void)input;
+  (void)target;
   *saved_path = NULL;
   bool repository_backed = input_kind == GRAPH_INPUT_REPOSITORY_STORE;
   if (repository_backed) {
@@ -13025,7 +13446,6 @@ static bool save_graph_patch_output(const Command *command, const ZTargetInfo *t
       snprintf(diag->help, sizeof(diag->help), "omit --out when patching a repository graph compiler input");
       return false;
     }
-    if (!validate_repository_graph_patch_output(command, target, graph, diag)) return false;
     if (command->graph_patch_check_only) return true;
     ZProgramGraphStoreFormat fallback_format = z_program_graph_store_path_is_binary(command->input)
       ? Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY
@@ -13100,6 +13520,36 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
     graph_patch_baseline_free(baseline, baseline_len);
     free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
     return 1;
+  }
+  if (ok && input_kind == GRAPH_INPUT_REPOSITORY_STORE) {
+    GraphOracleDiags introduced = {0};
+    GraphOracleDiags preexisting = {0};
+    ZDiag reval_fatal = {0};
+    bool revalidated = revalidate_repository_graph_patch_output(command, target, &graph, &introduced, &preexisting, &reval_fatal);
+    if (!revalidated && introduced.len == 0) {
+      print_command_diag(command, reval_fatal.path ? reval_fatal.path : command->input, &reval_fatal);
+      free((char *)reval_fatal.path);
+      graph_oracle_diags_free(&introduced);
+      graph_oracle_diags_free(&preexisting);
+      graph_patch_baseline_free(baseline, baseline_len);
+      free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
+      return 1;
+    }
+    if (!revalidated) {
+      print_command_diag_list(command, command->input, &introduced);
+      if (!command->json) {
+        fprintf(stderr, "program graph patch failed revalidation: %zu diagnostic%s introduced by this patch\n", introduced.len, introduced.len == 1 ? "" : "s");
+      }
+      print_preexisting_diag_notes("patch", &preexisting);
+      graph_oracle_diags_free(&introduced);
+      graph_oracle_diags_free(&preexisting);
+      graph_patch_baseline_free(baseline, baseline_len);
+      free_graph_patch_state(inline_text, &result, original_hash, &program, &input, &graph);
+      return 1;
+    }
+    print_preexisting_diag_notes("patch", &preexisting);
+    graph_oracle_diags_free(&introduced);
+    graph_oracle_diags_free(&preexisting);
   }
   const char *saved_path = NULL;
   if (ok && !save_graph_patch_output(command, target, &graph, input_kind, &input, &saved_path, diag)) {
@@ -13482,13 +13932,12 @@ static int resolve_manifest_graph_input_sync(const Command *command, const ZTarg
   SourceInput source_input = {0};
   Program source_program = {0};
   ZProgramGraph source_graph = {0};
-  ZDiag diag = {0};
-  if (!load_graph_from_checked_current_source(&load_command, target, &source_input, &source_program, &source_graph, NULL, &diag)) {
-    print_command_diag(command, diag.path ? diag.path : input, &diag);
+  int validate_rc = load_and_validate_repository_graph_source(command, &load_command, target, command->command ? command->command : "build", &source_input, &source_program, &source_graph);
+  if (validate_rc != 0) {
     z_program_graph_free(&source_graph);
     z_free_program(&source_program);
     z_free_source(&source_input);
-    return 1;
+    return validate_rc;
   }
   int rc = z_repository_graph_refresh_compiler_store(input, target, command->json, &source_graph);
   z_program_graph_free(&source_graph);
@@ -13707,29 +14156,25 @@ static int run_graph_subcommand_dispatch(Command *command, const ZTargetInfo *ta
   if (repo_package_input) repo_graph_load_command.input = repo_package_input;
   ZDiag repo_source_graph_diag = {0};
   bool repo_has_source_graph = false;
-  if (repo_wants_source_graph) {
-    repo_has_source_graph = repository_graph_command_loads_checked_source(&repo_graph_load_command)
-      ? load_graph_from_checked_current_source(&repo_graph_load_command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag)
-      : load_graph_from_current_source(&repo_graph_load_command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag);
-  }
-  if (repo_wants_source_graph && !repo_has_source_graph) {
-    if (command->json) print_command_diag_json(command, repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag); else print_diag(repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag);
-    z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
-    free(repo_package_input);
-    return 1;
-  }
   /*
-   * zero import typechecks the source projection before refreshing the
-   * store; extend the same contract to buildability so the store never
-   * accepts programs that zero build or zero run would reject with BLD004.
+   * zero import validates the source projection with the compiler typecheck
+   * plus the zero check oracle, diffed against the existing store so
+   * pre-existing diagnostics in untouched files never wall a refresh. Only
+   * diagnostics the import would introduce fail it, and all of them report
+   * in one shot.
    */
-  if (repo_has_source_graph && repository_graph_command_loads_checked_source(&repo_graph_load_command) &&
-      graph_check_buildability_gate_applies(&repo_source_graph)) {
-    ZDiag import_gate_diag = {0};
-    bool import_blocked = check_gate_merged_graph_blocked(&repo_graph_load_command, &repo_graph_input, target, &repo_source_graph, &import_gate_diag);
-    if (import_blocked) {
-      if (command->json) print_command_diag_json(command, import_gate_diag.path ? import_gate_diag.path : command->input, &import_gate_diag);
-      else print_diag(import_gate_diag.path ? import_gate_diag.path : command->input, &import_gate_diag);
+  if (repo_wants_source_graph && repository_graph_command_loads_checked_source(&repo_graph_load_command)) {
+    int import_rc = load_and_validate_repository_graph_source(command, &repo_graph_load_command, target, "import", &repo_graph_input, &repo_graph_program, &repo_source_graph);
+    if (import_rc != 0) {
+      z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
+      free(repo_package_input);
+      return import_rc;
+    }
+    repo_has_source_graph = true;
+  } else if (repo_wants_source_graph) {
+    repo_has_source_graph = load_graph_from_current_source(&repo_graph_load_command, target, &repo_graph_input, &repo_graph_program, &repo_source_graph, NULL, &repo_source_graph_diag);
+    if (!repo_has_source_graph) {
+      if (command->json) print_command_diag_json(command, repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag); else print_diag(repo_source_graph_diag.path ? repo_source_graph_diag.path : command->input, &repo_source_graph_diag);
       z_program_graph_free(&repo_source_graph); z_free_program(&repo_graph_program); z_free_source(&repo_graph_input);
       free(repo_package_input);
       return 1;

@@ -372,17 +372,32 @@ static bool fail_unchecked_fallible_call(const ZProgramGraphNode *call, const ZP
   return false;
 }
 
-bool z_program_graph_effect_contracts_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *diag) {
-  for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION && !effect_function_return_contract_ok(graph, node, path, diag)) return false;
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_RETURN && !effect_return_contract_ok(graph, resolution, node, path, diag)) return false;
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_CALL || node->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL) {
-      const ZProgramGraphResolutionReference *ref = NULL;
-      if (effect_call_fallible(graph, resolution, node, &ref) && !effect_call_checked(graph, node)) {
-        return fail_unchecked_fallible_call(node, ref, path, diag);
-      }
+static bool effect_node_contract_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *node, const char *path, ZDiag *diag) {
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION && !effect_function_return_contract_ok(graph, node, path, diag)) return false;
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_RETURN && !effect_return_contract_ok(graph, resolution, node, path, diag)) return false;
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_CALL || node->kind == Z_PROGRAM_GRAPH_NODE_METHOD_CALL) {
+    const ZProgramGraphResolutionReference *ref = NULL;
+    if (effect_call_fallible(graph, resolution, node, &ref) && !effect_call_checked(graph, node)) {
+      return fail_unchecked_fallible_call(node, ref, path, diag);
     }
   }
   return true;
+}
+
+bool z_program_graph_effect_contracts_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *diag) {
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    if (!effect_node_contract_ok(graph, resolution, &graph->nodes[i], path, diag)) return false;
+  }
+  return true;
+}
+
+size_t z_program_graph_effect_contract_violations(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *out, size_t cap) {
+  size_t found = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    ZDiag diag = {0};
+    if (effect_node_contract_ok(graph, resolution, &graph->nodes[i], path, &diag)) continue;
+    if (out && found < cap) out[found] = diag;
+    found++;
+  }
+  return found;
 }

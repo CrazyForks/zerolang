@@ -171,15 +171,30 @@ static bool fail_maybe_value_read(const ZProgramGraphNode *read, const ZProgramG
   return false;
 }
 
+static bool memory_node_contract_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *node, const char *path, ZDiag *diag) {
+  if (node->kind != Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS || !memory_text_eq(node->name, "value")) return true;
+  const ZProgramGraphNode *subject = memory_child(graph, node, "left", 0);
+  if (!memory_maybe_binding(graph, resolution, subject)) return true;
+  if (!memory_value_read_guarded(graph, node, subject ? subject->name : "")) return fail_maybe_value_read(node, subject, path, diag);
+  return true;
+}
+
 bool z_program_graph_memory_contracts_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *diag) {
   for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    if (node->kind != Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS || !memory_text_eq(node->name, "value")) continue;
-    const ZProgramGraphNode *subject = memory_child(graph, node, "left", 0);
-    if (!memory_maybe_binding(graph, resolution, subject)) continue;
-    if (!memory_value_read_guarded(graph, node, subject ? subject->name : "")) return fail_maybe_value_read(node, subject, path, diag);
+    if (!memory_node_contract_ok(graph, resolution, &graph->nodes[i], path, diag)) return false;
   }
   return true;
+}
+
+size_t z_program_graph_memory_contract_violations(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *out, size_t cap) {
+  size_t found = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    ZDiag diag = {0};
+    if (memory_node_contract_ok(graph, resolution, &graph->nodes[i], path, &diag)) continue;
+    if (out && found < cap) out[found] = diag;
+    found++;
+  }
+  return found;
 }
 
 static bool memory_integer_literal_value(const char *text, unsigned long long *out) {
@@ -292,26 +307,40 @@ static const char *memory_assignment_target_array_type(const ZProgramGraph *grap
   return binding->type;
 }
 
+static bool memory_fixed_array_node_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const ZProgramGraphNode *node, const char *path, ZDiag *diag) {
+  const char *declared_type = NULL;
+  const char *init_edge = NULL;
+  if (node->kind == Z_PROGRAM_GRAPH_NODE_LET) {
+    declared_type = node->type;
+    init_edge = "expr";
+  } else if (node->kind == Z_PROGRAM_GRAPH_NODE_CONST) {
+    declared_type = node->type;
+    init_edge = "value";
+  } else if (node->kind == Z_PROGRAM_GRAPH_NODE_ASSIGNMENT) {
+    declared_type = memory_assignment_target_array_type(graph, resolution, node);
+    init_edge = "expr";
+  } else {
+    return true;
+  }
+  if (!declared_type || declared_type[0] != '[') return true;
+  const ZProgramGraphNode *init = memory_child(graph, node, init_edge, 0);
+  return memory_array_initializer_length_ok(graph, declared_type, init, path, diag);
+}
+
 bool z_program_graph_fixed_array_length_contracts_ok(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *diag) {
   for (size_t i = 0; graph && i < graph->node_len; i++) {
-    const ZProgramGraphNode *node = &graph->nodes[i];
-    const char *declared_type = NULL;
-    const char *init_edge = NULL;
-    if (node->kind == Z_PROGRAM_GRAPH_NODE_LET) {
-      declared_type = node->type;
-      init_edge = "expr";
-    } else if (node->kind == Z_PROGRAM_GRAPH_NODE_CONST) {
-      declared_type = node->type;
-      init_edge = "value";
-    } else if (node->kind == Z_PROGRAM_GRAPH_NODE_ASSIGNMENT) {
-      declared_type = memory_assignment_target_array_type(graph, resolution, node);
-      init_edge = "expr";
-    } else {
-      continue;
-    }
-    if (!declared_type || declared_type[0] != '[') continue;
-    const ZProgramGraphNode *init = memory_child(graph, node, init_edge, 0);
-    if (!memory_array_initializer_length_ok(graph, declared_type, init, path, diag)) return false;
+    if (!memory_fixed_array_node_ok(graph, resolution, &graph->nodes[i], path, diag)) return false;
   }
   return true;
+}
+
+size_t z_program_graph_fixed_array_length_contract_violations(const ZProgramGraph *graph, const ZProgramGraphResolutionFacts *resolution, const char *path, ZDiag *out, size_t cap) {
+  size_t found = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    ZDiag diag = {0};
+    if (memory_fixed_array_node_ok(graph, resolution, &graph->nodes[i], path, &diag)) continue;
+    if (out && found < cap) out[found] = diag;
+    found++;
+  }
+  return found;
 }

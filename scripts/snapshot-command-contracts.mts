@@ -1737,6 +1737,103 @@ assert.equal(legacyRun.stdout, "legacy two\n");
 assert.match(legacyRun.stderr, /refreshed zero\.graph from the edited package source projection/);
 assert.match(readFileSync(legacyStorePath, "utf8"), /\nsourceHash "src:[0-9a-f]{16}"\n/);
 rmSync(legacySyncRoot, { force: true, recursive: true });
+// One diagnostic oracle for the sync verbs: zero check, zero import, and
+// zero patch revalidation accept the same code (Span<T> helpers through
+// std.mem.prefix, integer-literal returns in plain helpers, and ref<shape>
+// parameters), revalidation reports every introduced diagnostic in one
+// shot, and pre-existing diagnostics print as notes instead of walls.
+const oracleAlignRoot = join("/tmp", `zero-oracle-align-${process.pid}`);
+rmSync(oracleAlignRoot, { force: true, recursive: true });
+mkdirSync(join(oracleAlignRoot, "src"), { recursive: true });
+writeFileSync(join(oracleAlignRoot, "zero.toml"), '[package]\nname = "oracle-align"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+const oracleAlignSource = [
+  "pub type Pair {",
+  "    left: u64,",
+  "    right: u64,",
+  "}",
+  "",
+  "fn headBytes(bytes: Span<u8>, len: usize) -> Span<u8> {",
+  "    return std.mem.prefix(bytes, len)",
+  "}",
+  "",
+  "fn limit() -> usize {",
+  "    return 5",
+  "}",
+  "",
+  "pub fn pairLeft(p: ref<Pair>) -> u64 {",
+  "    return p.left",
+  "}",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  '    let text: String = "alignment"',
+  "    let head: Span<u8> = headBytes(text, limit())",
+  "    if std.mem.len(head) == 5 {",
+  '        check world.out.write("aligned\\n")',
+  "    }",
+  "}",
+  "",
+].join("\n");
+writeFileSync(join(oracleAlignRoot, "src", "main.0"), oracleAlignSource);
+assert.equal(json(["import", "--json", oracleAlignRoot]).body.ok, true);
+assert.equal(zero(["check", oracleAlignRoot]).stdout, "ok\n");
+assert.equal(zero(["run", oracleAlignRoot]).stdout, "aligned\n");
+const oracleAlignPatch = json(["patch", "--json", oracleAlignRoot, "--op", 'addLetLiteral fn="main" name="probe" type="u32" value="1"']);
+assert.equal(oracleAlignPatch.body.ok, true);
+// a deliberate bad payload still fails with the diagnostic list and leaves
+// the store untouched
+const oracleHashBefore = json(["status", "--json", oracleAlignRoot]).body.store.graphHash;
+const oracleBadPatch = json(["patch", "--json", oracleAlignRoot, "--op", 'addReturnValue fn="limit" value="no_such_binding" type="usize"'], { allowFailure: true });
+assert.notEqual(oracleBadPatch.code, 0);
+assert.equal(oracleBadPatch.body.ok, false);
+assert.equal(oracleBadPatch.body.diagnostics[0].code, "NAM003");
+assert.equal(json(["status", "--json", oracleAlignRoot]).body.store.graphHash, oracleHashBefore);
+// an import that introduces two diagnostics reports both in one shot
+assert.equal(json(["export", "--json", oracleAlignRoot]).body.ok, true);
+writeFileSync(join(oracleAlignRoot, "src", "main.0"), oracleAlignSource.replace('    if std.mem.len(head) == 5 {', "    check world.out.write(missing_one)\n    check world.out.write(missing_two)\n    if std.mem.len(head) == 5 {"));
+const oracleMultiImport = json(["import", "--json", oracleAlignRoot], { allowFailure: true });
+assert.notEqual(oracleMultiImport.code, 0);
+assert.equal(oracleMultiImport.body.diagnostics.length, 2);
+assert.equal(oracleMultiImport.body.diagnostics[0].code, "NAM003");
+assert.equal(oracleMultiImport.body.diagnostics[1].code, "NAM003");
+rmSync(oracleAlignRoot, { force: true, recursive: true });
+// pre-existing diagnostics report as notes, not walls: the TAR002 a
+// capability-less target reports in zero check predates the patch, so a
+// valid op still applies and the note points back at zero check
+const oraclePreRoot = join("/tmp", `zero-oracle-preexisting-${process.pid}`);
+rmSync(oraclePreRoot, { force: true, recursive: true });
+mkdirSync(join(oraclePreRoot, "src"), { recursive: true });
+writeFileSync(join(oraclePreRoot, "zero.toml"), '[package]\nname = "oracle-preexisting"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+writeFileSync(join(oraclePreRoot, "src", "main.0"), 'pub fn main(world: World) -> Void raises {\n    let a1: Maybe<String> = std.args.get(1)\n    if a1.has {\n        check world.out.write(a1.value)\n    }\n    check world.out.write("done\\n")\n}\n');
+assert.equal(json(["import", "--json", oraclePreRoot]).body.ok, true);
+const oraclePreCheck = json(["check", "--json", "--target", "linux-x64", oraclePreRoot], { allowFailure: true });
+assert.notEqual(oraclePreCheck.code, 0);
+assert.equal(oraclePreCheck.body.diagnostics[0].code, "TAR002");
+const oraclePrePatch = zeroWithStderr(["patch", "--target", "linux-x64", oraclePreRoot, "--op", 'addLetLiteral fn="main" name="probe" type="u32" value="1"']);
+assert.equal(oraclePrePatch.code, 0);
+assert.match(oraclePrePatch.stdout, /program graph patch ok/);
+assert.match(oraclePrePatch.stderr, /pre-existing diagnostic predates this patch and did not block it/);
+assert.match(oraclePrePatch.stderr, /TAR002: target does not provide required Args capability/);
+rmSync(oraclePreRoot, { force: true, recursive: true });
+// a store whose recorded projection already fails the compiler typecheck
+// (checker drift, stores written by older compilers) does not wall the
+// import of unchanged files: the failure prints as a note and the refresh
+// proceeds, so one pre-existing diagnostic never costs a whack-a-mole round
+const oracleDriftRoot = join("/tmp", `zero-oracle-drift-${process.pid}`);
+rmSync(oracleDriftRoot, { force: true, recursive: true });
+mkdirSync(join(oracleDriftRoot, "src"), { recursive: true });
+writeFileSync(join(oracleDriftRoot, "zero.toml"), '[package]\nname = "oracle-drift"\nversion = "0.1.0"\n\n[targets.cli]\nkind = "exe"\nmain = "src/main.0"\n');
+writeFileSync(join(oracleDriftRoot, "src", "main.0"), 'fn want(v: u32) -> u32 {\n    return v\n}\n\npub fn main(world: World) -> Void raises {\n    let r: u32 = want(1_u32)\n    if r == 1 {\n        check world.out.write("drift ok\\n")\n    }\n}\n');
+assert.equal(json(["import", "--json", "--format", "text", oracleDriftRoot]).body.ok, true);
+const oracleDriftStorePath = join(oracleDriftRoot, "zero.graph");
+writeFileSync(oracleDriftStorePath, readFileSync(oracleDriftStorePath, "utf8").replace("want(1_u32)", 'want(\\"text\\")'));
+writeFileSync(join(oracleDriftRoot, "src", "main.0"), readFileSync(join(oracleDriftRoot, "src", "main.0"), "utf8").replace("want(1_u32)", 'want("text")'));
+const oracleDriftImport = zeroWithStderr(["import", oracleDriftRoot]);
+assert.equal(oracleDriftImport.code, 0);
+assert.match(oracleDriftImport.stdout, /repository graph import ok/);
+assert.match(oracleDriftImport.stderr, /note: a pre-existing diagnostic predates this import and did not block it \(the file is unchanged since the last sync\)/);
+assert.equal(json(["status", "--json", oracleDriftRoot]).body.repositoryGraph.projectionState, "clean");
+assert.equal(zero(["check", oracleDriftRoot]).stdout, "ok\n");
+rmSync(oracleDriftRoot, { force: true, recursive: true });
 const reconcileScaleRoot = join("/tmp", `zero-reconcile-scale-${process.pid}`);
 const reconcileScaleSource = join(reconcileScaleRoot, "src", "main.0");
 rmSync(reconcileScaleRoot, { force: true, recursive: true });
