@@ -96,7 +96,10 @@ typedef struct {
   const char *query_calls;
   const char *query_depth;
   const char *query_bare_argument;
+  const char *view_outline;
+  const char *view_around;
   bool query_full;
+  bool query_handles;
   const char **patch_ops;
   size_t patch_op_len;
   size_t patch_op_cap;
@@ -3805,7 +3808,7 @@ static const ExplainInfo explain_infos[] = {
   {"GPH001", "graph-patch", "Malformed patch operation", "A patch operation or body row is missing required attributes or does not parse.", "Patch operations have fixed shapes so they validate fully before touching the store.", "Run `zero patch --op help` and copy the exact shape of the operation, including required attributes and `end` markers.", "zero patch --op 'addFunction'", "zero patch --op 'addFunction name=double param=value:i32 returns=i32'"},
   {"GPH002", "graph-patch", "Patch precondition failed", "An expect operation's graph hash or fact does not match the current store.", "Preconditions let agents assert the graph state they reasoned about before mutating it.", "Re-read the current facts with `zero query` or `zero status`, then update the expect operation to the current graph hash.", "expect graphHash=stale-hash", "zero status . # read the current graph hash, then patch"},
   {"GPH003", "graph-patch", "Invalid patch operand", "A patch operation operand is not a valid identifier, operator, or value for its slot.", "Operands are validated against the projection grammar before any graph mutation.", "Use canonical projection syntax for operands, the same text `zero view` prints.", "addLetBinary name=x op=plus left=1 right=2", "addLetBinary name=x op=+ left=a right=b"},
-  {"GPH004", "graph-patch", "Patch target not found", "A patch operation names a node, edge, function, or parent that does not exist in the graph.", "Patches address graph handles directly, so missing targets fail instead of creating implicit nodes.", "Locate the handle first with `zero query <name>` and use the exact node id or name it prints.", "zero patch --op 'replaceFunctionBody missing_fn ...'", "zero query main # then patch the printed handle"},
+  {"GPH004", "graph-patch", "Patch target not found", "A patch operation names a node, edge, function, or parent that does not exist in the graph.", "Patches address graph handles directly, so missing targets fail instead of creating implicit nodes.", "Locate the handle first with `zero query --fn <name> --handles` (stmt and param handles) or `zero query --find <text>` and use the exact node id or name it prints.", "zero patch --op 'replaceFunctionBody missing_fn ...'", "zero query --fn main --handles # then patch the printed handle"},
   {"GPH005", "graph-patch", "Patch conflicts with existing graph facts", "A patch would create a node id, function, or edge slot that already exists, or delete a node that is still referenced outside its subtree.", "The store stays internally consistent, so conflicting inserts and dangling references are rejected.", "Query the existing fact first, then rename, replace, or delete the conflicting fact explicitly in the same patch.", "addFunction name=main # main already exists", "replaceFunctionBody main ... # edit the existing function"},
   {"GPH006", "graph-patch", "Patch produced an invalid graph", "The patched graph failed validation or could not lower, so the patch was rolled back and the store was not saved.", "Every patch validates the whole resulting graph before saving, keeping the store loadable by every command.", "Fix the patch body so the resulting function and graph are complete and well-formed; the message names the failing validation fact.", "replaceFunctionBody main with an unterminated block", "replaceFunctionBody main\n  return\nend"},
   {"GRC000", "graph-reconcile", "Graph reconcile failed", "Reconciling edited source with the previous graph failed without a more specific code; the message carries the failing fact.", "Reconcile preserves node identities across text edits so graph history and patches stay stable.", "Read the failure message; if identity cannot be preserved, split the edit into smaller passes or use zero patch.", "zero reconcile zero.graph --source heavily-rewritten.0", "zero reconcile zero.graph --source small-edit.0"},
@@ -4273,7 +4276,10 @@ static bool parse_graph_query_option(int argc, char **argv, int *index, Command 
   const bool calls_selector = cli_arg_is(arg, "--calls");
   const bool depth_selector = cli_arg_is(arg, "--depth");
   const bool full_selector = cli_arg_is(arg, "--full");
-  if (!function_selector && !find_selector && !node_selector && !refs_selector && !calls_selector && !depth_selector && !full_selector) return false;
+  const bool handles_selector = cli_arg_is(arg, "--handles");
+  const bool outline_selector = cli_arg_is(arg, "--outline");
+  const bool around_selector = cli_arg_is(arg, "--around");
+  if (!function_selector && !find_selector && !node_selector && !refs_selector && !calls_selector && !depth_selector && !full_selector && !handles_selector && !outline_selector && !around_selector) return false;
   const bool query_command = command_is_program_graph_command(command) && cli_arg_is(command->kind, "query");
   const bool view_command = command_is_program_graph_command(command) && (cli_arg_is(command->kind, "view") || cli_arg_is(command->kind, "diff"));
   if (function_selector && view_command) {
@@ -4284,12 +4290,29 @@ static bool parse_graph_query_option(int argc, char **argv, int *index, Command 
     command->query_function = argv[++(*index)];
     return true;
   }
+  if ((outline_selector || around_selector) && command_is_program_graph_command(command) && cli_arg_is(command->kind, "view")) {
+    if (*index + 1 >= argc) {
+      command->unknown_flag = arg;
+      return true;
+    }
+    if (outline_selector) command->view_outline = argv[++(*index)];
+    else command->view_around = argv[++(*index)];
+    return true;
+  }
   if (!query_command) {
     command->unknown_flag = arg;
     return true;
   }
   if (full_selector) {
     command->query_full = true;
+    return true;
+  }
+  if (handles_selector) {
+    command->query_handles = true;
+    return true;
+  }
+  if (outline_selector || around_selector) {
+    command->unknown_flag = arg;
     return true;
   }
   if (*index + 1 >= argc) {
@@ -13193,6 +13216,32 @@ static int run_graph_dump_input_command(const Command *command, const ZTargetInf
 }
 
 static int run_graph_view_command(const Command *command, ZDiag *diag) {
+  if (command->view_around && !command->query_function) {
+    diag->code = 2002;
+    diag->path = command->input;
+    diag->line = 1;
+    diag->column = 1;
+    diag->length = 1;
+    snprintf(diag->message, sizeof(diag->message), "--around requires --fn <name>");
+    snprintf(diag->expected, sizeof(diag->expected), "zero view --fn <name> --around <text> [graph-input]");
+    snprintf(diag->actual, sizeof(diag->actual), "--around %s", command->view_around);
+    snprintf(diag->help, sizeof(diag->help), "--around scopes one function's source to the enclosing block that contains the text; name the function with --fn");
+    print_command_diag(command, command->input, diag);
+    return 1;
+  }
+  if (command->view_outline && (command->query_function || command->out)) {
+    diag->code = 2002;
+    diag->path = command->input;
+    diag->line = 1;
+    diag->column = 1;
+    diag->length = 1;
+    snprintf(diag->message, sizeof(diag->message), "--outline does not combine with %s", command->query_function ? "--fn" : "--out");
+    snprintf(diag->expected, sizeof(diag->expected), "zero view --outline <module-or-file> [graph-input]");
+    snprintf(diag->actual, sizeof(diag->actual), "--outline %s", command->view_outline);
+    snprintf(diag->help, sizeof(diag->help), "outline prints signatures on stdout; use zero view --fn <name> for one function's source");
+    print_command_diag(command, command->input, diag);
+    return 1;
+  }
   SourceInput input = {0};
   Program program = {0};
   ZProgramGraph graph = {0};
@@ -13220,9 +13269,16 @@ static int run_graph_view_command(const Command *command, ZDiag *diag) {
   }
   ZBuf view;
   zbuf_init(&view);
-  bool view_ok = command->query_function
-    ? z_program_graph_append_view_function(&view, &graph, command->input, command->query_function, diag)
-    : z_program_graph_append_view(&view, &graph, command->input, diag);
+  bool view_ok;
+  if (command->view_outline) {
+    view_ok = z_program_graph_append_view_outline(&view, &graph, command->input, command->view_outline, diag);
+  } else if (command->query_function && command->view_around) {
+    view_ok = z_program_graph_append_view_function_around(&view, &graph, command->input, command->query_function, command->view_around, diag);
+  } else if (command->query_function) {
+    view_ok = z_program_graph_append_view_function(&view, &graph, command->input, command->query_function, diag);
+  } else {
+    view_ok = z_program_graph_append_view(&view, &graph, command->input, diag);
+  }
   if (!view_ok) {
     print_command_diag(command, diag->path ? diag->path : command->input, diag);
     zbuf_free(&view);
@@ -13295,6 +13351,7 @@ static int run_graph_query_command(const Command *command, const ZTargetInfo *ta
   request.calls = command->query_calls;
   request.node = command->query_node;
   request.full_module = command->query_full;
+  request.handles = command->query_handles;
   request.bare_argument = command->query_bare_argument;
   if (!parse_graph_query_depth(command, &request, diag)) {
     print_command_diag(command, command->input, diag);
@@ -13732,6 +13789,9 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
     }
     if (result.expected && result.expected[0]) fprintf(stderr, "  expected: %s\n", result.expected);
     if (result.line <= 0 && result.actual && result.actual[0]) fprintf(stderr, "  actual: %s\n", result.actual);
+    if (strcmp(result.code, "GPH003") == 0 || strcmp(result.code, "GPH004") == 0) {
+      fprintf(stderr, "  help: run zero query --fn <name> --handles to list stmt and param patch handles, or zero query --find <text> for node ids\n");
+    }
     if (result.format_error) {
       fprintf(stderr, "  help: a minimal complete patch file looks exactly like this:\n");
       fputs(z_program_graph_patch_minimal_file_example(), stderr);

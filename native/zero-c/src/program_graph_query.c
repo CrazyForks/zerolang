@@ -82,7 +82,6 @@ bool z_program_graph_query_node_matches_find(const ZProgramGraphNode *node, cons
           query_text_contains(node->name, find) ||
           query_text_contains(node->type, find) ||
           query_text_contains(node->value, find) ||
-          query_text_contains(node->path, find) ||
           query_text_contains(z_program_graph_node_kind_name(node->kind), find));
 }
 

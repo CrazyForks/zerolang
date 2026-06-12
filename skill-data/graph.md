@@ -27,15 +27,18 @@ zero patch --op 'addMain'
 
 ```sh
 zero query userTotals      # bare name that is not a path = --find in the current package
-zero query --fn main       # one function's graph facts and patch handles
+zero query --fn main       # one function's signature and call summary
+zero query --fn main --handles   # adds stmt/param patch handles; use before patching
 zero query --calls std     # resolved call targets
 zero query --refs add      # semantic references
 zero query --node '#expr_2cad38f9' --depth 2   # node-scoped: span, parents, children
 zero view --fn main        # one function's canonical source
+zero view --fn main --around minLength   # only the enclosing block containing the text
+zero view --outline src/main.0           # signatures plus one-line docs, no bodies
 zero status                # store format and projection state
 ```
 
-`--node` defaults to depth 1; add `--full` for the whole-module report. Use handles from `--find` for checked edits (`set`, `insert`, `insertEdge`, `replace`, `rename`, `delete`); delete compacts ordered graph groups so valid sibling order is preserved. Reserve unfiltered `zero query` dumps for tools that need every node and edge.
+`--node` defaults to depth 1; add `--full` for the whole-module report. Use handles from `--find` or `--fn <name> --handles` for checked edits (`set`, `insert`, `insertEdge`, `replace`, `rename`, `delete`); delete compacts ordered graph groups so valid sibling order is preserved. Reserve unfiltered `zero query` dumps for tools that need every node and edge.
 
 ## Patches
 

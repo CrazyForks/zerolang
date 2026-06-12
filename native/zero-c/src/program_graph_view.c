@@ -18,6 +18,12 @@ static bool view_starts_with(const char *text, const char *prefix) {
   return text && prefix && strncmp(text, prefix, strlen(prefix)) == 0;
 }
 
+static bool view_has_suffix(const char *text, const char *suffix) {
+  size_t text_len = text ? strlen(text) : 0;
+  size_t suffix_len = suffix ? strlen(suffix) : 0;
+  return text_len >= suffix_len && view_text_eq(text + (text_len - suffix_len), suffix);
+}
+
 static bool view_import_targets_rendered_module(const SourceInput *source, const char *module) {
   if (!source || !module || !module[0] || view_starts_with(module, "std.")) return false;
   for (size_t i = 0; i < source->module_count; i++) {
@@ -370,4 +376,319 @@ bool z_program_graph_append_source_view(ZBuf *buf, const ZProgramGraph *graph, c
   bool ok = view_append_program(buf, &sliced, source_path, false, diag);
   z_program_graph_free(&sliced);
   return ok;
+}
+
+// ---- outline ----
+
+static const ZProgramGraphNode *view_owner_module(const ZProgramGraphAdjacency *adjacency, const ZProgramGraphNode *node) {
+  const ZProgramGraph *graph = adjacency ? adjacency->graph : NULL;
+  const char *current = node ? node->id : NULL;
+  for (size_t depth = 0; graph && current && depth < graph->node_len; depth++) {
+    const ZProgramGraphEdge *owner = z_program_graph_adjacency_first_child_edge(adjacency, current);
+    if (!owner) return NULL;
+    const ZProgramGraphNode *parent = z_program_graph_adjacency_node(adjacency, owner->from);
+    if (!parent) return NULL;
+    if (parent->kind == Z_PROGRAM_GRAPH_NODE_MODULE) return parent;
+    current = parent->id;
+  }
+  return NULL;
+}
+
+static bool view_outline_scope_matches_module(const ZProgramGraphNode *module, const char *scope) {
+  if (!scope || !scope[0] || view_text_eq(scope, ".") || view_text_eq(scope, "./")) return true;
+  if (view_starts_with(scope, "./")) scope += 2;
+  if (module->name && view_text_eq(module->name, scope)) return true;
+  if (!module->path || !module->path[0]) return false;
+  if (view_text_eq(module->path, scope)) return true;
+  size_t path_len = strlen(module->path);
+  size_t scope_len = strlen(scope);
+  return scope_len < path_len &&
+         view_text_eq(module->path + (path_len - scope_len), scope) &&
+         module->path[path_len - scope_len - 1] == '/';
+}
+
+static char *view_outline_read_module_source(const char *input, const char *module_path) {
+  if (!module_path || !module_path[0]) return NULL;
+  ZDiag read_diag = {0};
+  if (input && input[0] && !view_text_eq(input, ".") && !view_text_eq(input, "./")) {
+    char joined[1024];
+    size_t input_len = strlen(input);
+    bool input_is_file = view_has_suffix(input, ".0") || view_has_suffix(input, ".toml") || view_has_suffix(input, ".json") || view_has_suffix(input, ".graph") || view_has_suffix(input, ".program-graph");
+    if (input_is_file) {
+      const char *slash = strrchr(input, '/');
+      input_len = slash ? (size_t)(slash - input) : 0;
+    }
+    while (input_len > 0 && input[input_len - 1] == '/') input_len--;
+    if (input_len > 0 && input_len + 1 + strlen(module_path) < sizeof(joined)) {
+      snprintf(joined, sizeof(joined), "%.*s/%s", (int)input_len, input, module_path);
+      char *text = z_read_file(joined, &read_diag);
+      if (text) return text;
+    }
+  }
+  read_diag = (ZDiag){0};
+  return z_read_file(module_path, &read_diag);
+}
+
+static const char *view_outline_line_at(const char *text, int line_number, size_t *out_len) {
+  if (!text || line_number < 1) return NULL;
+  const char *line = text;
+  for (int current = 1; current < line_number; current++) {
+    const char *next = strchr(line, '\n');
+    if (!next) return NULL;
+    line = next + 1;
+  }
+  const char *end = strchr(line, '\n');
+  *out_len = end ? (size_t)(end - line) : strlen(line);
+  return line;
+}
+
+static void view_outline_doc_for_line(const char *source, int decl_line, char *out, size_t out_size) {
+  if (out_size) out[0] = '\0';
+  if (!source || decl_line <= 1) return;
+  int first_comment_line = 0;
+  for (int line_number = decl_line - 1; line_number >= 1; line_number--) {
+    size_t len = 0;
+    const char *line = view_outline_line_at(source, line_number, &len);
+    if (!line) return;
+    size_t lead = 0;
+    while (lead < len && (line[lead] == ' ' || line[lead] == '\t')) lead++;
+    if (len - lead >= 2 && line[lead] == '/' && line[lead + 1] == '/') {
+      first_comment_line = line_number;
+      continue;
+    }
+    break;
+  }
+  if (!first_comment_line) return;
+  size_t len = 0;
+  const char *line = view_outline_line_at(source, first_comment_line, &len);
+  if (!line) return;
+  size_t lead = 0;
+  while (lead < len && (line[lead] == ' ' || line[lead] == '\t')) lead++;
+  lead += 2;
+  while (lead < len && line[lead] == ' ') lead++;
+  size_t copy = len - lead;
+  if (copy >= out_size) copy = out_size - 1;
+  memcpy(out, line + lead, copy);
+  out[copy] = '\0';
+}
+
+static void view_outline_append_function(ZBuf *buf, const ZProgramGraphAdjacency *adjacency, const ZProgramGraphNode *node, const char *module_source) {
+  if (node->value && node->value[0] && (!node->name || !node->name[0])) {
+    zbuf_appendf(buf, "  test \"%s\"", node->value);
+  } else {
+    zbuf_appendf(buf, "  %sfn %s(", node->is_public ? "pub " : "", node->name ? node->name : "");
+    size_t start = 0;
+    size_t len = 0;
+    z_program_graph_adjacency_owner_run(adjacency, node->id, "param", &start, &len);
+    bool first_param = true;
+    for (size_t i = start; i < start + len; i++) {
+      const ZProgramGraphEdge *edge = z_program_graph_adjacency_owner_edge_at(adjacency, i);
+      const ZProgramGraphNode *param = edge && edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE ? z_program_graph_adjacency_node(adjacency, edge->to) : NULL;
+      if (!param) continue;
+      if (!first_param) zbuf_append(buf, ", ");
+      first_param = false;
+      zbuf_appendf(buf, "%s: %s", param->name ? param->name : "", param->type ? param->type : "Unknown");
+    }
+    zbuf_appendf(buf, ") -> %s%s", node->type && node->type[0] ? node->type : "Void", node->fallible ? " raises" : "");
+  }
+  char doc[160];
+  view_outline_doc_for_line(module_source, node->line, doc, sizeof(doc));
+  if (doc[0]) zbuf_appendf(buf, "  // %s", doc);
+  zbuf_append_char(buf, '\n');
+}
+
+bool z_program_graph_append_view_outline(ZBuf *buf, const ZProgramGraph *graph, const char *input, const char *scope, ZDiag *diag) {
+  if (!buf || !graph) return false;
+  ZProgramGraphAdjacency adjacency;
+  z_program_graph_adjacency_init(&adjacency, graph);
+  size_t module_count = 0;
+  size_t function_count = 0;
+  for (size_t m = 0; m < graph->node_len; m++) {
+    const ZProgramGraphNode *module = &graph->nodes[m];
+    if (module->kind != Z_PROGRAM_GRAPH_NODE_MODULE || !view_outline_scope_matches_module(module, scope)) continue;
+    if (module_count > 0) zbuf_append_char(buf, '\n');
+    module_count++;
+    zbuf_appendf(buf, "module %s", module->name ? module->name : "");
+    if (module->path && module->path[0]) zbuf_appendf(buf, " path:%s", module->path);
+    zbuf_append_char(buf, '\n');
+    char *module_source = view_outline_read_module_source(input, module->path);
+    for (size_t i = 0; i < graph->node_len; i++) {
+      const ZProgramGraphNode *node = &graph->nodes[i];
+      if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION) continue;
+      const ZProgramGraphNode *owner = view_owner_module(&adjacency, node);
+      if (owner != module) continue;
+      function_count++;
+      view_outline_append_function(buf, &adjacency, node, module_source);
+    }
+    free(module_source);
+  }
+  z_program_graph_adjacency_free(&adjacency);
+  if (module_count == 0) {
+    if (diag) {
+      ZBuf names;
+      zbuf_init(&names);
+      for (size_t m = 0; m < graph->node_len; m++) {
+        const ZProgramGraphNode *module = &graph->nodes[m];
+        if (module->kind != Z_PROGRAM_GRAPH_NODE_MODULE) continue;
+        if (names.len > 0) zbuf_append(&names, ", ");
+        zbuf_append(&names, module->name ? module->name : "");
+      }
+      diag->code = 2002;
+      diag->path = input;
+      diag->line = 1;
+      diag->column = 1;
+      diag->length = 1;
+      snprintf(diag->message, sizeof(diag->message), "no module matches --outline %s", scope ? scope : "");
+      snprintf(diag->expected, sizeof(diag->expected), "a module name, module source path, or . for every module");
+      snprintf(diag->actual, sizeof(diag->actual), "--outline %s", scope ? scope : "");
+      snprintf(diag->help, sizeof(diag->help), "modules in this graph: %s", names.data && names.data[0] ? names.data : "(none)");
+      zbuf_free(&names);
+    }
+    return false;
+  }
+  zbuf_appendf(buf, "\n%zu function%s in %zu module%s; zero view --fn <name> prints one function's source\n", function_count, function_count == 1 ? "" : "s", module_count, module_count == 1 ? "" : "s");
+  return true;
+}
+
+// ---- around ----
+
+typedef struct {
+  size_t open_line;
+  size_t close_line;
+  size_t depth;
+} ViewTextBlock;
+
+static void view_around_collect_blocks(const char *text, const size_t *line_starts, size_t line_count, ViewTextBlock **out_blocks, size_t *out_len) {
+  ViewTextBlock *blocks = NULL;
+  size_t block_len = 0;
+  size_t block_cap = 0;
+  size_t stack[256];
+  size_t stack_len = 0;
+  size_t line = 0;
+  bool in_string = false;
+  for (size_t i = 0; text[i]; i++) {
+    while (line + 1 < line_count && i >= line_starts[line + 1]) line++;
+    char ch = text[i];
+    if (in_string) {
+      if (ch == '\\' && text[i + 1]) i++;
+      else if (ch == '"') in_string = false;
+      else if (ch == '\n') in_string = false;
+      continue;
+    }
+    if (ch == '"') {
+      in_string = true;
+    } else if (ch == '{') {
+      if (block_len == block_cap) {
+        block_cap = block_cap ? block_cap * 2 : 16;
+        blocks = z_checked_reallocarray(blocks, block_cap, sizeof(ViewTextBlock));
+      }
+      blocks[block_len] = (ViewTextBlock){.open_line = line, .close_line = line_count ? line_count - 1 : 0, .depth = stack_len};
+      if (stack_len < sizeof(stack) / sizeof(stack[0])) stack[stack_len] = block_len;
+      stack_len++;
+      block_len++;
+    } else if (ch == '}') {
+      if (stack_len > 0) {
+        stack_len--;
+        if (stack_len < sizeof(stack) / sizeof(stack[0])) blocks[stack[stack_len]].close_line = line;
+      }
+    }
+  }
+  *out_blocks = blocks;
+  *out_len = block_len;
+}
+
+bool z_program_graph_append_view_function_around(ZBuf *buf, const ZProgramGraph *graph, const char *source_path, const char *function_name, const char *around, ZDiag *diag) {
+  if (!buf || !around || !around[0]) return false;
+  ZBuf full;
+  zbuf_init(&full);
+  if (!z_program_graph_append_view_function(&full, graph, source_path, function_name, diag)) {
+    zbuf_free(&full);
+    return false;
+  }
+  const char *text = full.data ? full.data : "";
+  size_t *line_starts = NULL;
+  size_t line_count = 0;
+  size_t line_cap = 0;
+  for (size_t i = 0; text[i];) {
+    if (line_count == line_cap) {
+      line_cap = line_cap ? line_cap * 2 : 64;
+      line_starts = z_checked_reallocarray(line_starts, line_cap, sizeof(size_t));
+    }
+    line_starts[line_count++] = i;
+    const char *next = strchr(text + i, '\n');
+    if (!next) break;
+    i = (size_t)(next - text) + 1;
+  }
+  if (line_count == 0) {
+    zbuf_free(&full);
+    free(line_starts);
+    return false;
+  }
+  ViewTextBlock *blocks = NULL;
+  size_t block_len = 0;
+  view_around_collect_blocks(text, line_starts, line_count, &blocks, &block_len);
+  bool *selected = calloc(line_count, sizeof(bool));
+  size_t match_count = 0;
+  size_t text_len = strlen(text);
+  for (size_t line = 0; line < line_count && selected; line++) {
+    size_t line_end = line + 1 < line_count ? line_starts[line + 1] : text_len;
+    size_t line_len = line_end - line_starts[line];
+    char saved = full.data[line_starts[line] + line_len];
+    full.data[line_starts[line] + line_len] = '\0';
+    bool hit = strstr(full.data + line_starts[line], around) != NULL;
+    full.data[line_starts[line] + line_len] = saved;
+    if (!hit) continue;
+    match_count++;
+    const ViewTextBlock *enclosing = NULL;
+    for (size_t b = 0; b < block_len; b++) {
+      const ViewTextBlock *block = &blocks[b];
+      if (block->open_line > line || block->close_line < line) continue;
+      if (!enclosing || block->depth > enclosing->depth) enclosing = block;
+    }
+    if (!enclosing) {
+      for (size_t mark = 0; mark < line_count; mark++) selected[mark] = true;
+      continue;
+    }
+    for (size_t mark = enclosing->open_line; mark <= enclosing->close_line && mark < line_count; mark++) selected[mark] = true;
+  }
+  if (match_count == 0 || !selected) {
+    zbuf_free(&full);
+    free(line_starts);
+    free(blocks);
+    free(selected);
+    if (diag) {
+      diag->code = 2002;
+      diag->path = source_path;
+      diag->line = 1;
+      diag->column = 1;
+      diag->length = 1;
+      snprintf(diag->message, sizeof(diag->message), "text '%s' not found in function '%s'", around, function_name ? function_name : "");
+      snprintf(diag->expected, sizeof(diag->expected), "text that occurs inside the function body");
+      snprintf(diag->actual, sizeof(diag->actual), "--around %s", around);
+      snprintf(diag->help, sizeof(diag->help), "run zero view --fn %s for the whole function, or zero query --find %s to search the graph", function_name ? function_name : "<name>", around);
+    }
+    return false;
+  }
+  selected[0] = true;
+  selected[line_count - 1] = true;
+  bool elided = false;
+  for (size_t line = 0; line < line_count; line++) {
+    size_t line_end = line + 1 < line_count ? line_starts[line + 1] : text_len;
+    if (!selected[line]) {
+      if (!elided) zbuf_append(buf, "    ...\n");
+      elided = true;
+      continue;
+    }
+    elided = false;
+    char saved = full.data[line_end];
+    full.data[line_end] = '\0';
+    zbuf_append(buf, full.data + line_starts[line]);
+    full.data[line_end] = saved;
+  }
+  if (buf->len > 0 && buf->data[buf->len - 1] != '\n') zbuf_append_char(buf, '\n');
+  zbuf_free(&full);
+  free(line_starts);
+  free(blocks);
+  free(selected);
+  return true;
 }

@@ -926,7 +926,7 @@ for (const [command, expected] of [
   [["targets", "--help"], /Usage: zero targets/],
   [["tokens", "--help"], /Usage: zero tokens/],
   [["parse", "--help"], /Usage: zero parse/],
-  [["query", "--help"], /Usage: zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/],
+  [["query", "--help"], /Usage: zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/],
   [["inspect", "--help"], /Usage: zero init \[--template cli\|lib\|package\] \[project-path\]; zero query\|view\|diff\|dump\|inspect\|validate\|source-map\|roundtrip \[--json\] \[graph-input\]/],
   [["diff", "--help"], /Usage: zero diff \[--fn <name>\] \[graph-input\]/],
   [["size", "--help"], /Usage: zero size/],
@@ -993,10 +993,10 @@ for (const code of [...emittableDiagnosticCodes].sort()) {
 
 const graphHelp = zero(["inspect", "--help"]).stdout;
 assert.match(graphHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[graph-input\]; zero import \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[project\|zero\.toml\|zero\.json\|file\.0\]/);
-assert.match(graphHelp, /zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(graphHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(graphHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(graphHelp, /zero source-map \[--json\] \[graph-input\]/);
-assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/);
+assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
 assert.match(graphHelp, /zero reconcile \[--json\] <base-graph-input> --source <edited-file\.0\|project\|zero\.toml\|zero\.json>/);
 assert.match(graphHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\|zero\.graph\]/);
 assert.match(graphHelp, /zero import \[--json\] \[--format text\|binary\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
@@ -1028,10 +1028,10 @@ assert.match(rootHelp, /zero check \[--json\] \[--target <target>\] \[--emit exe
 assert.match(rootHelp, /zero fix --plan --json \[graph-input\]/);
 assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
 assert.match(rootHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\]/);
-assert.match(rootHelp, /zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(rootHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(rootHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(rootHelp, /zero source-map \[--json\] \[graph-input\]/);
-assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/);
+assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
 assert.match(rootHelp, /zero reconcile \[--json\] <base-graph-input> --source <edited-file\.0\|project\|zero\.toml\|zero\.json>/);
 assert.match(rootHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\|zero\.graph\]/);
 assert.match(rootHelp, /zero import \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
@@ -1158,6 +1158,22 @@ assert.equal(queryBareName.matches.some((match: any) => match.kind === "Function
 const queryBareNameText = execFileSync(zeroBin, ["query", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
 assert.match(queryBareNameText, /argument: dealsTotal is not an existing path; treated as --find dealsTotal/);
 assert.match(queryBareNameText, /zero view --fn <name> prints one function's source/);
+assert.doesNotMatch(queryBareNameText, /modules:/, "scoped query text output must not repeat the module list");
+assert.doesNotMatch(queryBareNameText, /patch help:/, "scoped query text output must not repeat the patch footer");
+const queryOverviewText = execFileSync(zeroBin, ["query"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(queryOverviewText, /modules:/);
+assert.match(queryOverviewText, /dealsTotal\(amount: usize\) -> usize #decl_/);
+assert.doesNotMatch(queryOverviewText, /stmt\[0\]/, "overview hides stmt handle inventories unless --handles is set");
+const queryFnText = execFileSync(zeroBin, ["query", "--fn", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(queryFnText, /query: fn:dealsTotal/);
+assert.match(queryFnText, /dealsTotal\(amount: usize\) -> usize #decl_/);
+assert.doesNotMatch(queryFnText, /stmt\[0\]/);
+assert.match(queryFnText, /add --handles/);
+const queryFnHandlesText = execFileSync(zeroBin, ["query", "--fn", "dealsTotal", "--handles"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(queryFnHandlesText, /param\[0\] amount: usize #param_/);
+assert.match(queryFnHandlesText, /stmt\[0\] Return #stmt_/);
+assert.match(queryFnHandlesText, /patch help:/);
+assert(queryFnText.length < queryFnHandlesText.length, "default --fn output must be smaller than the --handles report");
 const queryMissingPathInput = zero(["query", "no-such-dir/no-such-input"], { allowFailure: true });
 assert.notEqual(queryMissingPathInput.code, 0, "path-shaped query arguments must keep file input semantics");
 const viewFunction = zero(["view", "--fn", "dealsTotal", queryScopeRoot]).stdout;
@@ -1170,6 +1186,28 @@ const viewFunctionMissOutput = `${viewFunctionMiss.stdout}${viewFunctionMiss.std
 assert.match(viewFunctionMissOutput, /function 'dealsTotle' not found in graph view/);
 assert.match(viewFunctionMissOutput, /close matches: dealsTotal/);
 assert.match(viewFunctionMissOutput, /zero query --find dealsTotle/);
+const viewOutline = zero(["view", "--outline", "main", queryScopeRoot]).stdout;
+assert.match(viewOutline, /module main path:src\/main\.0/);
+assert.match(viewOutline, /fn dealsTotal\(amount: usize\) -> usize/);
+assert.match(viewOutline, /pub fn main\(world: World\) -> Void raises/);
+assert.doesNotMatch(viewOutline, /return amount/, "outline must not print function bodies");
+assert.equal(zero(["view", "--outline", ".", queryScopeRoot]).stdout, viewOutline);
+const viewOutlineMiss = zero(["view", "--outline", "nosuch", queryScopeRoot], { allowFailure: true });
+assert.notEqual(viewOutlineMiss.code, 0);
+assert.match(`${viewOutlineMiss.stdout}${viewOutlineMiss.stderr}`, /no module matches --outline nosuch/);
+assert.match(`${viewOutlineMiss.stdout}${viewOutlineMiss.stderr}`, /modules in this graph: main/);
+const viewAround = zero(["view", "--fn", "main", "--around", "total == 42", queryScopeRoot]).stdout;
+assert.match(viewAround, /pub fn main\(world: World\) -> Void raises \{/);
+assert.match(viewAround, /if total == 42 \{/);
+assert.match(viewAround, /query scope/);
+assert.match(viewAround, /\n    \.\.\.\n/, "around output elides lines outside the enclosing block");
+assert.doesNotMatch(viewAround, /let total/, "around output keeps only the enclosing block");
+const viewAroundNoFn = zero(["view", "--around", "total", queryScopeRoot], { allowFailure: true });
+assert.notEqual(viewAroundNoFn.code, 0);
+assert.match(`${viewAroundNoFn.stdout}${viewAroundNoFn.stderr}`, /--around requires --fn <name>/);
+const viewAroundMiss = zero(["view", "--fn", "main", "--around", "zzz-not-here", queryScopeRoot], { allowFailure: true });
+assert.notEqual(viewAroundMiss.code, 0);
+assert.match(`${viewAroundMiss.stdout}${viewAroundMiss.stderr}`, /text 'zzz-not-here' not found in function 'main'/);
 const diffFunction = zero(["diff", "--fn", "dealsTotal", queryScopeRoot]).stdout;
 assert.equal(diffFunction, viewFunction);
 const diffFunctionMiss = zero(["diff", "--fn", "dealsTotle", queryScopeRoot], { allowFailure: true });
@@ -1180,7 +1218,8 @@ assert.match(diffHelp, /Usage: zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(diffHelp, /zero diff --fn handleLine \./);
 assert.doesNotMatch(diffHelp, /Patch usage:/);
 const queryHelp = zero(["query", "--help"]).stdout;
-assert.match(queryHelp, /Usage: zero query .*\[--node <id>\] \[--depth <n>\] \[--full\] \[graph-input\|name\]/);
+assert.match(queryHelp, /Usage: zero query .*\[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
+assert.match(queryHelp, /--handles adds stmt and param patch handles/);
 assert.match(queryHelp, /zero query userTotals/);
 assert.match(queryHelp, /zero query --json --node '#decl_12ab34cd' --depth 2/);
 assert.match(queryHelp, /zero view --fn <name>/);
@@ -1190,8 +1229,10 @@ assert.match(reconcileHelp, /zero reconcile zero\.graph --source src\/main\.0/);
 assert.match(reconcileHelp, /zero reconcile --json \. --source src\/main\.0/);
 assert.match(reconcileHelp, /zero reconcile --json baseline\.graph --source \./);
 const viewHelp = zero(["view", "--help"]).stdout;
-assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(viewHelp, /zero view --fn handleLine \./);
+assert.match(viewHelp, /--outline <module-or-file> prints function signatures/);
+assert.match(viewHelp, /--around <text> prints only the enclosing block/);
 assert.match(viewHelp, /close matches/);
 rmSync(queryScopeRoot, { force: true, recursive: true });
 const repoGraphStatus = json(["status", "--json", "."]).body;
@@ -4874,6 +4915,9 @@ assert.equal(graphEmptyTypeEdgePatchJson.body.operations[0].ok, false);
 assert.equal(graphEmptyTypeEdgePatchJson.body.operations[0].code, "GPH004");
 assert.equal(graphEmptyTypeEdgePatchJson.body.operations[0].to, "");
 assert.equal(graphEmptyTypeEdgePatchJson.body.saved, null);
+const graphEmptyTypeEdgePatchText = zeroWithStderr(["patch", graphDumpPath, graphPatchEmptyTypeEdgePath]);
+assert.notEqual(graphEmptyTypeEdgePatchText.code, 0);
+assert.match(graphEmptyTypeEdgePatchText.stderr, /zero query --fn <name> --handles to list stmt and param patch handles/);
 writeFileSync(graphPatchRenamePath, [
   "zero-program-graph-patch v1",
   `expect graphHash "${graphDumpJson.graphHash}"`,
