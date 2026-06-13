@@ -33,7 +33,7 @@ static const ZProgramGraphCommandKind z_graph_command_kinds[] = {
     Z_PROGRAM_GRAPH_INPUT_SOURCE_OR_ARTIFACT,
     true,
     "query does not support --out",
-    "zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [--handles] [graph-input|name]",
+    "zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [--handles] [--no-help] [graph-input|name]",
     "zero query --out",
     "queries are reported on stdout; remove --out"
   ),
@@ -121,14 +121,14 @@ void z_program_graph_print_command_help(void) {
   printf("Usage: zero init [--template cli|lib|package] [project-path]; zero query|view|diff|dump|inspect|validate|source-map|roundtrip [--json] [graph-input]; zero status|verify-projection|import|export|merge [--json] [project|zero.toml|zero.json|file.0]\n\n");
   printf("Graph-first project usage: zero init [--json] [--manifest toml|json] [--format text|binary] [--template cli|lib|package] [project-path]\n");
   printf("Output usage: zero dump|validate|roundtrip [--json] [--format text|binary] --out <program-graph-artifact> [graph-input]; zero import [--json] [--format text|binary] --out <program-graph-artifact> [project|zero.toml|zero.json|file.0]\n");
-  printf("View output usage: zero view [--json] [--fn <name> [--around <text>]] [--outline <module-or-file>] [--out <file.0>] [graph-input]\n");
+  printf("View output usage: zero view [--json] [--fn <name> [--around <text>|--handles]] [--outline <module-or-file>] [--out <file.0>] [graph-input]\n");
   printf("Diff textconv usage: zero diff [--fn <name>] [graph-input]\n");
   printf("Source map usage: zero source-map [--json] [graph-input]\n");
-  printf("Query usage: zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [--handles] [graph-input|name]\n");
+  printf("Query usage: zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>] [--node <id>] [--depth <n>] [--full] [--handles] [--no-help] [graph-input|name]\n");
   printf("Reconcile usage: zero reconcile [--json] <base-graph-input> --source <edited-file.0|project|zero.toml|zero.json>\n");
   printf("Repository projection usage: zero status|verify-projection [--json] [project|zero.toml|zero.json|file.0|zero.graph]; zero import [--json] [--format text|binary] [project|zero.toml|zero.json|file.0]; zero export [--json] [project|zero.toml|zero.json|file.0]; zero merge --base <base-zero.graph> --left <left-zero.graph> --right <right-zero.graph> [--json] [project|zero.toml|zero.json|file.0]\n");
   printf("Size usage: zero size [--json] [--target <target>] [--out <artifact>] [graph-input]\n");
-  printf("Patch usage: zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [graph-input] (<patch-file>|--op <operation>|--replace-fn <name> --body-file <file>)\n");
+  printf("Patch usage: zero patch [--json] [--check-only|--dry-run] [--format text|binary] [--out <program-graph-artifact>] [graph-input] (<patch-file>|--op <operation>|--replace-fn <name> --body-file <file|->|--replace-in-fn <name> --old <text> --new <text>|--rewrite <pattern> --to <template> [--fn <name>] [--apply])\n");
   printf("  In a graph-first package, zero patch --op <operation> defaults to the current directory.\nPatch operation help: zero patch --op help\n\n");
   printf("Build usage: zero build [--json] [--emit exe|obj|llvm-ir] [--backend direct|llvm|<direct-emitter>] [--target <target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input]\n\n");
   printf("Run usage: zero run [--target <host-target>] [--profile debug|dev|release-fast|release-small|tiny|audit] [--release <profile>] [--out <file>] [graph-input] [-- args...]\n\n");
@@ -160,12 +160,21 @@ void z_program_graph_print_command_help(void) {
   printf("  addCheckWrite fn=\"main\" text=\"hello\\n\"\n");
   printf("  addFunction name=\"add\" ret=\"i32\"\n");
   printf("  addParam fn=\"add\" name=\"left\" type=\"i32\"\n");
+  printf("  addParamTo fn=\"add\" name=\"bias\" type=\"i32\" default=\"0\"\n");
+  printf("  setConst name=\"limit\" value=\"64\"\n");
+  printf("  setReturnType fn=\"add\" type=\"i64\"\n");
   printf("  addReturnBinary fn=\"add\" name=\"+\" left=\"left\" right=\"right\" type=\"i32\"\n");
   printf("  addLetLiteral fn=\"main\" name=\"count\" type=\"u32\" value=\"0\"\n");
   printf("  addLetBinary fn=\"add\" name=\"sum\" type=\"i32\" operator=\"+\" left=\"left\" right=\"right\"\n");
   printf("  addReturnValue fn=\"identity\" value=\"input\" type=\"i32\"\n");
+  printf("  addReturnExpr fn=\"maybe\" expr=\"null\"\n");
+  printf("  appendStmt fn=\"main\" stmt=\"check std.http.listen(world, 3000_u16)\"\n");
   printf("  addCheckWriteValue fn=\"main\" value=\"message\" type=\"String\"\n");
   printf("  addTest name=\"addition works\" call=\"add\" arg0=\"40\" arg1=\"2\" expect=\"42\" type=\"i32\"\n");
+  printf("  addTestBody name=\"api add\" ... end\n");
+  printf("  renameTest name=\"api add\" value=\"api add route\"\n");
+  printf("  deleteTest name=\"api add\"\n");
+  printf("  upsertFunction handle ... end\n");
   printf("  replaceFunctionBody main ... end\n");
   printf("  replaceBlockBody #block_id ... end\n");
 }

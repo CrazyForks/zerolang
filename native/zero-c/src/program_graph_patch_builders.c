@@ -298,7 +298,7 @@ bool z_program_graph_patch_apply_add_let_binary(ZProgramGraph *graph, ZProgramGr
 
 bool z_program_graph_patch_apply_add_return_value(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
   if (!op || !op->function || !op->value || !builder_identifier_valid(op->value)) {
-    builder_fail(result, op, "GPH001", "return value operation requires fn and identifier value", "fn and value", "");
+    builder_fail(result, op, "GPH001", "addReturnValue only returns identifiers; use addReturnExpr for null, literals, calls, or other expressions", "fn and identifier value, or addReturnExpr fn=\"...\" expr=\"...\"", "");
     return false;
   }
   if (!builder_validate_optional_type(result, op)) return false;

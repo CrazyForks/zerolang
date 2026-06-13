@@ -95,6 +95,7 @@ const deepMatrix = fixtures.flatMap((fixture) => {
 });
 const fastMatrix = [
   { fixture: "conformance/native/pass/stdlib-target-neutral.graph", target: "linux-musl-x64" },
+  { fixture: "conformance/native/pass/stdlib-target-neutral.graph", target: "win32-x64.exe" },
   { fixture: "conformance/native/pass/direct-checksum-helpers.graph", target: "linux-musl-x64" },
   { fixture: "conformance/native/pass/direct-checksum-helpers.graph", target: "darwin-arm64" },
   { fixture: "conformance/native/pass/direct-checksum-helpers.graph", target: "win32-x64.exe" },

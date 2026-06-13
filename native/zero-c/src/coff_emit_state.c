@@ -33,6 +33,7 @@ static const char *const runtime_helper_symbols[COFF_RUNTIME_HELPER_COUNT] = {
   "zero_sort_is_sorted_op",
   "zero_http_request_method_name",
   "zero_http_request_path",
+  "zero_http_request_body_within",
 };
 
 static bool coff_emit_state_diag(ZDiag *diag, const char *message, int line, int column, const char *actual) {

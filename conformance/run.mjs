@@ -723,6 +723,7 @@ const passCheckFixtures = [
   "conformance/native/pass/std-hosted-cli.0",
   "conformance/native/pass/std-fs.0",
   "conformance/native/pass/std-fs-bytes.0",
+  "conformance/native/pass/std-fs-read-chunks.0",
   "conformance/native/pass/frame-large-locals.0",
   "conformance/native/pass/frame-limit-boundary.0",
   "conformance/native/pass/frame-split-helpers.0",
@@ -4893,6 +4894,7 @@ for (const runtimeFixture of [
   ["conformance/native/pass/std-hosted-cli.0", "std-hosted-cli", { stdout: "std hosted cli ok\n", args: ["run", "7", "--json", "--name", "agent", "--count", "3"], env: { ZERO_CONFORMANCE_MODE: "test", ZERO_CONFORMANCE_VERBOSE: "true", ZERO_CONFORMANCE_LIMIT: "9" } }],
   ["conformance/native/pass/std-fs.0", "std-fs", { stdout: "fs ok\n", file: { name: "std-fs-write.txt", text: "zero write\n" } }],
   ["conformance/native/pass/std-fs-bytes.0", "std-fs-bytes", { stdout: "fs bytes ok\n", stderr: "fs bytes err ok\n" }],
+  ["conformance/native/pass/std-fs-read-chunks.0", "std-fs-read-chunks", { stdout: "fs read chunks ok\n" }],
   ["conformance/native/pass/frame-large-locals.0", "frame-large-locals", { stdout: "frame large locals ok alpha\n", args: ["alpha"] }],
   ["conformance/native/pass/frame-limit-boundary.0", "frame-limit-boundary", { stdout: "frame limit boundary ok\n" }],
   ["conformance/native/pass/frame-split-helpers.0", "frame-split-helpers", { stdout: "frame split helpers ok\n" }],
@@ -5086,6 +5088,19 @@ pub fn main(world: World) -> Void raises {
 assert.equal(refByteBufParamBody.diagnostics[0].code, "BLD004");
 assert.equal(refByteBufParamBody.diagnostics[0].actual, "ref<ByteBuf>");
 assert.equal(refByteBufParamBody.diagnostics[0].line, 1);
+
+const worldHelperParamBody = await writeImportFailureFixture(`${outDir}/world-helper-param-gate.0`, `fn write(world: World, text: String) -> Void raises {
+    check world.out.write(text)
+}
+
+pub fn main(world: World) -> Void raises {
+    check write(world, "unreachable\\n")
+}
+`);
+assert.equal(worldHelperParamBody.diagnostics[0].code, "BLD004");
+assert.match(worldHelperParamBody.diagnostics[0].message, /parameter type is unsupported/);
+assert.equal(worldHelperParamBody.diagnostics[0].actual, "World");
+assert.equal(worldHelperParamBody.diagnostics[0].line, 1);
 
 const codecReadU32Body = await writeImportFailureFixture(`${outDir}/codec-readu32-gate.0`, `use std.codec
 

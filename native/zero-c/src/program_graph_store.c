@@ -17,6 +17,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #if !defined(_WIN32)
 #include <unistd.h>
 #endif
@@ -833,9 +834,7 @@ static bool store_identity_reconcile_diag(const char *path, const ZProgramGraphI
     if (!module_identity_changed && identity && identity->node_range[0] && identity->candidate_range[0]) {
       snprintf(diag->actual,
                sizeof(diag->actual),
-               "%s at %s matches %zu edited candidate%s at %s",
-               identity->node_id[0] ? identity->node_id : "ambiguous source identity",
-               identity->node_range,
+               "matches %zu edited candidate%s at %.72s",
                identity->candidate_count,
                identity->candidate_count == 1 ? "" : "s",
                identity->candidate_range);
@@ -845,6 +844,140 @@ static bool store_identity_reconcile_diag(const char *path, const ZProgramGraphI
     if (!module_identity_changed && identity && identity->hint[0]) snprintf(diag->help, sizeof(diag->help), "%s", identity->hint);
   }
   return false;
+}
+
+static char *store_render_source_path_view(const ZProgramGraph *graph, const char *source_path) {
+  ZBuf view;
+  zbuf_init(&view);
+  ZDiag diag = {0};
+  if (!z_program_graph_append_source_view(&view, graph, source_path, &diag)) {
+    zbuf_free(&view);
+    return NULL;
+  }
+  return view.data ? view.data : z_strdup("");
+}
+
+/* A file-scope rewrite candidate is a single-file edit: the two graphs cover
+ * the same source paths and exactly one path renders a different canonical
+ * source view. */
+static bool store_single_changed_source_path(const ZProgramGraph *base, const ZProgramGraph *edited, char **out_path) {
+  if (out_path) *out_path = NULL;
+  ZProgramGraphStore base_paths;
+  ZProgramGraphStore edited_paths;
+  z_program_graph_store_init(&base_paths);
+  z_program_graph_store_init(&edited_paths);
+  store_collect_source_paths(&base_paths, base);
+  store_collect_source_paths(&edited_paths, edited);
+  bool same_paths = base_paths.source_path_len == edited_paths.source_path_len;
+  for (size_t i = 0; same_paths && i < base_paths.source_path_len; i++) {
+    same_paths = store_text_eq(base_paths.source_paths[i], edited_paths.source_paths[i]);
+  }
+  size_t changed = 0;
+  char *changed_path = NULL;
+  for (size_t i = 0; same_paths && changed < 2 && i < base_paths.source_path_len; i++) {
+    const char *source_path = base_paths.source_paths[i];
+    char *base_view = store_render_source_path_view(base, source_path);
+    char *edited_view = store_render_source_path_view(edited, source_path);
+    bool same_view = base_view && edited_view && store_text_eq(base_view, edited_view);
+    free(base_view);
+    free(edited_view);
+    if (same_view) continue;
+    changed++;
+    free(changed_path);
+    changed_path = z_strdup(source_path);
+  }
+  z_program_graph_store_free(&base_paths);
+  z_program_graph_store_free(&edited_paths);
+  if (same_paths && changed == 1) {
+    if (out_path) *out_path = changed_path;
+    else free(changed_path);
+    return true;
+  }
+  free(changed_path);
+  return false;
+}
+
+static void store_append_path_function_signature(ZBuf *out, const ZProgramGraph *graph, const ZProgramGraphNode *function) {
+  zbuf_append(out, function->name ? function->name : "");
+  zbuf_append_char(out, '(');
+  bool wrote = false;
+  for (size_t order = 0; order < graph->edge_len; order++) {
+    for (size_t i = 0; i < graph->edge_len; i++) {
+      const ZProgramGraphEdge *edge = &graph->edges[i];
+      if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || edge->order != order) continue;
+      if (!store_text_eq(edge->from, function->id) || !store_text_eq(edge->kind, "param")) continue;
+      for (size_t j = 0; j < graph->node_len; j++) {
+        const ZProgramGraphNode *param = &graph->nodes[j];
+        if (param->kind != Z_PROGRAM_GRAPH_NODE_PARAM || !store_text_eq(param->id, edge->to)) continue;
+        if (wrote) zbuf_append(out, ", ");
+        zbuf_append(out, param->type ? param->type : "Unknown");
+        wrote = true;
+        break;
+      }
+    }
+  }
+  zbuf_append(out, ") -> ");
+  zbuf_append(out, function->type && function->type[0] ? function->type : "Void");
+  if (function->fallible) zbuf_append(out, " raises");
+  zbuf_append_char(out, '\n');
+}
+
+static char *store_path_function_set(const ZProgramGraph *graph, const char *source_path) {
+  char **lines = NULL;
+  size_t len = 0, cap = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !store_text_eq(node->path, source_path)) continue;
+    ZBuf line;
+    zbuf_init(&line);
+    store_append_path_function_signature(&line, graph, node);
+    if (len == cap) {
+      size_t next = cap ? cap * 2 : 8;
+      lines = z_checked_reallocarray(lines, next, sizeof(char *));
+      cap = next;
+    }
+    lines[len++] = line.data ? line.data : z_strdup("");
+  }
+  for (size_t i = 1; i < len; i++) {
+    char *line = lines[i];
+    size_t cursor = i;
+    while (cursor > 0 && store_text_cmp(line, lines[cursor - 1]) < 0) {
+      lines[cursor] = lines[cursor - 1];
+      cursor--;
+    }
+    lines[cursor] = line;
+  }
+  ZBuf out;
+  zbuf_init(&out);
+  for (size_t i = 0; i < len; i++) {
+    zbuf_append(&out, lines[i]);
+    free(lines[i]);
+  }
+  free(lines);
+  return out.data ? out.data : z_strdup("");
+}
+
+/* Whole-file rewrite escape for ambiguous imports: when the ambiguity comes
+ * from a single-file edit whose function set still matches by name and
+ * signature shape, accept the rewrite wholesale for that file. The file's
+ * nodes get fresh identities and every other file keeps its handles; RGP007
+ * remains for cross-file ambiguity and signature-set changes. */
+static bool store_accept_file_scope_rewrite(const ZProgramGraph *base, ZProgramGraph *normalized) {
+  char *rewrite_path = NULL;
+  if (!store_single_changed_source_path(base, normalized, &rewrite_path)) return false;
+  char *base_functions = store_path_function_set(base, rewrite_path);
+  char *edited_functions = store_path_function_set(normalized, rewrite_path);
+  bool functions_match = store_text_eq(base_functions, edited_functions);
+  free(base_functions);
+  free(edited_functions);
+  bool accepted = false;
+  if (functions_match) {
+    ZProgramGraphIdentityReconcile retry = {0};
+    accepted = z_program_graph_preserve_source_node_ids_excluding_path(base, normalized, rewrite_path, &retry);
+    if (accepted) fprintf(stderr, "note: file-scope rewrite accepted; node identities regenerated for %s\n", rewrite_path);
+  }
+  free(rewrite_path);
+  return accepted;
 }
 
 static bool store_preserve_existing_source_identities(const char *path, ZProgramGraph *normalized, ZDiag *diag) {
@@ -858,6 +991,10 @@ static bool store_preserve_existing_source_identities(const char *path, ZProgram
   }
   ZProgramGraphIdentityReconcile identity = {0};
   bool ok = z_program_graph_preserve_source_node_ids(&existing.graph, normalized, &identity);
+  if (!ok && identity.ambiguous && store_accept_file_scope_rewrite(&existing.graph, normalized)) {
+    z_program_graph_store_free(&existing);
+    return true;
+  }
   z_program_graph_store_free(&existing);
   if (ok) {
     if (identity.auto_resolved > 0) {
@@ -1204,26 +1341,127 @@ static bool store_bytes_equal(const unsigned char *left, size_t left_len, const 
   return left_len == right_len && (left_len == 0 || memcmp(left, right_data, left_len) == 0);
 }
 
+static long long store_perf_now_us(void) {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (long long)tv.tv_sec * 1000000LL + tv.tv_usec;
+}
+
+static bool store_perf_trace_enabled(void) {
+  static int enabled = -1;
+  if (enabled < 0) enabled = getenv("ZERO_PERF_TRACE") ? 1 : 0;
+  return enabled == 1;
+}
+
+static char *store_clone_text(const char *text) { return text ? z_strdup(text) : NULL; }
+
+static void store_clone(const ZProgramGraphStore *from, ZProgramGraphStore *out) {
+  z_program_graph_store_init(out);
+  out->root = store_clone_text(from->root);
+  out->path = store_clone_text(from->path);
+  out->present = from->present;
+  out->format = from->format;
+  out->schema_version = from->schema_version;
+  out->source_projection_hash = store_clone_text(from->source_projection_hash);
+  if (from->source_path_len > 0) {
+    out->source_paths = z_checked_calloc(from->source_path_len, sizeof(char *));
+    for (size_t i = 0; i < from->source_path_len; i++) out->source_paths[i] = store_clone_text(from->source_paths[i]);
+    out->source_path_len = from->source_path_len;
+    out->source_path_cap = from->source_path_len;
+  }
+  if (from->projection_len > 0) {
+    out->projection_paths = z_checked_calloc(from->projection_len, sizeof(char *));
+    out->projection_texts = z_checked_calloc(from->projection_len, sizeof(char *));
+    for (size_t i = 0; i < from->projection_len; i++) {
+      out->projection_paths[i] = store_clone_text(from->projection_paths[i]);
+      out->projection_texts[i] = store_clone_text(from->projection_texts[i]);
+    }
+    out->projection_len = from->projection_len;
+    out->projection_cap = from->projection_len;
+  }
+  z_program_graph_clone(&from->graph, &out->graph);
+}
+
+/*
+ * Per-process memo of the most recent successful store load. Compiler
+ * commands resolve, verify, and consume the same zero.graph store several
+ * times per invocation; the memo turns repeat loads into a clone of the
+ * already parsed and byte-stability-proven store. Correctness contract: a
+ * repeat load only reuses the memo when the requested path string and the
+ * exact on-disk bytes match the memoized load, so any store rewrite (or
+ * external edit) between loads forces a fresh parse and revalidation.
+ */
+typedef struct {
+  bool present;
+  char *path;
+  unsigned char *bytes;
+  size_t len;
+  ZProgramGraphStore store;
+} StoreLoadMemo;
+
+static StoreLoadMemo store_load_memo;
+
+static bool store_load_memo_matches(const char *path, const unsigned char *data, size_t len) {
+  if (!store_load_memo.present || !path || !store_load_memo.path) return false;
+  if (strcmp(path, store_load_memo.path) != 0) return false;
+  if (len != store_load_memo.len) return false;
+  return len == 0 || memcmp(data, store_load_memo.bytes, len) == 0;
+}
+
+static void store_load_memo_replace(const char *path, unsigned char *data, size_t len, const ZProgramGraphStore *store) {
+  if (store_load_memo.present) {
+    free(store_load_memo.path);
+    free(store_load_memo.bytes);
+    z_program_graph_store_free(&store_load_memo.store);
+    store_load_memo.present = false;
+  }
+  store_load_memo.path = z_strdup(path ? path : "");
+  store_load_memo.bytes = data;
+  store_load_memo.len = len;
+  store_clone(store, &store_load_memo.store);
+  store_load_memo.present = true;
+}
+
 bool z_program_graph_store_load_path(const char *path, ZProgramGraphStore *out, ZDiag *diag) {
+  long long trace_started = store_perf_trace_enabled() ? store_perf_now_us() : 0;
   unsigned char *data = NULL;
   size_t len = 0;
   if (!store_read_file_bytes(path, &data, &len, diag)) return false;
+  if (store_load_memo_matches(path, data, len)) {
+    free(data);
+    store_clone(&store_load_memo.store, out);
+    if (trace_started) {
+      fprintf(stderr, "[perf] store_load path=%s bytes=%zu memo=hit total=%lldus\n",
+              path ? path : "(null)", len, store_perf_now_us() - trace_started);
+    }
+    return true;
+  }
   ZProgramGraphStoreFormat format = z_program_graph_store_bytes_are_binary(data, len)
     ? Z_PROGRAM_GRAPH_STORE_FORMAT_BINARY
     : Z_PROGRAM_GRAPH_STORE_FORMAT_TEXT;
+  long long trace_parse_started = trace_started ? store_perf_now_us() : 0;
   bool ok = store_parse_format(path, data, len, format, out, diag);
+  long long trace_parse_us = trace_started ? store_perf_now_us() - trace_parse_started : 0;
+  long long trace_stability_us = 0;
   if (ok) {
+    long long trace_stability_started = trace_started ? store_perf_now_us() : 0;
     ZBuf canonical;
     zbuf_init(&canonical);
     store_append_format(&canonical, &out->graph, out, out->format);
     ok = store_bytes_equal(data, len, &canonical);
     zbuf_free(&canonical);
+    if (trace_started) trace_stability_us = store_perf_now_us() - trace_stability_started;
     if (!ok) {
       z_program_graph_store_free(out);
       store_byte_stability_fail(path, diag);
     }
   }
-  free(data);
+  if (ok) store_load_memo_replace(path, data, len, out);
+  else free(data);
+  if (trace_started) {
+    fprintf(stderr, "[perf] store_load path=%s bytes=%zu memo=miss parse=%lldus stability=%lldus total=%lldus\n",
+            path ? path : "(null)", len, trace_parse_us, trace_stability_us, store_perf_now_us() - trace_started);
+  }
   return ok;
 }
 

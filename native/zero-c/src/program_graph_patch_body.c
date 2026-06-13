@@ -1,6 +1,8 @@
 #include "program_graph_patch_body.h"
 #include "canonical_text.h"
+#include "program_graph_handle.h"
 #include "program_graph_import.h"
+#include "type_core.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -13,6 +15,7 @@ typedef struct {
 } BodyIdMap;
 
 static char *body_expr_source(const char *expr);
+static size_t body_next_edge_order(const ZProgramGraph *graph, const char *from, const char *kind);
 
 static bool body_text_eq(const char *left, const char *right) {
   return strcmp(left ? left : "", right ? right : "") == 0;
@@ -525,6 +528,31 @@ static ZProgramGraphNode *body_find_function(ZProgramGraph *graph, const char *n
   return count == 1 ? found : NULL;
 }
 
+static ZProgramGraphNode *body_find_module(ZProgramGraph *graph) {
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    if (graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_MODULE) return &graph->nodes[i];
+  }
+  return NULL;
+}
+
+static char *body_module_path(ZProgramGraph *graph) {
+  ZProgramGraphNode *module = body_find_module(graph);
+  if (module && module->path && module->path[0]) return z_strdup(module->path);
+  return z_strdup("src/main.0");
+}
+
+static ZProgramGraphNode *body_single_function(ZProgramGraph *graph, size_t *out_count) {
+  ZProgramGraphNode *found = NULL;
+  size_t count = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    if (graph->nodes[i].kind != Z_PROGRAM_GRAPH_NODE_FUNCTION) continue;
+    found = &graph->nodes[i];
+    count++;
+  }
+  if (out_count) *out_count = count;
+  return count == 1 ? found : NULL;
+}
+
 static ZProgramGraphNode *body_child(ZProgramGraph *graph, const char *from, const char *kind) {
   for (size_t i = 0; graph && from && kind && i < graph->edge_len; i++) {
     ZProgramGraphEdge *edge = &graph->edges[i];
@@ -586,6 +614,27 @@ static void body_clear_statements(ZProgramGraph *graph, const char *body_id) {
   free(remove);
 }
 
+static void body_remove_node_subtree(ZProgramGraph *graph, const char *root_id) {
+  bool *remove = z_checked_calloc(graph->node_len ? graph->node_len : 1, sizeof(bool));
+  body_mark_reachable(graph, root_id, remove);
+  size_t edge_out = 0;
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    ZProgramGraphEdge edge = graph->edges[i];
+    bool drop = body_node_marked(graph, remove, edge.from) ||
+                (edge.target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_node_marked(graph, remove, edge.to));
+    if (drop) body_free_edge(&edge);
+    else graph->edges[edge_out++] = edge;
+  }
+  graph->edge_len = edge_out;
+  size_t node_out = 0;
+  for (size_t i = 0; i < graph->node_len; i++) {
+    if (remove[i]) body_free_node(&graph->nodes[i]);
+    else graph->nodes[node_out++] = graph->nodes[i];
+  }
+  graph->node_len = node_out;
+  free(remove);
+}
+
 static void body_reserve_nodes(ZProgramGraph *graph, size_t len) {
   if (graph->node_cap >= len) return;
   size_t next = graph->node_cap ? graph->node_cap * 2 : 8;
@@ -624,7 +673,7 @@ static const char *body_mapped_id(BodyIdMap *map, size_t len, const char *from) 
   return from;
 }
 
-static void body_copy_node(ZProgramGraph *graph, const ZProgramGraphNode *src, const char *id, const char *path) {
+static ZProgramGraphNode *body_copy_node(ZProgramGraph *graph, const ZProgramGraphNode *src, const char *id, const char *path) {
   body_reserve_nodes(graph, graph->node_len + 1);
   ZProgramGraphNode *node = &graph->nodes[graph->node_len++];
   *node = *src;
@@ -637,6 +686,7 @@ static void body_copy_node(ZProgramGraph *graph, const ZProgramGraphNode *src, c
   node->type_id = src->type_id ? z_strdup(src->type_id) : NULL;
   node->effect_id = src->effect_id ? z_strdup(src->effect_id) : NULL;
   node->node_hash = src->node_hash ? z_strdup(src->node_hash) : NULL;
+  return node;
 }
 
 static void body_copy_edge(ZProgramGraph *graph, const ZProgramGraphEdge *src, const char *from, const char *to) {
@@ -649,6 +699,50 @@ static void body_copy_edge(ZProgramGraph *graph, const ZProgramGraphEdge *src, c
   edge->order = src->order;
 }
 
+static char *body_copy_marked_nodes(ZProgramGraph *target, ZProgramGraph *source, bool *copy, const char *target_path, const char *source_root_id, const char *override_root_name, BodyIdMap **out_map, size_t *out_map_len) {
+  BodyIdMap *map = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(BodyIdMap));
+  size_t map_len = 0;
+  char *new_root_id = NULL;
+  for (size_t i = 0; i < source->node_len; i++) {
+    if (!copy[i]) continue;
+    map[map_len].from = source->nodes[i].id;
+    map[map_len].to = body_unique_id(target, source->nodes[i].id);
+    ZProgramGraphNode *node = body_copy_node(target, &source->nodes[i], map[map_len].to, target_path);
+    if (source_root_id && body_text_eq(source->nodes[i].id, source_root_id)) {
+      new_root_id = z_strdup(map[map_len].to);
+      if (override_root_name && override_root_name[0]) body_replace(&node->name, override_root_name);
+    }
+    map_len++;
+  }
+  *out_map = map;
+  *out_map_len = map_len;
+  return new_root_id;
+}
+
+static void body_copy_marked_edges(ZProgramGraph *target, ZProgramGraph *source, bool *copy, BodyIdMap *map, size_t map_len, const char *source_parent_id, const char *target_parent_id, const char *parent_edge_kind, size_t order_offset) {
+  for (size_t i = 0; i < source->edge_len; i++) {
+    ZProgramGraphEdge *edge = &source->edges[i];
+    bool from_parent = source_parent_id && target_parent_id && parent_edge_kind &&
+                       edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE &&
+                       body_text_eq(edge->from, source_parent_id) &&
+                       body_text_eq(edge->kind, parent_edge_kind);
+    bool from_copy = body_node_marked(source, copy, edge->from);
+    bool to_copy = edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_node_marked(source, copy, edge->to);
+    if (from_parent && to_copy) {
+      body_copy_edge(target, edge, target_parent_id, body_mapped_id(map, map_len, edge->to));
+      target->edges[target->edge_len - 1].order = edge->order + order_offset;
+    } else if (from_copy && (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || to_copy)) {
+      const char *mapped_to = edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE ? body_mapped_id(map, map_len, edge->to) : edge->to;
+      body_copy_edge(target, edge, body_mapped_id(map, map_len, edge->from), mapped_to);
+    }
+  }
+}
+
+static void body_free_id_map(BodyIdMap *map, size_t map_len) {
+  for (size_t i = 0; i < map_len; i++) free(map[i].to);
+  free(map);
+}
+
 static bool body_splice_block(ZProgramGraph *target, ZProgramGraph *source, const char *target_body_id, const char *source_body_id, const char *target_path) {
   if (!target || !source || !target_body_id || !source_body_id) return false;
   body_clear_statements(target, target_body_id);
@@ -657,27 +751,57 @@ static bool body_splice_block(ZProgramGraph *target, ZProgramGraph *source, cons
     ZProgramGraphEdge *edge = &source->edges[i];
     if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, source_body_id) && body_text_eq(edge->kind, "statement")) body_mark_reachable(source, edge->to, copy);
   }
-  BodyIdMap *map = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(BodyIdMap));
+  BodyIdMap *map = NULL;
   size_t map_len = 0;
-  for (size_t i = 0; i < source->node_len; i++) {
-    if (!copy[i]) continue;
-    map[map_len].from = source->nodes[i].id;
-    map[map_len].to = body_unique_id(target, source->nodes[i].id);
-    body_copy_node(target, &source->nodes[i], map[map_len].to, target_path);
-    map_len++;
-  }
+  char *unused_root = body_copy_marked_nodes(target, source, copy, target_path, NULL, NULL, &map, &map_len);
+  free(unused_root);
+  body_copy_marked_edges(target, source, copy, map, map_len, source_body_id, target_body_id, "statement", 0);
+  body_free_id_map(map, map_len);
+  free(copy);
+  return true;
+}
+
+static bool body_append_block(ZProgramGraph *target, ZProgramGraph *source, const char *target_body_id, const char *source_body_id, const char *target_path) {
+  if (!target || !source || !target_body_id || !source_body_id) return false;
+  bool *copy = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(bool));
   for (size_t i = 0; i < source->edge_len; i++) {
     ZProgramGraphEdge *edge = &source->edges[i];
-    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE) continue;
-    bool from_body = body_text_eq(edge->from, source_body_id) && body_text_eq(edge->kind, "statement");
-    bool from_copy = body_node_marked(source, copy, edge->from);
-    bool to_copy = body_node_marked(source, copy, edge->to);
-    if (from_body && to_copy) body_copy_edge(target, edge, target_body_id, body_mapped_id(map, map_len, edge->to));
-    else if (from_copy && to_copy) body_copy_edge(target, edge, body_mapped_id(map, map_len, edge->from), body_mapped_id(map, map_len, edge->to));
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, source_body_id) && body_text_eq(edge->kind, "statement")) body_mark_reachable(source, edge->to, copy);
   }
-  for (size_t i = 0; i < map_len; i++) free(map[i].to);
-  free(map);
+  BodyIdMap *map = NULL;
+  size_t map_len = 0;
+  char *unused_root = body_copy_marked_nodes(target, source, copy, target_path, NULL, NULL, &map, &map_len);
+  free(unused_root);
+  size_t order_offset = body_next_edge_order(target, target_body_id, "statement");
+  body_copy_marked_edges(target, source, copy, map, map_len, source_body_id, target_body_id, "statement", order_offset);
+  body_free_id_map(map, map_len);
   free(copy);
+  return true;
+}
+
+static bool body_copy_function_to_module(ZProgramGraph *target, ZProgramGraph *source, ZProgramGraphNode *source_fn, const char *target_path, const char *override_function_name, char **out_function_id) {
+  ZProgramGraphNode *module = body_find_module(target);
+  if (!module || !source_fn) return false;
+  char *module_id = z_strdup(module->id ? module->id : "");
+  bool *copy = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(bool));
+  body_mark_reachable(source, source_fn->id, copy);
+  BodyIdMap *map = NULL;
+  size_t map_len = 0;
+  char *new_function_id = body_copy_marked_nodes(target, source, copy, target_path, source_fn->id, override_function_name, &map, &map_len);
+  body_copy_marked_edges(target, source, copy, map, map_len, NULL, NULL, NULL, 0);
+  size_t module_order = body_next_edge_order(target, module_id, "function");
+  body_reserve_edges(target, target->edge_len + 1);
+  ZProgramGraphEdge *module_edge = &target->edges[target->edge_len++];
+  module_edge->from = z_strdup(module_id);
+  module_edge->to = z_strdup(new_function_id ? new_function_id : "");
+  module_edge->kind = z_strdup("function");
+  module_edge->target = Z_PROGRAM_GRAPH_EDGE_TARGET_NODE;
+  module_edge->order = module_order;
+  free(module_id);
+  body_free_id_map(map, map_len);
+  free(copy);
+  if (out_function_id) *out_function_id = new_function_id;
+  else free(new_function_id);
   return true;
 }
 
@@ -709,7 +833,27 @@ static bool body_signature_source(ZProgramGraph *graph, const char *function_nam
   size_t count = 0;
   ZProgramGraphNode *fn = body_find_function(graph, function_name, &count);
   if (!fn) {
-    body_fail(result, op, count > 1 ? "GPH003" : "GPH004", count > 1 ? "replaceFunctionBody function name is ambiguous" : "replaceFunctionBody function was not found", function_name, "");
+    if (count > 1) {
+      body_fail(result, op, "GPH003", "replaceFunctionBody function name is ambiguous", function_name, "");
+      return false;
+    }
+    const ZProgramGraphNode *nearest = NULL;
+    size_t nearest_distance = 0;
+    size_t threshold = (function_name ? strlen(function_name) : 0) / 3 + 2;
+    for (size_t i = 0; graph && function_name && i < graph->node_len; i++) {
+      const ZProgramGraphNode *node = &graph->nodes[i];
+      if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->name || !node->name[0]) continue;
+      size_t distance = z_program_graph_handle_distance(function_name, node->name);
+      if (distance > threshold) continue;
+      if (!nearest || distance < nearest_distance) {
+        nearest = node;
+        nearest_distance = distance;
+      }
+    }
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "replaceFunctionBody function was not found; nearest: %s %s", nearest->name, nearest->id ? nearest->id : "");
+    else snprintf(message, sizeof(message), "replaceFunctionBody function was not found");
+    body_fail(result, op, "GPH004", message, function_name, "");
     return false;
   }
   if (fn->is_public) zbuf_append(source, "pub ");
@@ -823,8 +967,20 @@ bool z_program_graph_patch_apply_replace_function_body(ZProgramGraph *graph, ZPr
 
 bool z_program_graph_patch_apply_replace_block_body(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
   const char *block_id = op && op->node && op->node[0] ? op->node : "";
-  ZProgramGraphNode *target_block = body_find_node(graph, block_id);
-  if (!target_block) { body_fail(result, op, "GPH004", "replaceBlockBody block was not found", "Block node id", block_id); return false; }
+  bool block_ambiguous = false;
+  ZProgramGraphNode *target_block = (ZProgramGraphNode *)z_program_graph_resolve_handle(graph, block_id, &block_ambiguous);
+  if (!target_block) {
+    if (block_ambiguous) {
+      body_fail(result, op, "GPH003", "replaceBlockBody block handle is ambiguous", "a unique node id or handle prefix", block_id);
+      return false;
+    }
+    const char *nearest = z_program_graph_nearest_handle(graph, block_id);
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "replaceBlockBody block was not found; nearest: %s", nearest);
+    else snprintf(message, sizeof(message), "replaceBlockBody block was not found");
+    body_fail(result, op, "GPH004", message, "Block node id", block_id);
+    return false;
+  }
   if (target_block->kind != Z_PROGRAM_GRAPH_NODE_BLOCK) { body_fail(result, op, "GPH003", "replaceBlockBody target must be a Block node", "Block", z_program_graph_node_kind_name(target_block->kind)); return false; }
   char *target_body_id = z_strdup(target_block->id ? target_block->id : "");
   char *target_path = z_strdup(target_block->path && target_block->path[0] ? target_block->path : "src/main.0");
@@ -854,6 +1010,763 @@ bool z_program_graph_patch_apply_replace_block_body(ZProgramGraph *graph, ZProgr
   free(target_body_id);
   free(target_path);
   free(source_text);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+static bool body_parse_complete_source(const char *source, const char *message, Program *program, ZProgramGraph *source_graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  ZDiag diag = {0};
+  if (!z_parse_canonical_text_program_source(source ? source : "", program, &diag)) {
+    body_fail(result, op, "GPH001", message, diag.expected[0] ? diag.expected : "complete Zero declaration source", diag.message[0] ? diag.message : (source ? source : ""));
+    return false;
+  }
+  SourceInput input = {0};
+  input.source_file = z_strdup("src/main.0");
+  input.source = z_strdup(source ? source : "");
+  input.canonical_text_source = true;
+  bool ok = z_program_graph_from_program(&input, program, source_graph);
+  z_free_source(&input);
+  if (!ok) body_fail(result, op, "GPH006", "complete declaration could not build a ProgramGraph", "lowerable Zero declaration", source ? source : "");
+  return ok;
+}
+
+bool z_program_graph_patch_apply_upsert_function(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *source = op && op->value ? op->value : "";
+  Program program = {0};
+  ZProgramGraph source_graph = {0};
+  if (!body_parse_complete_source(source, "upsertFunction source did not parse as a complete Zero function", &program, &source_graph, result, op)) {
+    return false;
+  }
+  size_t source_count = 0;
+  ZProgramGraphNode *source_fn = NULL;
+  if (op && op->function && op->function[0]) source_fn = body_find_function(&source_graph, op->function, &source_count);
+  else source_fn = body_single_function(&source_graph, &source_count);
+  if (!source_fn) {
+    if (source_count > 1) body_fail(result, op, "GPH003", "upsertFunction source has more than one function", "one complete function declaration", source);
+    else body_fail(result, op, "GPH004", "upsertFunction source function was not found", op && op->function ? op->function : "one function", source);
+    z_program_graph_free(&source_graph);
+    z_free_program(&program);
+    return false;
+  }
+  const char *function_name = source_fn->name ? source_fn->name : "";
+  size_t target_count = 0;
+  ZProgramGraphNode *target_fn = body_find_function(graph, function_name, &target_count);
+  if (target_count > 1) {
+    body_fail(result, op, "GPH003", "upsertFunction target function name is ambiguous", function_name, "");
+    z_program_graph_free(&source_graph);
+    z_free_program(&program);
+    return false;
+  }
+  char *target_path = target_fn && target_fn->path && target_fn->path[0] ? z_strdup(target_fn->path) : body_module_path(graph);
+  if (target_fn) {
+    char *target_id = z_strdup(target_fn->id ? target_fn->id : "");
+    body_remove_node_subtree(graph, target_id);
+    free(target_id);
+  }
+  bool ok = body_copy_function_to_module(graph, &source_graph, source_fn, target_path, NULL, NULL);
+  free(target_path);
+  if (!ok) body_fail(result, op, "GPH006", "upsertFunction could not splice the function into the package graph", "package graph with a module", function_name);
+  z_program_graph_free(&source_graph);
+  z_free_program(&program);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+static bool body_append_rows_to_function(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, const char *function_name, const char *rows, const char *parse_message) {
+  if (!body_identifier(function_name)) {
+    body_fail(result, op, "GPH003", "append target function must be a Zero identifier", "identifier", function_name);
+    return false;
+  }
+  ZBuf signature;
+  zbuf_init(&signature);
+  if (!body_signature_source(graph, function_name, &signature, result, op)) {
+    zbuf_free(&signature);
+    return false;
+  }
+  Program program = {0};
+  char *source_text = NULL;
+  if (!body_parse_rows_program(signature.data, rows, parse_message, &program, &source_text, result, op)) {
+    zbuf_free(&signature);
+    return false;
+  }
+  zbuf_free(&signature);
+  SourceInput input = {0};
+  input.source_file = z_strdup("src/main.0");
+  input.source = z_strdup(source_text ? source_text : "");
+  input.canonical_text_source = true;
+  ZProgramGraph body_graph = {0};
+  bool ok = z_program_graph_from_program(&input, &program, &body_graph);
+  if (ok) {
+    ZProgramGraphNode *target_fn = body_find_function(graph, function_name, NULL);
+    ZProgramGraphNode *target_body = target_fn ? body_child(graph, target_fn->id, "body") : NULL;
+    ZProgramGraphNode *source_fn = body_find_function(&body_graph, function_name, NULL);
+    ZProgramGraphNode *source_body = source_fn ? body_child(&body_graph, source_fn->id, "body") : NULL;
+    if (!target_body || !source_body) {
+      ok = false;
+      body_fail(result, op, "GPH004", "append target or source body was not found", "function body Block nodes", function_name);
+    } else {
+      char *target_body_id = z_strdup(target_body->id ? target_body->id : "");
+      char *source_body_id = z_strdup(source_body->id ? source_body->id : "");
+      char *target_path = z_strdup(target_body->path && target_body->path[0] ? target_body->path : "src/main.0");
+      ok = body_append_block(graph, &body_graph, target_body_id, source_body_id, target_path);
+      free(target_body_id);
+      free(source_body_id);
+      free(target_path);
+    }
+  }
+  if (!ok && result && !result->message[0]) body_fail(result, op, "GPH006", "append statement rows could not build ProgramGraph statements", "lowerable Zero statement rows", source_text ? source_text : "");
+  z_program_graph_free(&body_graph);
+  z_free_source(&input);
+  z_free_program(&program);
+  free(source_text);
+  return ok;
+}
+
+bool z_program_graph_patch_apply_append_stmt(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *function_name = op && op->function && op->function[0] ? op->function : "main";
+  ZBuf rows;
+  zbuf_init(&rows);
+  zbuf_append(&rows, op && op->value ? op->value : "");
+  zbuf_append_char(&rows, '\n');
+  bool ok = body_append_rows_to_function(graph, result, op, function_name, rows.data ? rows.data : "", "appendStmt text did not parse as a Zero statement");
+  zbuf_free(&rows);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+bool z_program_graph_patch_apply_add_return_expr(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *function_name = op && op->function && op->function[0] ? op->function : "main";
+  ZBuf rows;
+  zbuf_init(&rows);
+  zbuf_append(&rows, "return ");
+  zbuf_append(&rows, op && op->value ? op->value : "");
+  zbuf_append_char(&rows, '\n');
+  bool ok = body_append_rows_to_function(graph, result, op, function_name, rows.data ? rows.data : "", "addReturnExpr text did not parse as a Zero return expression");
+  zbuf_free(&rows);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+static void body_append_quoted_string(ZBuf *out, const char *text) {
+  zbuf_append_char(out, '"');
+  for (const char *cursor = text ? text : ""; *cursor; cursor++) {
+    switch (*cursor) {
+      case '\\': zbuf_append(out, "\\\\"); break;
+      case '"': zbuf_append(out, "\\\""); break;
+      case '\n': zbuf_append(out, "\\n"); break;
+      case '\r': zbuf_append(out, "\\r"); break;
+      case '\t': zbuf_append(out, "\\t"); break;
+      default: zbuf_append_char(out, *cursor); break;
+    }
+  }
+  zbuf_append_char(out, '"');
+}
+
+static size_t body_next_test_index(const ZProgramGraph *graph) {
+  size_t next = 0;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->name || strncmp(node->name, "__zero_test_", strlen("__zero_test_")) != 0) continue;
+    next++;
+  }
+  while (true) {
+    char name[64];
+    snprintf(name, sizeof(name), "__zero_test_%zu", next);
+    size_t count = 0;
+    body_find_function((ZProgramGraph *)graph, name, &count);
+    if (count == 0) return next;
+    next++;
+  }
+}
+
+bool z_program_graph_patch_apply_add_test_body(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  ZBuf source;
+  zbuf_init(&source);
+  zbuf_append(&source, "test ");
+  body_append_quoted_string(&source, op && op->name ? op->name : "");
+  zbuf_append(&source, " {\n");
+  zbuf_append(&source, op && op->value ? op->value : "");
+  if (source.len > 0 && source.data[source.len - 1] != '\n') zbuf_append_char(&source, '\n');
+  zbuf_append(&source, "}\n");
+  Program program = {0};
+  ZProgramGraph source_graph = {0};
+  bool ok = body_parse_complete_source(source.data ? source.data : "", "addTestBody rows did not parse as a Zero test body", &program, &source_graph, result, op);
+  zbuf_free(&source);
+  if (!ok) return false;
+  ZProgramGraphNode *source_fn = body_single_function(&source_graph, NULL);
+  if (!source_fn) {
+    body_fail(result, op, "GPH004", "addTestBody generated test function was not found", "generated test function", op && op->name ? op->name : "");
+    z_program_graph_free(&source_graph);
+    z_free_program(&program);
+    return false;
+  }
+  char test_function_name[64];
+  snprintf(test_function_name, sizeof(test_function_name), "__zero_test_%zu", body_next_test_index(graph));
+  char *target_path = body_module_path(graph);
+  ok = body_copy_function_to_module(graph, &source_graph, source_fn, target_path, test_function_name, NULL);
+  free(target_path);
+  if (!ok) body_fail(result, op, "GPH006", "addTestBody could not splice the test into the package graph", "package graph with a module", op && op->name ? op->name : "");
+  z_program_graph_free(&source_graph);
+  z_free_program(&program);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+// ---- replaceExpr ----
+
+static bool body_node_kind_is_expression(ZProgramGraphNodeKind kind) {
+  switch (kind) {
+    case Z_PROGRAM_GRAPH_NODE_IDENTIFIER:
+    case Z_PROGRAM_GRAPH_NODE_LITERAL:
+    case Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS:
+    case Z_PROGRAM_GRAPH_NODE_INDEX_ACCESS:
+    case Z_PROGRAM_GRAPH_NODE_SLICE:
+    case Z_PROGRAM_GRAPH_NODE_CALL:
+    case Z_PROGRAM_GRAPH_NODE_METHOD_CALL:
+    case Z_PROGRAM_GRAPH_NODE_CAST:
+    case Z_PROGRAM_GRAPH_NODE_BORROW:
+    case Z_PROGRAM_GRAPH_NODE_CHECK:
+    case Z_PROGRAM_GRAPH_NODE_RESCUE:
+    case Z_PROGRAM_GRAPH_NODE_META:
+    case Z_PROGRAM_GRAPH_NODE_SHAPE_LITERAL:
+    case Z_PROGRAM_GRAPH_NODE_ARRAY_LITERAL:
+    case Z_PROGRAM_GRAPH_NODE_EXPRESSION:
+      return true;
+    default:
+      return false;
+  }
+}
+
+/* Statements whose primary expression lives behind an "expr" edge; a
+ * replaceExpr aimed at the statement handle replaces that child. */
+static bool body_statement_owns_expr(ZProgramGraphNodeKind kind) {
+  switch (kind) {
+    case Z_PROGRAM_GRAPH_NODE_LET:
+    case Z_PROGRAM_GRAPH_NODE_ASSIGNMENT:
+    case Z_PROGRAM_GRAPH_NODE_DEFER:
+    case Z_PROGRAM_GRAPH_NODE_CHECK:
+    case Z_PROGRAM_GRAPH_NODE_RETURN:
+    case Z_PROGRAM_GRAPH_NODE_EXPRESSION_STATEMENT:
+    case Z_PROGRAM_GRAPH_NODE_IF:
+    case Z_PROGRAM_GRAPH_NODE_WHILE:
+    case Z_PROGRAM_GRAPH_NODE_FOR:
+    case Z_PROGRAM_GRAPH_NODE_MATCH:
+      return true;
+    default:
+      return false;
+  }
+}
+
+static ZProgramGraphNode *body_expr_child(ZProgramGraph *graph, const char *from) {
+  for (size_t i = 0; graph && from && i < graph->edge_len; i++) {
+    ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && edge->order == 0 && body_text_eq(edge->from, from) && body_text_eq(edge->kind, "expr")) {
+      return body_find_node(graph, edge->to);
+    }
+  }
+  return NULL;
+}
+
+/* Builds an expression-only ProgramGraph by parsing `return <expr>` inside a
+ * synthetic function; on success *out_root_id names the expression root. */
+static bool body_parse_expression_graph(const char *expr_text, ZProgramGraph *out_graph, char **out_root_id, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  ZBuf source;
+  zbuf_init(&source);
+  zbuf_append(&source, "fn __zero_patch_expr() -> Void raises {\n    return ");
+  zbuf_append(&source, expr_text ? expr_text : "");
+  zbuf_append(&source, "\n}\n");
+  Program program = {0};
+  ZDiag parse_diag = {0};
+  if (!z_parse_canonical_text_program_source(source.data ? source.data : "", &program, &parse_diag)) {
+    body_fail(result, op, "GPH001", "replaceExpr text did not parse as a Zero expression",
+              parse_diag.expected[0] ? parse_diag.expected : "an expression in zero view syntax",
+              parse_diag.message[0] ? parse_diag.message : (expr_text ? expr_text : ""));
+    z_free_program(&program);
+    zbuf_free(&source);
+    return false;
+  }
+  SourceInput input = {0};
+  input.source_file = z_strdup("src/main.0");
+  input.source = z_strdup(source.data ? source.data : "");
+  input.canonical_text_source = true;
+  bool ok = z_program_graph_from_program(&input, &program, out_graph);
+  char *root_id = NULL;
+  if (ok) {
+    ZProgramGraphNode *fn = body_find_function(out_graph, "__zero_patch_expr", NULL);
+    ZProgramGraphNode *body = fn ? body_child(out_graph, fn->id, "body") : NULL;
+    ZProgramGraphNode *ret = NULL;
+    for (size_t i = 0; body && i < out_graph->edge_len; i++) {
+      ZProgramGraphEdge *edge = &out_graph->edges[i];
+      if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, body->id) && body_text_eq(edge->kind, "statement")) {
+        ret = body_find_node(out_graph, edge->to);
+        break;
+      }
+    }
+    ZProgramGraphNode *root = ret ? body_expr_child(out_graph, ret->id) : NULL;
+    if (root) root_id = z_strdup(root->id);
+    else ok = false;
+  }
+  if (!ok) {
+    body_fail(result, op, "GPH006", "replaceExpr could not build an expression subtree", "lowerable Zero expression", expr_text ? expr_text : "");
+    z_free_source(&input);
+    z_free_program(&program);
+    zbuf_free(&source);
+    free(root_id);
+    return false;
+  }
+  z_free_source(&input);
+  z_free_program(&program);
+  zbuf_free(&source);
+  *out_root_id = root_id;
+  return true;
+}
+
+/* Copies the source expression subtree into the target graph and returns the
+ * new root id (unique-id mapped). */
+static char *body_splice_expression(ZProgramGraph *target, ZProgramGraph *source, const char *source_root_id, const char *target_path, int line, int column) {
+  bool *copy = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(bool));
+  body_mark_reachable(source, source_root_id, copy);
+  BodyIdMap *map = z_checked_calloc(source->node_len ? source->node_len : 1, sizeof(BodyIdMap));
+  size_t map_len = 0;
+  char *new_root = NULL;
+  for (size_t i = 0; i < source->node_len; i++) {
+    if (!copy[i]) continue;
+    map[map_len].from = source->nodes[i].id;
+    map[map_len].to = body_unique_id(target, source->nodes[i].id);
+    body_copy_node(target, &source->nodes[i], map[map_len].to, target_path);
+    /* keep the replaced node's source position so ordered (let) bindings
+     * stay visible to the spliced references */
+    target->nodes[target->node_len - 1].line = line > 0 ? line : 1;
+    target->nodes[target->node_len - 1].column = column > 0 ? column : 1;
+    if (body_text_eq(source->nodes[i].id, source_root_id)) new_root = z_strdup(map[map_len].to);
+    map_len++;
+  }
+  for (size_t i = 0; i < source->edge_len; i++) {
+    ZProgramGraphEdge *edge = &source->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE) continue;
+    if (!body_node_marked(source, copy, edge->from) || !body_node_marked(source, copy, edge->to)) continue;
+    body_copy_edge(target, edge, body_mapped_id(map, map_len, edge->from), body_mapped_id(map, map_len, edge->to));
+  }
+  for (size_t i = 0; i < map_len; i++) free(map[i].to);
+  free(map);
+  free(copy);
+  return new_root;
+}
+
+/* Removes the old expression subtree (nodes plus edges touching them). */
+static void body_remove_subtree(ZProgramGraph *graph, const char *root_id) {
+  bool *remove = z_checked_calloc(graph->node_len ? graph->node_len : 1, sizeof(bool));
+  body_mark_reachable(graph, root_id, remove);
+  size_t edge_out = 0;
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    ZProgramGraphEdge edge = graph->edges[i];
+    bool drop = body_node_marked(graph, remove, edge.from) ||
+                (edge.target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_node_marked(graph, remove, edge.to));
+    if (drop) body_free_edge(&edge);
+    else graph->edges[edge_out++] = edge;
+  }
+  graph->edge_len = edge_out;
+  size_t node_out = 0;
+  for (size_t i = 0; i < graph->node_len; i++) {
+    if (remove[i]) body_free_node(&graph->nodes[i]);
+    else graph->nodes[node_out++] = graph->nodes[i];
+  }
+  graph->node_len = node_out;
+  free(remove);
+}
+
+bool z_program_graph_patch_apply_replace_expr(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *handle = op && op->node && op->node[0] ? op->node : "";
+  bool ambiguous = false;
+  ZProgramGraphNode *target = (ZProgramGraphNode *)z_program_graph_resolve_handle(graph, handle, &ambiguous);
+  if (!target) {
+    if (ambiguous) {
+      body_fail(result, op, "GPH003", "replaceExpr handle is ambiguous", "a unique node id or handle prefix", handle);
+      return false;
+    }
+    const char *nearest = z_program_graph_nearest_handle(graph, handle);
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "replaceExpr node was not found; nearest: %s", nearest);
+    else snprintf(message, sizeof(message), "replaceExpr node was not found");
+    body_fail(result, op, "GPH004", message, "an expression or statement handle; zero view --fn <name> --handles prints them", handle);
+    return false;
+  }
+  if (!body_node_kind_is_expression(target->kind)) {
+    if (!body_statement_owns_expr(target->kind)) {
+      body_fail(result, op, "GPH003", "replaceExpr target must be an expression or a statement that owns one", "expression node, or Let/Assignment/Check/Return/If/While/For/Match statement", z_program_graph_node_kind_name(target->kind));
+      return false;
+    }
+    ZProgramGraphNode *child = body_expr_child(graph, target->id);
+    if (!child) {
+      body_fail(result, op, "GPH004", "replaceExpr statement has no expression child", "statement with an expr edge", target->id ? target->id : handle);
+      return false;
+    }
+    target = child;
+  }
+  body_replace(&op->actual, target->node_hash ? target->node_hash : "");
+  if (op->has_expected && !body_text_eq(op->expected, op->actual)) {
+    body_fail(result, op, "GPH005", "replaceExpr node hash precondition failed", op->expected, op->actual);
+    return false;
+  }
+  /* the expression must have exactly one owning edge to repoint */
+  size_t owner_index = (size_t)-1;
+  size_t owner_count = 0;
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !body_text_eq(edge->to, target->id)) continue;
+    owner_index = i;
+    owner_count++;
+  }
+  if (owner_count != 1) {
+    body_fail(result, op, "GPH003", "replaceExpr target must have exactly one owning edge", "an expression owned by one parent", target->id ? target->id : handle);
+    return false;
+  }
+  char *old_root_id = z_strdup(target->id ? target->id : "");
+  char *target_path = z_strdup(target->path && target->path[0] ? target->path : "src/main.0");
+  /* Anchor spliced nodes at the enclosing statement's position so ordered
+   * (let) bindings declared above stay visible to the new references. */
+  int target_line = target->line;
+  int target_column = target->column;
+  const char *position_cursor = target->id;
+  for (size_t depth = 0; position_cursor && depth < graph->node_len; depth++) {
+    const ZProgramGraphEdge *owner_edge = NULL;
+    for (size_t i = 0; i < graph->edge_len; i++) {
+      ZProgramGraphEdge *edge = &graph->edges[i];
+      if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->to, position_cursor)) {
+        owner_edge = edge;
+        break;
+      }
+    }
+    if (!owner_edge) break;
+    ZProgramGraphNode *owner_node = body_find_node(graph, owner_edge->from);
+    if (!owner_node) break;
+    if (body_text_eq(owner_edge->kind, "statement")) {
+      ZProgramGraphNode *statement = body_find_node(graph, position_cursor);
+      if (statement && statement->line > target_line) {
+        target_line = statement->line;
+        target_column = statement->column;
+      }
+      break;
+    }
+    if (owner_node->line > target_line) {
+      target_line = owner_node->line;
+      target_column = owner_node->column;
+    }
+    if (owner_node->kind == Z_PROGRAM_GRAPH_NODE_FUNCTION || owner_node->kind == Z_PROGRAM_GRAPH_NODE_MODULE) break;
+    position_cursor = owner_node->id;
+  }
+  ZProgramGraph expr_graph = {0};
+  char *source_root_id = NULL;
+  bool ok = body_parse_expression_graph(op ? op->value : "", &expr_graph, &source_root_id, result, op);
+  char *new_root_id = NULL;
+  if (ok) {
+    new_root_id = body_splice_expression(graph, &expr_graph, source_root_id, target_path, target_line, target_column);
+    ok = new_root_id != NULL;
+    if (!ok) body_fail(result, op, "GPH006", "replaceExpr could not splice the expression subtree", "lowerable Zero expression", op && op->value ? op->value : "");
+  }
+  if (ok) {
+    ZProgramGraphEdge *owner = &graph->edges[owner_index];
+    body_replace(&owner->to, new_root_id);
+    body_remove_subtree(graph, old_root_id);
+  }
+  z_program_graph_free(&expr_graph);
+  free(source_root_id);
+  free(new_root_id);
+  free(old_root_id);
+  free(target_path);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+// ---- declaration-level ops: setConst, addParamTo ----
+
+static ZProgramGraphNode *body_find_const(ZProgramGraph *graph, const char *name, size_t *out_count) {
+  ZProgramGraphNode *found = NULL;
+  size_t count = 0;
+  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
+    if (graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_CONST && body_text_eq(graph->nodes[i].name, name)) {
+      found = &graph->nodes[i];
+      count++;
+    }
+  }
+  if (out_count) *out_count = count;
+  return count == 1 ? found : NULL;
+}
+
+/* setConst name="<const>" value="<expr>": replaces a top-level const's
+ * initializer expression by package-scoped name, then revalidates through the
+ * same expression-splice pipeline replaceExpr uses. */
+bool z_program_graph_patch_apply_set_const(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *name = op && op->name ? op->name : "";
+  size_t count = 0;
+  ZProgramGraphNode *found = body_find_const(graph, name, &count);
+  if (count > 1) {
+    body_fail(result, op, "GPH003", "setConst const name is ambiguous", "a unique top-level const name", name);
+    return false;
+  }
+  if (!found) {
+    const ZProgramGraphNode *nearest = NULL;
+    size_t nearest_distance = 0;
+    size_t threshold = (name ? strlen(name) : 0) / 3 + 2;
+    for (size_t i = 0; graph && i < graph->node_len; i++) {
+      const ZProgramGraphNode *node = &graph->nodes[i];
+      if (node->kind != Z_PROGRAM_GRAPH_NODE_CONST || !node->name || !node->name[0]) continue;
+      size_t distance = z_program_graph_handle_distance(name, node->name);
+      if (distance > threshold) continue;
+      if (!nearest || distance < nearest_distance) {
+        nearest = node;
+        nearest_distance = distance;
+      }
+    }
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "setConst const was not found; nearest: %s", nearest->name);
+    else snprintf(message, sizeof(message), "setConst const was not found");
+    body_fail(result, op, "GPH004", message, "an existing top-level const name", name);
+    return false;
+  }
+  ZProgramGraphNode *value_node = body_child(graph, found->id, "value");
+  if (!value_node) {
+    body_fail(result, op, "GPH004", "setConst const has no value expression", "Const node with a value edge", name);
+    return false;
+  }
+  body_replace(&op->node, value_node->id);
+  return z_program_graph_patch_apply_replace_expr(graph, result, op);
+}
+
+static bool body_type_text_valid(const char *text) {
+  if (!text || !text[0]) return false;
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeId type = Z_TYPE_ID_INVALID;
+  ZTypeParseError error = {0};
+  bool ok = z_type_parse(&arena, text, &type, &error);
+  z_type_arena_free(&arena);
+  return ok;
+}
+
+/* Byte-view parameters occupy two direct-backend ABI argument slots; every
+ * other parameter occupies one. Mirrors the buildability function-shape rule. */
+static size_t body_type_abi_slots(const char *type) {
+  static const char *const byte_views[] = {"String", "Span<const u8>", "Address", "ByteBuf", "owned<ByteBuf>", "BufferedReader", "BufferedWriter", NULL};
+  if (!type || !type[0]) return 1;
+  for (size_t i = 0; byte_views[i]; i++) {
+    if (body_text_eq(type, byte_views[i])) return 2;
+  }
+  if (strncmp(type, "Span<", 5) == 0 || strncmp(type, "MutSpan<", 8) == 0) return 2;
+  return 1;
+}
+
+static size_t body_next_edge_order(const ZProgramGraph *graph, const char *from, const char *kind) {
+  size_t next = 0;
+  for (size_t i = 0; graph && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, from) && body_text_eq(edge->kind, kind) && edge->order >= next) next = edge->order + 1;
+  }
+  return next;
+}
+
+static ZProgramGraphNode *body_append_decl_node(ZProgramGraph *graph, const char *id, ZProgramGraphNodeKind kind, const char *path, const char *name, const char *type, int line, int column) {
+  body_reserve_nodes(graph, graph->node_len + 1);
+  ZProgramGraphNode *node = &graph->nodes[graph->node_len++];
+  *node = (ZProgramGraphNode){0};
+  node->id = z_strdup(id);
+  node->kind = kind;
+  node->path = z_strdup(path && path[0] ? path : "src/main.0");
+  if (name) node->name = z_strdup(name);
+  if (type) node->type = z_strdup(type);
+  node->line = line > 0 ? line : 1;
+  node->column = column > 0 ? column : 1;
+  return node;
+}
+
+static void body_append_decl_edge(ZProgramGraph *graph, const char *from, const char *kind, const char *to, size_t order) {
+  body_reserve_edges(graph, graph->edge_len + 1);
+  ZProgramGraphEdge *edge = &graph->edges[graph->edge_len++];
+  *edge = (ZProgramGraphEdge){0};
+  edge->from = z_strdup(from);
+  edge->to = z_strdup(to);
+  edge->kind = z_strdup(kind);
+  edge->target = Z_PROGRAM_GRAPH_EDGE_TARGET_NODE;
+  edge->order = order;
+}
+
+static bool body_function_has_param(const ZProgramGraph *graph, const ZProgramGraphNode *function, const char *name) {
+  for (size_t i = 0; graph && function && name && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !body_text_eq(edge->from, function->id) || !body_text_eq(edge->kind, "param")) continue;
+    const ZProgramGraphNode *param = body_find_node((ZProgramGraph *)graph, edge->to);
+    if (param && param->kind == Z_PROGRAM_GRAPH_NODE_PARAM && body_text_eq(param->name, name)) return true;
+  }
+  return false;
+}
+
+/* Matches plain and module-qualified call names: `add` and `math.add`. */
+static bool body_call_targets_function(const char *call_name, const char *fn) {
+  if (!call_name || !fn || !fn[0]) return false;
+  if (body_text_eq(call_name, fn)) return true;
+  size_t call_len = strlen(call_name);
+  size_t fn_len = strlen(fn);
+  return call_len > fn_len + 1 && call_name[call_len - fn_len - 1] == '.' && body_text_eq(call_name + call_len - fn_len, fn);
+}
+
+static ZProgramGraphNode *body_require_named_function(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, const char *fn_name) {
+  size_t fn_count = 0;
+  ZProgramGraphNode *function = body_find_function(graph, fn_name, &fn_count);
+  if (function) return function;
+  if (fn_count > 1) {
+    body_fail(result, op, "GPH003", "patch function name is ambiguous", fn_name, "");
+    return NULL;
+  }
+  char message[160];
+  const ZProgramGraphNode *nearest = NULL;
+  size_t nearest_distance = 0;
+  size_t threshold = strlen(fn_name) / 3 + 2;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->name || !node->name[0]) continue;
+    size_t distance = z_program_graph_handle_distance(fn_name, node->name);
+    if (distance > threshold) continue;
+    if (!nearest || distance < nearest_distance) {
+      nearest = node;
+      nearest_distance = distance;
+    }
+  }
+  if (nearest) snprintf(message, sizeof(message), "patch function was not found; nearest: %s %s", nearest->name, nearest->id ? nearest->id : "");
+  else snprintf(message, sizeof(message), "patch function was not found");
+  body_fail(result, op, "GPH004", message, fn_name, "");
+  return NULL;
+}
+
+/* Splices one copy of the parsed default expression into every recorded call
+ * site as a trailing explicit argument. */
+static bool body_thread_default_through_call_sites(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, char *const *site_ids, size_t site_len) {
+  ZProgramGraph expr_graph = {0};
+  char *expr_root_id = NULL;
+  bool ok = body_parse_expression_graph(op->value, &expr_graph, &expr_root_id, result, op);
+  for (size_t i = 0; ok && i < site_len; i++) {
+    ZProgramGraphNode *call = body_find_node(graph, site_ids[i]);
+    if (!call) continue;
+    char *call_path = z_strdup(call->path && call->path[0] ? call->path : "src/main.0");
+    int call_line = call->line;
+    int call_column = call->column;
+    size_t arg_order = body_next_edge_order(graph, site_ids[i], "arg");
+    char *new_root = body_splice_expression(graph, &expr_graph, expr_root_id, call_path, call_line, call_column);
+    if (!new_root) {
+      body_fail(result, op, "GPH006", "addParamTo could not splice the default expression", "lowerable Zero expression", op->value);
+      ok = false;
+    } else {
+      /* A bare literal default adopts the declared parameter type, the same
+       * typing addLetLiteral applies to its literal payload. */
+      ZProgramGraphNode *root_node = body_find_node(graph, new_root);
+      if (root_node && root_node->kind == Z_PROGRAM_GRAPH_NODE_LITERAL) body_replace(&root_node->type, op->type);
+      body_append_decl_edge(graph, site_ids[i], "arg", new_root, arg_order);
+    }
+    free(new_root);
+    free(call_path);
+  }
+  z_program_graph_free(&expr_graph);
+  free(expr_root_id);
+  return ok;
+}
+
+/* addParamTo fn="<name>" name="<p>" type="<t>" [default="<expr>"]: appends a
+ * parameter to an EXISTING function. With default, every call site in the
+ * package (nested calls included) gains the default as an explicit trailing
+ * argument; without default the op fails when call sites exist, reporting the
+ * count. The direct backends cap function signatures at 8 ABI argument slots
+ * (byte views take 2), so an over-cap signature fails here at patch time
+ * instead of surfacing later from zero build. */
+bool z_program_graph_patch_apply_add_param_to(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *fn_name = op && op->function ? op->function : "";
+  ZProgramGraphNode *function = body_require_named_function(graph, result, op, fn_name);
+  if (!function) return false;
+  if (!body_identifier(op->name)) {
+    body_fail(result, op, "GPH003", "parameter name must be a Zero identifier", "identifier", op->name);
+    return false;
+  }
+  if (body_function_has_param(graph, function, op->name)) {
+    body_fail(result, op, "GPH005", "parameter already exists", "unused parameter name", op->name);
+    return false;
+  }
+  if (!body_type_text_valid(op->type)) {
+    body_fail(result, op, "GPH003", "parameter type must be valid Zero type syntax", "Zero type syntax", op->type);
+    return false;
+  }
+  size_t abi_slots = body_type_abi_slots(op->type);
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !body_text_eq(edge->from, function->id) || !body_text_eq(edge->kind, "param")) continue;
+    const ZProgramGraphNode *param = body_find_node(graph, edge->to);
+    if (param && param->kind == Z_PROGRAM_GRAPH_NODE_PARAM) abi_slots += body_type_abi_slots(param->type);
+  }
+  if (abi_slots > 8) {
+    char actual[120];
+    snprintf(actual, sizeof(actual), "%s would have %zu ABI argument slot(s)", fn_name, abi_slots);
+    body_fail(result, op, "BLD004", "direct backend object buildability has too many ABI argument slots", "at most 8 direct-backend ABI argument slots per function; byte-view parameters use 2", actual);
+    return false;
+  }
+  /* Collect call-site ids before mutating the graph so spliced default
+   * subtrees (which may themselves contain calls) are never revisited. */
+  char **site_ids = NULL;
+  size_t site_len = 0, site_cap = 0;
+  for (size_t i = 0; i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if ((node->kind != Z_PROGRAM_GRAPH_NODE_CALL && node->kind != Z_PROGRAM_GRAPH_NODE_METHOD_CALL) ||
+        !body_call_targets_function(node->name, fn_name)) continue;
+    if (site_len == site_cap) {
+      size_t next = site_cap ? site_cap * 2 : 8;
+      site_ids = z_checked_reallocarray(site_ids, next, sizeof(char *));
+      site_cap = next;
+    }
+    site_ids[site_len++] = z_strdup(node->id ? node->id : "");
+  }
+  bool has_default = op->value && op->value[0];
+  if (!has_default && site_len > 0) {
+    char actual[120];
+    snprintf(actual, sizeof(actual), "%zu call site%s call %s", site_len, site_len == 1 ? "" : "s", fn_name);
+    body_fail(result, op, "GPH003", "addParamTo needs a default to update existing call sites", "default=\"<expr>\" so every existing call passes the new argument explicitly", actual);
+    for (size_t i = 0; i < site_len; i++) free(site_ids[i]);
+    free(site_ids);
+    return false;
+  }
+  char *fn_id = z_strdup(function->id ? function->id : "");
+  char *path = z_strdup(function->path && function->path[0] ? function->path : "src/main.0");
+  int fn_line = function->line;
+  int fn_column = function->column;
+  ZBuf param_base;
+  zbuf_init(&param_base);
+  zbuf_appendf(&param_base, "#param_%s_%s", fn_name, op->name);
+  char *param_id = body_unique_id(graph, param_base.data);
+  zbuf_free(&param_base);
+  ZBuf type_base;
+  zbuf_init(&type_base);
+  zbuf_appendf(&type_base, "#type_%s_type", op->name);
+  char *type_id = body_unique_id(graph, type_base.data);
+  zbuf_free(&type_base);
+  body_append_decl_node(graph, param_id, Z_PROGRAM_GRAPH_NODE_PARAM, path, op->name, op->type, fn_line, fn_column);
+  body_append_decl_node(graph, type_id, Z_PROGRAM_GRAPH_NODE_TYPE_REF, path, NULL, op->type, fn_line, fn_column);
+  body_append_decl_edge(graph, fn_id, "param", param_id, body_next_edge_order(graph, fn_id, "param"));
+  body_append_decl_edge(graph, param_id, "type", type_id, 0);
+  free(type_id);
+  free(param_id);
+  free(fn_id);
+  free(path);
+  bool ok = true;
+  if (has_default) {
+    ok = body_thread_default_through_call_sites(graph, result, op, site_ids, site_len);
+    if (ok) {
+      op->has_call_sites = true;
+      op->call_sites_updated = site_len;
+    }
+  }
+  for (size_t i = 0; i < site_len; i++) free(site_ids[i]);
+  free(site_ids);
   if (!ok) return false;
   op->ok = true;
   return true;

@@ -479,7 +479,13 @@ static Stmt *lower_new_stmt(GraphLower *lower, StmtKind kind, const ZProgramGrap
   stmt->line = lower_line(lower, node);
   stmt->column = node && node->column > 0 ? node->column : 1;
   if (lower && lower->preserve_graph_types && node && node->type && node->type[0]) stmt->resolved_type = z_strdup(node->type);
+  if (node && node->id && node->id[0]) stmt->graph_id = z_strdup(node->id);
   return stmt;
+}
+
+static char *lower_block_graph_id(GraphLower *lower, const ZProgramGraphNode *owner, const char *edge_kind, size_t order) {
+  const ZProgramGraphNode *block = lower_ordered_node(lower, owner ? owner->id : NULL, edge_kind, order);
+  return block && block->id && block->id[0] ? z_strdup(block->id) : NULL;
 }
 
 static Expr *lower_expr(GraphLower *lower, const ZProgramGraphNode *node);
@@ -712,7 +718,10 @@ static MatchArm lower_match_arm(GraphLower *lower, const ZProgramGraphNode *node
   arm.guard = lower_optional_expr(lower, node, "guard", 0);
   const ZProgramGraphNode *body = lower_ordered_node(lower, node ? node->id : NULL, "body", 0);
   if (!body) lower_fail(lower, node, "program graph match arm is missing body block", "body block edge", "missing body", NULL);
-  else arm.body = lower_block(lower, body);
+  else {
+    arm.body = lower_block(lower, body);
+    if (body->id && body->id[0]) arm.body_graph_id = z_strdup(body->id);
+  }
   return arm;
 }
 
@@ -772,11 +781,14 @@ static Stmt *lower_stmt(GraphLower *lower, const ZProgramGraphNode *node) {
       stmt->expr = lower_required_expr(lower, node, "expr", 0, "if condition");
       stmt->then_body = lower_block(lower, lower_ordered_node(lower, node->id, "then", 0));
       stmt->else_body = lower_block(lower, lower_ordered_node(lower, node->id, "else", 1));
+      stmt->then_graph_id = lower_block_graph_id(lower, node, "then", 0);
+      stmt->else_graph_id = lower_block_graph_id(lower, node, "else", 1);
       return stmt;
     case Z_PROGRAM_GRAPH_NODE_WHILE:
       stmt = lower_new_stmt(lower, STMT_WHILE, node);
       stmt->expr = lower_required_expr(lower, node, "expr", 0, "while condition");
       stmt->then_body = lower_block(lower, lower_ordered_node(lower, node->id, "then", 0));
+      stmt->then_graph_id = lower_block_graph_id(lower, node, "then", 0);
       return stmt;
     case Z_PROGRAM_GRAPH_NODE_FOR:
       if (!lower_require_identifier(lower, node, node->name, "program graph loop binding name is not valid Zero identifier syntax")) return NULL;
@@ -785,6 +797,7 @@ static Stmt *lower_stmt(GraphLower *lower, const ZProgramGraphNode *node) {
       stmt->expr = lower_required_expr(lower, node, "expr", 0, "for range start");
       stmt->range_end = lower_required_expr(lower, node, "rangeEnd", 1, "for range end");
       stmt->then_body = lower_block(lower, lower_ordered_node(lower, node->id, "then", 0));
+      stmt->then_graph_id = lower_block_graph_id(lower, node, "then", 0);
       return stmt;
     case Z_PROGRAM_GRAPH_NODE_BREAK:
       return lower_new_stmt(lower, STMT_BREAK, node);

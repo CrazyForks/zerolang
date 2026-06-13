@@ -1,6 +1,10 @@
 #include "program_graph_check_gate.h"
 #include <string.h>
 
+static bool check_gate_text_eq(const char *left, const char *right) {
+  return left && right && strcmp(left, right) == 0;
+}
+
 /*
  * Check-time buildability gate facts: `zero check` and `zero import` fail
  * with the same BLD004 "typed graph MIR unsupported" diagnostics `zero
@@ -14,7 +18,7 @@ bool z_check_gate_diag_is_buildability_blocker(const ZDiag *diag) {
   if (!diag) return false;
   if (diag->code != 2004 && diag->code != 4004) return false;
   if (!diag->backend_blocker.present) return false;
-  return strcmp(diag->backend_blocker.stage, "lower") == 0;
+  return check_gate_text_eq(diag->backend_blocker.stage, "lower");
 }
 
 static bool check_gate_type_decl_is_enum_or_choice(const ZProgramGraph *graph, const char *name) {
@@ -22,9 +26,14 @@ static bool check_gate_type_decl_is_enum_or_choice(const ZProgramGraph *graph, c
   for (size_t i = 0; i < graph->node_len; i++) {
     const ZProgramGraphNode *node = &graph->nodes[i];
     if (node->kind != Z_PROGRAM_GRAPH_NODE_ENUM && node->kind != Z_PROGRAM_GRAPH_NODE_CHOICE) continue;
-    if (node->name && strcmp(node->name, name) == 0) return true;
+    if (check_gate_text_eq(node->name, name)) return true;
   }
   return false;
+}
+
+static bool check_gate_is_non_entry_world_param(const ZProgramGraphNode *node) {
+  return check_gate_text_eq(node ? node->type : NULL, "World") &&
+         node->symbol_id && !strstr(node->symbol_id, "::value.main/param.");
 }
 
 /*
@@ -38,15 +47,15 @@ bool z_check_gate_diag_is_known_construct(const ZProgramGraph *graph, const ZDia
   if (!diag) return false;
   const char *message = diag->message;
   const char *actual = diag->actual;
-  if (strcmp(message, "typed graph MIR statement kind is unsupported") == 0) return strcmp(actual, "Defer") == 0;
-  if (strcmp(message, "typed graph MIR local type is unsupported") == 0) return check_gate_type_decl_is_enum_or_choice(graph, actual);
-  if (strcmp(message, "typed graph MIR rescue supports fallible function calls with primitive fallbacks") == 0) return true;
-  if (strcmp(message, "typed graph MIR literal type is unsupported") == 0) return strcmp(actual, "String") == 0;
-  if (strcmp(message, "typed graph MIR fallible return type is unsupported") == 0) return strcmp(actual, "String") == 0;
-  if (strcmp(message, "typed graph MIR parameter type is unsupported") == 0) return strcmp(actual, "ref<ByteBuf>") == 0;
-  if (strcmp(message, "typed graph MIR reference parameter requires a shape whose fields are scalars or fixed scalar arrays") == 0) return strcmp(actual, "ref<ByteBuf>") == 0;
-  if (strcmp(message, "typed graph MIR call target is unsupported") == 0) return strcmp(actual, "readU32") == 0;
-  if (strcmp(message, "typed graph MIR allocator local requires FixedBufAlloc") == 0) return strcmp(actual, "PageAlloc") == 0 || strcmp(actual, "GeneralAlloc") == 0;
+  if (check_gate_text_eq(message, "typed graph MIR statement kind is unsupported")) return check_gate_text_eq(actual, "Defer");
+  if (check_gate_text_eq(message, "typed graph MIR local type is unsupported")) return check_gate_type_decl_is_enum_or_choice(graph, actual);
+  if (check_gate_text_eq(message, "typed graph MIR rescue supports fallible function calls with primitive fallbacks")) return true;
+  if (check_gate_text_eq(message, "typed graph MIR literal type is unsupported")) return check_gate_text_eq(actual, "String");
+  if (check_gate_text_eq(message, "typed graph MIR fallible return type is unsupported")) return check_gate_text_eq(actual, "String");
+  if (check_gate_text_eq(message, "typed graph MIR parameter type is unsupported")) return check_gate_text_eq(actual, "ref<ByteBuf>") || check_gate_text_eq(actual, "World");
+  if (check_gate_text_eq(message, "typed graph MIR reference parameter requires a shape whose fields are scalars or fixed scalar arrays")) return check_gate_text_eq(actual, "ref<ByteBuf>");
+  if (check_gate_text_eq(message, "typed graph MIR call target is unsupported")) return check_gate_text_eq(actual, "readU32");
+  if (check_gate_text_eq(message, "typed graph MIR allocator local requires FixedBufAlloc")) return check_gate_text_eq(actual, "PageAlloc") || check_gate_text_eq(actual, "GeneralAlloc");
   return false;
 }
 
@@ -65,14 +74,14 @@ bool z_check_gate_scan_finds_known_construct(const ZProgramGraph *graph) {
       case Z_PROGRAM_GRAPH_NODE_CHOICE:
         return true;
       case Z_PROGRAM_GRAPH_NODE_LET:
-        if (node->type && (strcmp(node->type, "PageAlloc") == 0 || strcmp(node->type, "GeneralAlloc") == 0)) return true;
+        if (check_gate_text_eq(node->type, "PageAlloc") || check_gate_text_eq(node->type, "GeneralAlloc")) return true;
         break;
       case Z_PROGRAM_GRAPH_NODE_PARAM:
-        if (node->type && strcmp(node->type, "ref<ByteBuf>") == 0) return true;
+        if (check_gate_text_eq(node->type, "ref<ByteBuf>") || check_gate_is_non_entry_world_param(node)) return true;
         break;
       case Z_PROGRAM_GRAPH_NODE_IDENTIFIER:
       case Z_PROGRAM_GRAPH_NODE_FIELD_ACCESS:
-        if (node->name && strcmp(node->name, "readU32") == 0) return true;
+        if (check_gate_text_eq(node->name, "readU32")) return true;
         break;
       default:
         break;

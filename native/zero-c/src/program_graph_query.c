@@ -1,5 +1,6 @@
 #include "program_graph_query.h"
 #include "program_graph_query_internal.h"
+#include "program_graph_handle.h"
 #include "program_graph_patch.h"
 
 #include <string.h>
@@ -175,6 +176,25 @@ static void query_append_match_json(ZBuf *buf, const ZProgramGraphNode *node) {
   zbuf_appendf(buf, ",\"line\":%d,\"column\":%d}", node ? node->line : 0, node ? node->column : 0);
 }
 
+static void query_append_find_match_json(ZBuf *buf, const ZProgramGraph *graph, const ZProgramGraphNode *node) {
+  zbuf_append(buf, "{\"id\":");
+  query_append_json_string(buf, node ? node->id : "");
+  zbuf_append(buf, ",\"kind\":");
+  query_append_json_string(buf, node ? z_program_graph_node_kind_name(node->kind) : "");
+  zbuf_append(buf, ",\"name\":");
+  query_append_json_string_or_null(buf, node ? node->name : NULL);
+  zbuf_append(buf, ",\"type\":");
+  query_append_json_string_or_null(buf, node ? node->type : NULL);
+  zbuf_append(buf, ",\"value\":");
+  query_append_json_string_or_null(buf, node ? node->value : NULL);
+  zbuf_append(buf, ",\"stmt\":");
+  const ZProgramGraphNode *statement = z_program_graph_query_enclosing_statement(graph, node ? node->id : NULL);
+  query_append_json_string_or_null(buf, statement ? statement->id : NULL);
+  zbuf_append(buf, ",\"path\":");
+  query_append_json_string_or_null(buf, node ? node->path : NULL);
+  zbuf_appendf(buf, ",\"line\":%d,\"column\":%d}", node ? node->line : 0, node ? node->column : 0);
+}
+
 static void query_append_matches_json(ZBuf *buf, const ZProgramGraph *graph, const char *find) {
   zbuf_append_char(buf, '[');
   if (!find || !find[0]) {
@@ -187,7 +207,7 @@ static void query_append_matches_json(ZBuf *buf, const ZProgramGraph *graph, con
     if (!z_program_graph_query_node_matches_find(node, find)) continue;
     if (!first) zbuf_append(buf, ", ");
     first = false;
-    query_append_match_json(buf, node);
+    query_append_find_match_json(buf, graph, node);
   }
   zbuf_append_char(buf, ']');
 }
@@ -229,11 +249,12 @@ static void query_append_child_edges_json(ZBuf *buf, const ZProgramGraph *graph,
 }
 
 static void query_append_node_neighborhood_json(ZBuf *buf, const ZProgramGraph *graph, const char *node_id, size_t depth) {
-  const ZProgramGraphNode *node = z_program_graph_query_node_by_id(graph, node_id);
+  const ZProgramGraphNode *node = z_program_graph_resolve_handle(graph, node_id, NULL);
   if (!node) {
     zbuf_append(buf, "null");
     return;
   }
+  node_id = node->id;
   zbuf_append(buf, "{\"selected\":");
   query_append_match_json(buf, node);
   zbuf_append(buf, ",\"span\":");

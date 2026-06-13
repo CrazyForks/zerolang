@@ -34,6 +34,7 @@ typedef struct {
   IdentityIdBase *edited_id_bases;
   const char **edited_id_base_ptrs;
   ZProgramGraphAdjacencyNodeEntry *edited_id_base_index;
+  const char *exclude_path;
   ZProgramGraphIdentityReconcile result;
 } IdentityContext;
 
@@ -49,6 +50,19 @@ static bool identity_text_eq(const char *left, const char *right) {
 }
 
 static bool identity_text_present(const char *text) { return text && text[0]; }
+
+/* File-scope rewrite acceptance: nodes on the excluded path are withheld from
+ * every matching pass so the file's base nodes count as deleted and its edited
+ * nodes keep fresh identities. */
+static bool identity_base_excluded(const IdentityContext *context, size_t base_index) {
+  return context->exclude_path && base_index < context->base->node_len &&
+         identity_text_eq(context->base->nodes[base_index].path, context->exclude_path);
+}
+
+static bool identity_edited_excluded(const IdentityContext *context, size_t edited_index) {
+  return context->exclude_path && edited_index < context->edited->node_len &&
+         identity_text_eq(context->edited->nodes[edited_index].path, context->exclude_path);
+}
 
 static void identity_fail(IdentityContext *context, const char *code, const char *message, const char *node_id, const char *candidate_id) {
   if (!context || !context->result.ok) return;
@@ -297,9 +311,8 @@ static void identity_fail_nodes(IdentityContext *context, const char *code, cons
   if (context->result.node_range[0] && context->result.candidate_range[0]) {
     snprintf(context->result.hint,
              sizeof(context->result.hint),
-             "split the text edit: import the change touching %s on its own first, leave %s untouched in that pass, or make the whole edit through zero patch",
-             context->result.candidate_range,
-             context->result.node_range);
+             "split the text edit: import the change touching %.95s on its own first, or use zero patch",
+             context->result.candidate_range);
   }
 }
 
@@ -357,9 +370,9 @@ static bool identity_match_nodes(IdentityContext *context, size_t base_index, si
 
 static void identity_match_exact_ids(IdentityContext *context) {
   for (size_t i = 0; context && context->result.ok && i < context->base->node_len; i++) {
-    if (context->base_to_edited[i] != identity_missing()) continue;
+    if (context->base_to_edited[i] != identity_missing() || identity_base_excluded(context, i)) continue;
     size_t edited = identity_find_node(context, context->edited, context->base->nodes[i].id);
-    if (edited == identity_missing() || context->edited_matched[edited]) continue;
+    if (edited == identity_missing() || context->edited_matched[edited] || identity_edited_excluded(context, edited)) continue;
     identity_match_nodes(context, i, edited);
   }
 }
@@ -616,7 +629,7 @@ static size_t identity_count_edited_base_id_candidates(IdentityContext *context,
   size_t count = 0;
   for (size_t i = 0; i < run_len; i++) {
     size_t edited_index = context->edited_id_base_index[run_start + i].node_index;
-    if (context->edited_matched[edited_index] || !context->edited->nodes[edited_index].id) continue;
+    if (context->edited_matched[edited_index] || identity_edited_excluded(context, edited_index) || !context->edited->nodes[edited_index].id) continue;
     if (first && count == 0) *first = edited_index;
     count++;
   }
@@ -631,7 +644,7 @@ static bool identity_allows_import_name_disambiguated_base_collision(const ZProg
 
 static void identity_reject_ambiguous_missing_base_ids(IdentityContext *context) {
   for (size_t i = 0; context && context->result.ok && i < context->base->node_len; i++) {
-    if (context->base_to_edited[i] != identity_missing()) continue;
+    if (context->base_to_edited[i] != identity_missing() || identity_base_excluded(context, i)) continue;
     if (identity_allows_import_name_disambiguated_base_collision(&context->base->nodes[i])) continue;
     size_t first = identity_missing();
     size_t count = identity_count_edited_base_id_candidates(context, context->base->nodes[i].id, &first);
@@ -645,7 +658,7 @@ static void identity_reject_ambiguous_missing_base_ids(IdentityContext *context)
       z_program_graph_id_index_run(context->edited_id_base_index, context->edited->node_len, base_id, &run_start, &run_len);
       for (size_t j = 0; j < run_len && at < count; j++) {
         size_t edited_index = context->edited_id_base_index[run_start + j].node_index;
-        if (context->edited_matched[edited_index] || !context->edited->nodes[edited_index].id) continue;
+        if (context->edited_matched[edited_index] || identity_edited_excluded(context, edited_index) || !context->edited->nodes[edited_index].id) continue;
         candidates[at++] = edited_index;
       }
     }
@@ -734,7 +747,7 @@ static bool identity_resolve_reverse_unique(IdentityContext *context, IdentityCa
   size_t best_score = 0;
   bool tie = false;
   for (size_t i = 0; context && i < context->base->node_len; i++) {
-    if (context->base_to_edited[i] != identity_missing() || !candidate(context, i, edited_index)) continue;
+    if (context->base_to_edited[i] != identity_missing() || identity_base_excluded(context, i) || !candidate(context, i, edited_index)) continue;
     size_t score = identity_similarity_score(context, i, edited_index);
     if (score > best_score) {
       best = i;
@@ -751,7 +764,7 @@ static size_t identity_count_base_candidates(IdentityContext *context, IdentityC
   size_t count = 0;
   if (first) *first = identity_missing();
   for (size_t i = 0; context && i < context->base->node_len; i++) {
-    if (context->base_to_edited[i] != identity_missing() || !candidate(context, i, edited_index)) continue;
+    if (context->base_to_edited[i] != identity_missing() || identity_base_excluded(context, i) || !candidate(context, i, edited_index)) continue;
     if (first && count == 0) *first = i;
     count++;
   }
@@ -760,11 +773,11 @@ static size_t identity_count_base_candidates(IdentityContext *context, IdentityC
 
 static void identity_apply_unique_pass_opt(IdentityContext *context, IdentityCandidateFn candidate, bool fail_on_ambiguous) {
   for (size_t i = 0; context && context->result.ok && i < context->base->node_len; i++) {
-    if (context->base_to_edited[i] != identity_missing()) continue;
+    if (context->base_to_edited[i] != identity_missing() || identity_base_excluded(context, i)) continue;
     size_t first = identity_missing();
     size_t count = 0;
     for (size_t j = 0; j < context->edited->node_len; j++) {
-      if (context->edited_matched[j] || !candidate(context, i, j)) continue;
+      if (context->edited_matched[j] || identity_edited_excluded(context, j) || !candidate(context, i, j)) continue;
       if (count == 0) first = j;
       count++;
     }
@@ -774,7 +787,7 @@ static void identity_apply_unique_pass_opt(IdentityContext *context, IdentityCan
       size_t *candidates = z_checked_calloc(count, sizeof(size_t));
       size_t at = 0;
       for (size_t j = 0; j < context->edited->node_len && at < count; j++) {
-        if (context->edited_matched[j] || !candidate(context, i, j)) continue;
+        if (context->edited_matched[j] || identity_edited_excluded(context, j) || !candidate(context, i, j)) continue;
         candidates[at++] = j;
       }
       size_t chosen = identity_resolve_best_candidate(context, i, candidates, at);
@@ -787,7 +800,7 @@ static void identity_apply_unique_pass_opt(IdentityContext *context, IdentityCan
       candidates = z_checked_calloc(count, sizeof(size_t));
       at = 0;
       for (size_t j = 0; j < context->edited->node_len && at < count; j++) {
-        if (context->edited_matched[j] || !candidate(context, i, j)) continue;
+        if (context->edited_matched[j] || identity_edited_excluded(context, j) || !candidate(context, i, j)) continue;
         candidates[at++] = j;
       }
       identity_fail_nodes(context, "GRC001", "source edit has ambiguous graph identity", i, candidates, at);
@@ -975,7 +988,7 @@ static void identity_apply_ids(IdentityContext *context) {
   z_program_graph_finalize_identities(context->edited);
 }
 
-bool z_program_graph_preserve_source_node_ids(const ZProgramGraph *base, ZProgramGraph *edited, ZProgramGraphIdentityReconcile *out) {
+static bool identity_preserve_source_node_ids(const ZProgramGraph *base, ZProgramGraph *edited, const char *exclude_path, ZProgramGraphIdentityReconcile *out) {
   if (out) *out = (ZProgramGraphIdentityReconcile){.ok = true};
   if (!base || !edited) return true;
   IdentityContext context = {
@@ -983,6 +996,7 @@ bool z_program_graph_preserve_source_node_ids(const ZProgramGraph *base, ZProgra
     .edited = edited,
     .base_to_edited = z_checked_calloc(base->node_len ? base->node_len : 1, sizeof(size_t)),
     .edited_matched = z_checked_calloc(edited->node_len ? edited->node_len : 1, sizeof(bool)),
+    .exclude_path = exclude_path && exclude_path[0] ? exclude_path : NULL,
     .result = {.ok = true},
   };
   for (size_t i = 0; i < base->node_len; i++) context.base_to_edited[i] = identity_missing();
@@ -1062,4 +1076,15 @@ bool z_program_graph_preserve_source_node_ids(const ZProgramGraph *base, ZProgra
   free(context.edited_matched);
   free(context.base_to_edited);
   return ok;
+}
+
+bool z_program_graph_preserve_source_node_ids(const ZProgramGraph *base, ZProgramGraph *edited, ZProgramGraphIdentityReconcile *out) {
+  return identity_preserve_source_node_ids(base, edited, NULL, out);
+}
+
+/* Accepts a whole-file rewrite: nodes on exclude_path are reconciled as
+ * delete-plus-insert (fresh identities) while every other file's identities
+ * are preserved exactly as in the unrestricted pass. */
+bool z_program_graph_preserve_source_node_ids_excluding_path(const ZProgramGraph *base, ZProgramGraph *edited, const char *exclude_path, ZProgramGraphIdentityReconcile *out) {
+  return identity_preserve_source_node_ids(base, edited, exclude_path, out);
 }

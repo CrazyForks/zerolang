@@ -386,6 +386,7 @@ readAll(allocator: Alloc, fs: Fs, path: String, max: usize) -> Maybe<owned<ByteB
 readAllOrRaise(allocator: Alloc, fs: Fs, path: String, max: usize) -> owned<ByteBuf> raises [NotFound, TooLarge, Io]
 exists(arg0: String) -> Bool
 readBytes(arg0: String, arg1: MutSpan<u8>) -> Maybe<usize>
+readBytesAt(arg0: String, arg1: usize, arg2: MutSpan<u8>) -> Maybe<usize>
 writeBytes(arg0: String, arg1: Span<u8>) -> Maybe<usize>
 isDir(arg0: String) -> Bool
 makeDir(arg0: String) -> Bool
@@ -403,6 +404,14 @@ readFileBytes(arg0: Fs, arg1: String, arg2: MutSpan<u8>) -> Maybe<Span<u8>>
 readFileEquals(arg0: Fs, arg1: String, arg2: MutSpan<u8>, arg3: Span<u8>) -> Bool
 copyFile(arg0: String, arg1: String, arg2: MutSpan<u8>) -> Bool
 ```
+
+`readBytes` and `readFile` fill the caller buffer and return the TOTAL file size
+(snprintf convention): a value above `len(buffer)` means the buffer holds only the
+first `len(buffer)` bytes, so compare the result against the buffer length instead
+of assuming the whole file arrived. `readFileBytes` returns `null` when the file
+exceeds the buffer. Process files larger than your buffer with `readBytesAt`:
+loop `offset += len(buffer)` until `offset` reaches the returned total, taking
+`min(len(buffer), total - offset)` valid bytes per chunk.
 
 ### std.http
 
@@ -995,7 +1004,9 @@ of hand-writing `Location` headers; they reject empty or control-character
 location values before writing. Use
 `std.http.responseBodyBytes` to read the body from a response envelope produced
 locally by `writeResponse`, a JSON writer, a redirect writer, or a text/html
-writer.
+writer. When smoke-testing a JSON API, hit success plus missing/invalid input,
+unknown-route, and wrong-method paths. Check HTTP status codes and JSON bodies,
+not just happy-path response text.
 
 For a runnable local API server, define a same-module handler and call
 `std.http.listen(world)` from `main`. The handler signature is

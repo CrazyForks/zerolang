@@ -2,6 +2,7 @@
 
 #include "canonical_text.h"
 #include "program_graph_adjacency.h"
+#include "program_graph_handle.h"
 #include "program_graph_lower.h"
 
 #include <stddef.h>
@@ -362,12 +363,232 @@ bool z_program_graph_append_view_function(ZBuf *buf, const ZProgramGraph *graph,
     snprintf(diag->expected, sizeof(diag->expected), "an existing function name");
     snprintf(diag->actual, sizeof(diag->actual), "--fn %s", function_name);
     if (suggestions[0]) {
-      snprintf(diag->help, sizeof(diag->help), "close matches: %s; run zero view --fn <name> with one of them, or zero query --find %s to search the graph", suggestions, function_name);
+      snprintf(diag->help, sizeof(diag->help), "close matches: %.120s; use zero view --fn <name> or zero query --find %.64s", suggestions, function_name);
     } else {
-      snprintf(diag->help, sizeof(diag->help), "run zero query to list functions, or zero query --find %s to search the graph", function_name);
+      snprintf(diag->help, sizeof(diag->help), "run zero query --find %.128s to search the graph", function_name);
     }
   }
   return false;
+}
+
+// ---- handle annotations ----
+//
+// `zero view --fn <name> --handles` prints the same canonical body text with a
+// trailing `// #handle` margin comment per statement. The annotations are
+// inserted after formatting, by walking the rendered lines in lockstep with
+// the lowered statement tree (the canonical writer emits exactly one line per
+// simple statement and one header line per compound clause), so the rendered
+// source itself never changes.
+
+typedef struct {
+  const char *text;
+  ZBuf *out;
+  size_t cursor;
+  bool ok;
+  const ZProgramGraphHandleShortener *shortener;
+} ViewHandleAnnotator;
+
+static bool va_line_bounds(const ViewHandleAnnotator *va, size_t *start, size_t *len, size_t *advance) {
+  if (!va->text[va->cursor]) return false;
+  const char *line = va->text + va->cursor;
+  const char *end = strchr(line, '\n');
+  *start = va->cursor;
+  *len = end ? (size_t)(end - line) : strlen(line);
+  *advance = *len + (end ? 1 : 0);
+  return true;
+}
+
+static void va_emit(ViewHandleAnnotator *va, const char *annotation) {
+  size_t start = 0;
+  size_t len = 0;
+  size_t advance = 0;
+  if (!va->ok || !va_line_bounds(va, &start, &len, &advance)) {
+    va->ok = false;
+    return;
+  }
+  zbuf_appendf(va->out, "%.*s", (int)len, va->text + start);
+  if (annotation && annotation[0]) zbuf_appendf(va->out, "  // %s", annotation);
+  zbuf_append_char(va->out, '\n');
+  va->cursor += advance;
+}
+
+static void va_append_handle(const ViewHandleAnnotator *va, ZBuf *note, const char *id) {
+  if (!id || !id[0]) {
+    zbuf_append(note, "?");
+    return;
+  }
+  z_program_graph_append_short_handle(va->shortener, id, note);
+}
+
+/* Annotation grammar: simple statements get `// #stmt`; compound headers get
+ * `// #stmt #block` where the second handle is the clause body block (the
+ * replaceBlockBody target); `} else {` and match-arm headers get the clause
+ * block handle alone. */
+static void va_emit_with_handles(ViewHandleAnnotator *va, const char *id, const char *block_id) {
+  ZBuf note;
+  zbuf_init(&note);
+  if (id) va_append_handle(va, &note, id);
+  if (block_id) {
+    if (note.len > 0) zbuf_append_char(&note, ' ');
+    va_append_handle(va, &note, block_id);
+  }
+  va_emit(va, note.data ? note.data : "");
+  zbuf_free(&note);
+}
+
+static void va_annotate_block(ViewHandleAnnotator *va, const StmtVec *body);
+
+static void va_annotate_stmt(ViewHandleAnnotator *va, const Stmt *stmt) {
+  if (!va->ok) return;
+  if (!stmt) {
+    va_emit(va, NULL);
+    return;
+  }
+  switch (stmt->kind) {
+    case STMT_IF:
+      va_emit_with_handles(va, stmt->graph_id ? stmt->graph_id : "?", stmt->then_graph_id);
+      va_annotate_block(va, &stmt->then_body);
+      if (stmt->else_body.len == 1 && stmt->else_body.items[0] && stmt->else_body.items[0]->kind == STMT_IF) {
+        // rendered as `} else if ... {`; the nested if consumes the closing brace
+        va_annotate_stmt(va, stmt->else_body.items[0]);
+        return;
+      }
+      if (stmt->else_body.len > 0) {
+        va_emit_with_handles(va, NULL, stmt->else_graph_id ? stmt->else_graph_id : "?");
+        va_annotate_block(va, &stmt->else_body);
+      }
+      va_emit(va, NULL);
+      return;
+    case STMT_WHILE:
+    case STMT_FOR:
+      va_emit_with_handles(va, stmt->graph_id ? stmt->graph_id : "?", stmt->then_graph_id);
+      va_annotate_block(va, &stmt->then_body);
+      va_emit(va, NULL);
+      return;
+    case STMT_MATCH:
+      va_emit_with_handles(va, stmt->graph_id ? stmt->graph_id : "?", NULL);
+      for (size_t i = 0; i < stmt->match_arms.len; i++) {
+        const MatchArm *arm = &stmt->match_arms.items[i];
+        va_emit_with_handles(va, NULL, arm->body_graph_id ? arm->body_graph_id : "?");
+        va_annotate_block(va, &arm->body);
+        va_emit(va, NULL);
+      }
+      va_emit(va, NULL);
+      return;
+    default:
+      va_emit_with_handles(va, stmt->graph_id ? stmt->graph_id : "?", NULL);
+      return;
+  }
+}
+
+static void va_annotate_block(ViewHandleAnnotator *va, const StmtVec *body) {
+  for (size_t i = 0; va->ok && body && i < body->len; i++) va_annotate_stmt(va, body->items[i]);
+}
+
+static const Function *view_find_program_function(const Program *program, const char *function_name) {
+  for (size_t i = 0; program && function_name && i < program->functions.len; i++) {
+    if (view_text_eq(program->functions.items[i].name, function_name)) return &program->functions.items[i];
+  }
+  return NULL;
+}
+
+static bool view_annotate_function_handles(ZBuf *buf, const char *function_text, const Function *fun, const ZProgramGraph *graph, const char *source_path, ZDiag *diag) {
+  ZProgramGraphHandleShortener shortener;
+  z_program_graph_handle_shortener_init(&shortener, graph);
+  ViewHandleAnnotator va = {.text = function_text, .out = buf, .cursor = 0, .ok = true, .shortener = &shortener};
+  size_t start = 0;
+  size_t len = 0;
+  size_t advance = 0;
+  // signature line stays unannotated
+  va_emit(&va, NULL);
+  va_annotate_block(&va, &fun->body);
+  // exactly the closing `}` line must remain
+  bool closing_ok = va.ok && va_line_bounds(&va, &start, &len, &advance) && len == 1 && function_text[start] == '}';
+  if (closing_ok) {
+    va_emit(&va, NULL);
+    closing_ok = va.ok && !va_line_bounds(&va, &start, &len, &advance);
+  }
+  z_program_graph_handle_shortener_free(&shortener);
+  if (!closing_ok) {
+    if (diag) {
+      diag->code = 2002;
+      diag->path = source_path;
+      diag->line = 1;
+      diag->column = 1;
+      diag->length = 1;
+      snprintf(diag->message, sizeof(diag->message), "handle annotations did not align with the rendered function body");
+      snprintf(diag->expected, sizeof(diag->expected), "one rendered line per statement");
+      snprintf(diag->actual, sizeof(diag->actual), "--fn %s --handles", fun && fun->name ? fun->name : "");
+      snprintf(diag->help, sizeof(diag->help), "run zero view --fn <name> without --handles, or zero query --fn <name> --handles for the statement handle list");
+    }
+    return false;
+  }
+  return true;
+}
+
+bool z_program_graph_append_view_function_handles(ZBuf *buf, const ZProgramGraph *graph, const char *source_path, const char *function_name, ZDiag *diag) {
+  if (!buf || !function_name || !function_name[0]) return false;
+  ZBuf plain;
+  zbuf_init(&plain);
+  Program program = {0};
+  SourceInput input = {0};
+  const char *path = source_path && source_path[0] ? source_path : "<program-graph>";
+  bool ok = z_program_graph_lower_to_program_for_roundtrip(graph, path, &program, &input, diag);
+  if (ok) view_drop_flattened_module_imports(&program, &input);
+  if (ok) ok = z_canonical_text_write_program(&program, &plain, diag);
+  if (!ok) {
+    z_free_program(&program);
+    z_free_source(&input);
+    zbuf_free(&plain);
+    return false;
+  }
+  // extract the function's text the same way the plain view does
+  const char *text = plain.data ? plain.data : "";
+  const char *line = text;
+  const char *function_start = NULL;
+  char *function_text = NULL;
+  while (*line) {
+    const char *line_end = strchr(line, '\n');
+    size_t line_len = line_end ? (size_t)(line_end - line) : strlen(line);
+    if (!function_start && view_line_is_function_header(line, line_len, function_name)) {
+      function_start = line;
+    } else if (function_start && line_len == 1 && line[0] == '}') {
+      function_text = z_strndup(function_start, (size_t)(line + line_len - function_start) + 1);
+      break;
+    }
+    if (!line_end) break;
+    line = line_end + 1;
+  }
+  if (!function_text) {
+    if (diag) {
+      char suggestions[160];
+      view_collect_function_suggestions(graph, function_name, suggestions, sizeof(suggestions));
+      diag->code = 2002;
+      diag->path = source_path;
+      diag->line = 1;
+      diag->column = 1;
+      diag->length = 1;
+      snprintf(diag->message, sizeof(diag->message), "function '%s' not found in graph view", function_name);
+      snprintf(diag->expected, sizeof(diag->expected), "an existing function name");
+      snprintf(diag->actual, sizeof(diag->actual), "--fn %s", function_name);
+      if (suggestions[0]) {
+        snprintf(diag->help, sizeof(diag->help), "close matches: %.120s; use zero view --fn <name> or zero query --find %.64s", suggestions, function_name);
+      } else {
+        snprintf(diag->help, sizeof(diag->help), "run zero query --find %.128s to search the graph", function_name);
+      }
+    }
+    z_free_program(&program);
+    z_free_source(&input);
+    zbuf_free(&plain);
+    return false;
+  }
+  const Function *fun = view_find_program_function(&program, function_name);
+  ok = fun != NULL && view_annotate_function_handles(buf, function_text, fun, graph, source_path, diag);
+  free(function_text);
+  z_free_program(&program);
+  z_free_source(&input);
+  zbuf_free(&plain);
+  return ok;
 }
 
 bool z_program_graph_append_source_view(ZBuf *buf, const ZProgramGraph *graph, const char *source_path, ZDiag *diag) {

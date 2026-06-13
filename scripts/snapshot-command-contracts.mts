@@ -42,6 +42,16 @@ function zeroWithStderr(args, options: { cwd?: string } = {}) {
   return { code: result.status ?? 1, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
 }
 
+function zeroWithInput(args, input: string, options: { allowFailure?: boolean } = {}) {
+  const result = spawnSync(zeroBin, args, { encoding: "utf8", maxBuffer: execMaxBuffer, input, stdio: ["pipe", "pipe", "pipe"] });
+  if (result.error) throw result.error;
+  const code = result.status ?? 1;
+  if (code !== 0 && !options.allowFailure) {
+    throw new Error(`zero ${args.join(" ")} exited ${code}: ${result.stderr ?? ""}`);
+  }
+  return { code, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
+}
+
 function zeroRaw(args, options: { allowFailure?: boolean; env?: Record<string, string> } = {}) {
   try {
     const stdout = execFileSync(zeroBin, args, { encoding: "utf8", maxBuffer: execMaxBuffer, stdio: ["ignore", "pipe", "pipe"], env: options.env ? { ...process.env, ...options.env } : process.env });
@@ -926,7 +936,7 @@ for (const [command, expected] of [
   [["targets", "--help"], /Usage: zero targets/],
   [["tokens", "--help"], /Usage: zero tokens/],
   [["parse", "--help"], /Usage: zero parse/],
-  [["query", "--help"], /Usage: zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/],
+  [["query", "--help"], /Usage: zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[--no-help\] \[graph-input\|name\]/],
   [["inspect", "--help"], /Usage: zero init \[--template cli\|lib\|package\] \[project-path\]; zero query\|view\|diff\|dump\|inspect\|validate\|source-map\|roundtrip \[--json\] \[graph-input\]/],
   [["diff", "--help"], /Usage: zero diff \[--fn <name>\] \[graph-input\]/],
   [["size", "--help"], /Usage: zero size/],
@@ -993,17 +1003,17 @@ for (const code of [...emittableDiagnosticCodes].sort()) {
 
 const graphHelp = zero(["inspect", "--help"]).stdout;
 assert.match(graphHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[graph-input\]; zero import \[--json\] \[--format text\|binary\] --out <program-graph-artifact> \[project\|zero\.toml\|zero\.json\|file\.0\]/);
-assert.match(graphHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(graphHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\|--handles\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(graphHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(graphHelp, /zero source-map \[--json\] \[graph-input\]/);
-assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
+assert.match(graphHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[--no-help\] \[graph-input\|name\]/);
 assert.match(graphHelp, /zero reconcile \[--json\] <base-graph-input> --source <edited-file\.0\|project\|zero\.toml\|zero\.json>/);
 assert.match(graphHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\|zero\.graph\]/);
 assert.match(graphHelp, /zero import \[--json\] \[--format text\|binary\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero export \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero merge --base <base-zero\.graph> --left <left-zero\.graph> --right <right-zero\.graph> \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
 assert.match(graphHelp, /zero size \[--json\] \[--target <target>\] \[--out <artifact>\] \[graph-input\]/);
-assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
+assert.match(graphHelp, /Patch usage: zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file\|->\|--replace-in-fn <name> --old <text> --new <text>\|--rewrite <pattern> --to <template> \[--fn <name>\] \[--apply\]\)/);
 assert.match(graphHelp, /Patch operation help: zero patch --op help/);
 assert.match(graphHelp, /binary is the default zero\.graph encoding/);
 assert.match(graphHelp, /--format text writes readable repository stores when explicitly requested/);
@@ -1012,6 +1022,12 @@ assert.doesNotMatch(graphHelp, /setMain[A-Za-z]+Cli/);
 assert.match(graphHelp, /replaceFunctionBody main \.\.\. end/);
 assert.match(graphHelp, /replaceBlockBody #block_id \.\.\. end/);
 assert.match(graphHelp, /addLetBinary fn="add" name="sum" type="i32" operator="\+"/);
+assert.match(graphHelp, /addReturnExpr fn="maybe" expr="null"/);
+assert.match(graphHelp, /appendStmt fn="main" stmt="check std\.http\.listen\(world, 3000_u16\)"/);
+assert.match(graphHelp, /addTestBody name="api add"/);
+assert.match(graphHelp, /renameTest name="api add" value="api add route"/);
+assert.match(graphHelp, /deleteTest name="api add"/);
+assert.match(graphHelp, /upsertFunction handle/);
 assert.match(graphHelp, /zero build \[--json\] \[--emit exe\|obj\|llvm-ir\].*\[graph-input\]/);
 assert.match(graphHelp, /zero run \[--target <host-target>\].*\[graph-input\] \[-- args\.\.\.\]/);
 assert.match(graphHelp, /zero test \[--json\] \[--filter <name>\] \[--target <target>\] \[graph-input\]/);
@@ -1026,12 +1042,12 @@ assert.match(rootHelp, /zero build \[--json\] \[--emit exe\|obj\|llvm-ir\].*\[gr
 assert.match(rootHelp, /zero test \[graph-input\]/);
 assert.match(rootHelp, /zero check \[--json\] \[--target <target>\] \[--emit exe\|obj\|llvm-ir\] \[graph-input\]/);
 assert.match(rootHelp, /zero fix --plan --json \[graph-input\]/);
-assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file>\)/);
+assert.match(rootHelp, /zero patch \[--json\] \[--check-only\|--dry-run\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\] \(<patch-file>\|--op <operation>\|--replace-fn <name> --body-file <file\|->\|--replace-in-fn <name> --old <text> --new <text>\|--rewrite <pattern> --to <template> \[--fn <name>\] \[--apply\]\)/);
 assert.match(rootHelp, /zero dump\|validate\|roundtrip \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[graph-input\]/);
-assert.match(rootHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(rootHelp, /zero view \[--json\] \[--fn <name> \[--around <text>\|--handles\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(rootHelp, /zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(rootHelp, /zero source-map \[--json\] \[graph-input\]/);
-assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
+assert.match(rootHelp, /zero query \[--json\] \[--fn <name>\] \[--find <text>\] \[--refs <name>\] \[--calls <name>\] \[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[--no-help\] \[graph-input\|name\]/);
 assert.match(rootHelp, /zero reconcile \[--json\] <base-graph-input> --source <edited-file\.0\|project\|zero\.toml\|zero\.json>/);
 assert.match(rootHelp, /zero status\|verify-projection \[--json\] \[project\|zero\.toml\|zero\.json\|file\.0\|zero\.graph\]/);
 assert.match(rootHelp, /zero import \[--json\] \[--format text\|binary\] \[--out <program-graph-artifact>\] \[project\|zero\.toml\|zero\.json\|file\.0\]/);
@@ -1049,9 +1065,34 @@ assert.doesNotMatch(graphPatchHelp, /setMain[A-Za-z]+Cli/);
 assert.match(graphPatchHelp, /replaceFunctionBody main/);
 assert.match(graphPatchHelp, /replaceBlockBody #block_id/);
 assert.match(graphPatchHelp, /use --replace-fn with --body-file/);
+assert.match(graphPatchHelp, /--body-file - reads the body rows from stdin, so a heredoc does the whole edit in one call/);
+assert.match(graphPatchHelp, /zero patch \. --replace-fn greet --body-file - <<'EOF'/);
+assert.match(graphPatchHelp, /Alternative: write the rows to a file and pass its path/);
 assert.match(graphPatchHelp, /zero patch \. --replace-fn greet --body-file \/tmp\/greet\.body/);
+assert(graphPatchHelp.indexOf("--body-file - <<'EOF'") < graphPatchHelp.indexOf("/tmp/greet.body"), "patch help should show the stdin heredoc form before the temp-file form");
+assert.match(graphPatchHelp, /--replace-in-fn/);
+assert.match(graphPatchHelp, /zero patch \. --replace-in-fn greet --old 'return 1' --new 'return 2'/);
+assert.match(graphPatchHelp, /--old must match the body text zero view --fn <name> prints exactly once/);
+assert.match(graphPatchHelp, /advanced: node-level ops \(see zero view --fn <name> --handles\)/);
+assert.match(graphPatchHelp, /replaceExpr node="#id" with="left \+ 1"/);
+assert.match(graphPatchHelp, /--patch-text - reads a complete patch from stdin/);
+const patchHelpInFnIdx = graphPatchHelp.indexOf("--replace-in-fn greet");
+const patchHelpReplaceFnIdx = graphPatchHelp.indexOf("--replace-fn greet --body-file - <<'EOF'");
+const patchHelpGrammarIdx = graphPatchHelp.indexOf("zero-program-graph-patch v1 files");
+const patchHelpAdvancedIdx = graphPatchHelp.indexOf("advanced: node-level ops");
+assert(patchHelpInFnIdx >= 0 && patchHelpInFnIdx < patchHelpReplaceFnIdx, "patch help leads with --replace-in-fn");
+assert(patchHelpReplaceFnIdx < patchHelpGrammarIdx, "the --replace-fn heredoc precedes the op grammar reference");
+assert(patchHelpGrammarIdx < patchHelpAdvancedIdx, "the op grammar precedes the advanced node-level section");
+assert(graphPatchHelp.indexOf('set node="#id"') > patchHelpAdvancedIdx, "node-handle ops sit under the advanced header");
+assert(graphPatchHelp.indexOf("addMain") < patchHelpAdvancedIdx, "authoring ops print before node-level ops");
 assert.match(graphPatchHelp, /addLetLiteral fn="main" name="count" type="u32" value="0"/);
 assert.match(graphPatchHelp, /addReturnValue fn="identity" value="input" type="i32"/);
+assert.match(graphPatchHelp, /addReturnExpr fn="maybe" expr="null"/);
+assert.match(graphPatchHelp, /appendStmt fn="main" stmt="check std\.http\.listen\(world, 3000_u16\)"/);
+assert.match(graphPatchHelp, /addTestBody name="api add"/);
+assert.match(graphPatchHelp, /renameTest name="api add" value="api add route"/);
+assert.match(graphPatchHelp, /deleteTest name="api add"/);
+assert.match(graphPatchHelp, /upsertFunction handle/);
 const graphPatchHelpJson = json(["patch", "--op", "help", "--json"]).body;
 assert.equal(graphPatchHelpJson.ok, true);
 assert.equal(graphPatchHelpJson.command, "zero patch");
@@ -1063,6 +1104,12 @@ assert.equal(graphPatchHelpJson.operations.some((op) => op.startsWith("replaceFu
 assert.equal(graphPatchHelpJson.operations.some((op) => op.startsWith("replaceBlockBody #block_id\n")), true);
 assert.equal(graphPatchHelpJson.operations.includes("addLetBinary fn=\"add\" name=\"sum\" type=\"i32\" operator=\"+\" left=\"left\" right=\"right\""), true);
 assert.equal(graphPatchHelpJson.operations.includes("addCheckWriteValue fn=\"main\" value=\"message\" type=\"String\""), true);
+assert.equal(graphPatchHelpJson.operations.includes("addReturnExpr fn=\"maybe\" expr=\"null\""), true);
+assert.equal(graphPatchHelpJson.operations.includes("appendStmt fn=\"main\" stmt=\"check std.http.listen(world, 3000_u16)\""), true);
+assert.equal(graphPatchHelpJson.operations.some((op) => op.startsWith("addTestBody name=\"api add\"\n")), true);
+assert.equal(graphPatchHelpJson.operations.includes("renameTest name=\"api add\" value=\"api add route\""), true);
+assert.equal(graphPatchHelpJson.operations.includes("deleteTest name=\"api add\""), true);
+assert.equal(graphPatchHelpJson.operations.some((op) => op.startsWith("upsertFunction handle\n")), true);
 const retiredGraphCheckJson = json(["graph", "check", "--json", "examples/hello.0"], { allowFailure: true });
 assert.equal(retiredGraphCheckJson.code, 1);
 assert.equal(retiredGraphCheckJson.body.diagnostics[0].message, "zero graph check is not supported");
@@ -1162,8 +1209,14 @@ assert.doesNotMatch(queryBareNameText, /modules:/, "scoped query text output mus
 assert.doesNotMatch(queryBareNameText, /patch help:/, "scoped query text output must not repeat the patch footer");
 const queryOverviewText = execFileSync(zeroBin, ["query"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
 assert.match(queryOverviewText, /modules:/);
+assert.match(queryOverviewText, /main path:src\/main\.0 functions:2 \(entry\)/);
+assert.match(queryOverviewText, /functions \(module main\):/);
 assert.match(queryOverviewText, /dealsTotal\(amount: usize\) -> usize #decl_/);
 assert.doesNotMatch(queryOverviewText, /stmt\[0\]/, "overview hides stmt handle inventories unless --handles is set");
+assert.doesNotMatch(queryOverviewText, /resolution:/, "overview omits resolution facts");
+assert.match(queryOverviewText, /tips: zero query --fn <name> \| --find <text> \| --calls <name> \| --refs <name>/);
+assert.match(queryOverviewText, /zero view --fn <name>.*zero view --outline/);
+assert(queryOverviewText.length < 3072, `bare query overview should stay compact, got ${queryOverviewText.length}`);
 const queryFnText = execFileSync(zeroBin, ["query", "--fn", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
 assert.match(queryFnText, /query: fn:dealsTotal/);
 assert.match(queryFnText, /dealsTotal\(amount: usize\) -> usize #decl_/);
@@ -1173,6 +1226,10 @@ const queryFnHandlesText = execFileSync(zeroBin, ["query", "--fn", "dealsTotal",
 assert.match(queryFnHandlesText, /param\[0\] amount: usize #param_/);
 assert.match(queryFnHandlesText, /stmt\[0\] Return #stmt_/);
 assert.match(queryFnHandlesText, /patch help:/);
+const queryFnHandlesNoHelpText = execFileSync(zeroBin, ["query", "--fn", "dealsTotal", "--handles", "--no-help"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(queryFnHandlesNoHelpText, /param\[0\] amount: usize #param_/);
+assert.match(queryFnHandlesNoHelpText, /stmt\[0\] Return #stmt_/);
+assert.doesNotMatch(queryFnHandlesNoHelpText, /patch help:/, "--handles --no-help keeps handles without the operation footer");
 assert(queryFnText.length < queryFnHandlesText.length, "default --fn output must be smaller than the --handles report");
 const queryMissingPathInput = zero(["query", "no-such-dir/no-such-input"], { allowFailure: true });
 assert.notEqual(queryMissingPathInput.code, 0, "path-shaped query arguments must keep file input semantics");
@@ -1218,8 +1275,9 @@ assert.match(diffHelp, /Usage: zero diff \[--fn <name>\] \[graph-input\]/);
 assert.match(diffHelp, /zero diff --fn handleLine \./);
 assert.doesNotMatch(diffHelp, /Patch usage:/);
 const queryHelp = zero(["query", "--help"]).stdout;
-assert.match(queryHelp, /Usage: zero query .*\[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[graph-input\|name\]/);
+assert.match(queryHelp, /Usage: zero query .*\[--node <id>\] \[--depth <n>\] \[--full\] \[--handles\] \[--no-help\] \[graph-input\|name\]/);
 assert.match(queryHelp, /--handles adds stmt and param patch handles/);
+assert.match(queryHelp, /--no-help suppresses the long patch-operation footer/);
 assert.match(queryHelp, /zero query userTotals/);
 assert.match(queryHelp, /zero query --json --node '#decl_12ab34cd' --depth 2/);
 assert.match(queryHelp, /zero view --fn <name>/);
@@ -1229,11 +1287,155 @@ assert.match(reconcileHelp, /zero reconcile zero\.graph --source src\/main\.0/);
 assert.match(reconcileHelp, /zero reconcile --json \. --source src\/main\.0/);
 assert.match(reconcileHelp, /zero reconcile --json baseline\.graph --source \./);
 const viewHelp = zero(["view", "--help"]).stdout;
-assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name> \[--around <text>\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
+assert.match(viewHelp, /Usage: zero view \[--json\] \[--fn <name> \[--around <text>\|--handles\]\] \[--outline <module-or-file>\] \[--out <file\.0>\] \[graph-input\]/);
 assert.match(viewHelp, /zero view --fn handleLine \./);
 assert.match(viewHelp, /--outline <module-or-file> prints function signatures/);
 assert.match(viewHelp, /--around <text> prints only the enclosing block/);
 assert.match(viewHelp, /close matches/);
+// --- think-in-graph addressing: zero view --fn <name> --handles ---
+const viewPlainMain = zero(["view", "--fn", "main", queryScopeRoot]).stdout;
+const viewHandlesMain = zero(["view", "--fn", "main", "--handles", queryScopeRoot]).stdout;
+assert.equal(viewHandlesMain.replace(/  \/\/ [^\n]*$/gm, ""), viewPlainMain, "--handles must only add margin comments");
+assert.match(viewHandlesMain, /let total: usize = dealsTotal\(41\)  \/\/ #\S+\n/, "every statement line gains a trailing handle comment");
+assert.match(viewHandlesMain, /if total == 42 \{  \/\/ #\S+ #\S+\n/, "compound headers show the stmt handle and the clause block handle");
+assert(viewHandlesMain.length <= viewPlainMain.length * 1.3, `--handles annotation overhead must stay under 30%, got ${Math.round((viewHandlesMain.length / viewPlainMain.length - 1) * 1000) / 10}%`);
+const viewHandlesNoFn = zero(["view", "--handles", queryScopeRoot], { allowFailure: true });
+assert.notEqual(viewHandlesNoFn.code, 0);
+assert.match(`${viewHandlesNoFn.stdout}${viewHandlesNoFn.stderr}`, /--handles requires --fn <name>/);
+
+// refs and find rows gain the enclosing statement handle with --handles
+const refsHandlesText = execFileSync(zeroBin, ["query", "--refs", "dealsTotal", "--handles"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(refsHandlesText, /call #expr_\S+ fn:main stmt:#stmt_\S+/, "--refs --handles rows show the enclosing statement handle");
+const refsPlainText = execFileSync(zeroBin, ["query", "--refs", "dealsTotal"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.doesNotMatch(refsPlainText, / stmt:#/, "--refs without --handles stays unchanged");
+const refsHandlesJson = json(["query", "--json", "--refs", "dealsTotal", queryScopeRoot]).body;
+assert(refsHandlesJson.references.some((ref: any) => typeof ref.stmt === "string" && ref.stmt.startsWith("#stmt_")), "refs JSON rows carry the enclosing statement handle");
+const findHandlesText = execFileSync(zeroBin, ["query", "--find", "dealsTotal", "--handles"], { cwd: queryScopeRoot, encoding: "utf8", maxBuffer: execMaxBuffer });
+assert.match(findHandlesText, /Identifier #expr_\S+ name:dealsTotal stmt:#stmt_\S+/, "--find --handles match rows show the enclosing statement handle");
+
+// the printed handles are the identifiers zero patch accepts: set-by-handle round trip
+const letHandle = viewHandlesMain.match(/let total[^\n]*  \/\/ (#\S+)$/m)?.[1];
+assert(letHandle, "let statement line carries a handle");
+const letNode = json(["query", "--json", "--node", letHandle, "--depth", "2", queryScopeRoot]).body;
+assert.equal(letNode.node.selected.kind, "Let", "short handles resolve in zero query --node");
+const letCall = letNode.node.children.find((edge: any) => edge.kind === "expr");
+const letLiteralId = letCall?.children?.find((edge: any) => edge.kind === "arg")?.node?.id;
+assert(letLiteralId, "literal argument node is reachable from the statement handle");
+const setByHandle = zero(["patch", queryScopeRoot, "--op", `set node="${letLiteralId}" field="value" expect="41" value="43"`]);
+assert.equal(setByHandle.code, 0);
+const viewAfterSet = zero(["view", "--fn", "main", "--handles", queryScopeRoot]).stdout;
+assert.match(viewAfterSet, /let total: usize = dealsTotal\(43\)  \/\/ #\S+\n/, "set-by-handle edit shows up in the handles view");
+
+// clause block handles drive replaceBlockBody directly from the view output
+const ifClause = viewAfterSet.match(/if total == 42 \{  \/\/ (#\S+) (#\S+)$/m);
+assert(ifClause, "if header carries stmt and clause block handles");
+const clausePatch = zero(["patch", queryScopeRoot, "--patch-text", `zero-program-graph-patch v1\nreplaceBlockBody ${ifClause[2]}\n  check world.out.write "clause by handle\\n"\nend\n`]);
+assert.equal(clausePatch.code, 0);
+assert.match(zero(["view", "--fn", "main", queryScopeRoot]).stdout, /clause by handle/, "replaceBlockBody accepts the clause handle printed by --handles");
+
+// replaceExpr: one-line micro edits by handle (value, condition, subexpression)
+const viewDealsHandles = zero(["view", "--fn", "dealsTotal", "--handles", queryScopeRoot]).stdout;
+const returnHandle = viewDealsHandles.match(/return amount \+ 1  \/\/ (#\S+)$/m)?.[1];
+assert(returnHandle, "return statement carries a handle");
+const exprBadText = zero(["patch", queryScopeRoot, "--op", `replaceExpr node="${returnHandle}" with="amount ) 2"`], { allowFailure: true });
+assert.notEqual(exprBadText.code, 0);
+assert.match(exprBadText.stderr, /replaceExpr text did not parse as a Zero expression/);
+const exprEdit = zero(["patch", queryScopeRoot, "--op", `replaceExpr node="${returnHandle}" with="amount * 2 + 1"`]);
+assert.equal(exprEdit.code, 0);
+assert.match(zero(["view", "--fn", "dealsTotal", queryScopeRoot]).stdout, /return amount \* 2 \+ 1/, "replaceExpr on a statement handle replaces its expression");
+
+// micro-op batch: three --op edits, one patch, one revalidation pass
+const viewMainBatch = zero(["view", "--fn", "main", "--handles", queryScopeRoot]).stdout;
+const batchLetHandle = viewMainBatch.match(/let total[^\n]*  \/\/ (#\S+)$/m)?.[1];
+const batchIfHandle = viewMainBatch.match(/if total == 42 \{  \/\/ (#\S+) #\S+$/m)?.[1];
+assert(batchLetHandle && batchIfHandle, "main handles for batch edit");
+const batchPatch = zero(["patch", queryScopeRoot,
+  "--op", `replaceExpr node="${batchLetHandle}" with="dealsTotal(20) + 1"`,
+  "--op", `replaceExpr node="${batchIfHandle}" with="total != 0"`,
+  "--op", `set node="${batchLetHandle}" field="mutable" value="true"`,
+]);
+assert.equal(batchPatch.code, 0);
+assert.match(batchPatch.stdout, /applied: 3 ops/, "batched --op edits apply as one patch");
+const viewMainAfterBatch = zero(["view", "--fn", "main", queryScopeRoot]).stdout;
+assert.match(viewMainAfterBatch, /var total: usize = dealsTotal\(20\) \+ 1/);
+assert.match(viewMainAfterBatch, /if total != 0 \{/);
+
+// structural rewrite by example: zero patch --rewrite '<pattern>' --to '<template>'
+const rewriteRoot = join("/tmp", `zero-rewrite-scope-${process.pid}`);
+rmSync(rewriteRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", rewriteRoot]).body.ok, true);
+mkdirSync(join(rewriteRoot, "src"), { recursive: true });
+writeFileSync(
+  join(rewriteRoot, "src", "main.0"),
+  'fn calc(a: usize) -> usize {\n    let x: usize = a + 1\n    let y: usize = a + 1\n    return x + y\n}\n\nfn calc2(b: usize) -> usize {\n    return b + 1\n}\n\npub fn main(world: World) -> Void raises {\n    let t: usize = calc(1) + calc2(2)\n    if t == t {\n        check world.out.write("rewrite scope\\n")\n    }\n}\n',
+);
+assert.equal(json(["import", "--json", join(rewriteRoot, "src", "main.0")]).body.ok, true);
+
+// dry run is the default: each site lists file, fn, handle, and rendered before/after
+const rewriteDry = zero(["patch", rewriteRoot, "--rewrite", "$A + 1", "--to", "$A + 2"]);
+assert.equal(rewriteDry.code, 0);
+assert.match(rewriteDry.stdout, /rewrite: \$A \+ 1 -> \$A \+ 2/);
+assert.match(rewriteDry.stdout, /matches: 3/, "package-wide rewrite matches all three sites");
+assert.match(rewriteDry.stdout, /src\/main\.0 fn:calc #\S+/);
+assert.match(rewriteDry.stdout, /- a \+ 1/);
+assert.match(rewriteDry.stdout, /\+ a \+ 2/);
+assert.match(rewriteDry.stdout, /- b \+ 1/);
+assert.match(rewriteDry.stdout, /dry run: pass --apply/);
+assert.equal(zero(["view", "--fn", "calc", rewriteRoot]).stdout.includes("a + 2"), false, "dry run leaves the store untouched");
+
+// --fn scopes matching to one function
+const rewriteScoped = zero(["patch", rewriteRoot, "--rewrite", "$A + 1", "--to", "$A + 2", "--fn", "calc"]);
+assert.match(rewriteScoped.stdout, /matches: 2/, "--fn calc scopes the rewrite to two sites");
+assert.doesNotMatch(rewriteScoped.stdout, /fn:calc2/);
+
+// the same metavariable twice must match equal subtrees
+const rewriteEquality = zero(["patch", rewriteRoot, "--rewrite", "$A == $A", "--to", "true"]);
+assert.match(rewriteEquality.stdout, /matches: 1/, "$A == $A matches t == t and nothing else");
+assert.match(rewriteEquality.stdout, /- t == t/);
+
+// JSON dry run carries the match list
+const rewriteJson = json(["patch", "--json", rewriteRoot, "--rewrite", "$A + 1", "--to", "$A + 2"]).body;
+assert.equal(rewriteJson.ok, true);
+assert.equal(rewriteJson.matchCount, 3);
+assert.equal(rewriteJson.matches.length, 3);
+assert.equal(rewriteJson.matches[0].before, "a + 1");
+assert.equal(rewriteJson.matches[0].after, "a + 2");
+assert.equal(rewriteJson.rewrite.apply, false);
+
+// revalidation failure rolls the whole batch back
+const rewriteRollback = zero(["patch", rewriteRoot, "--rewrite", "$A + 1", "--to", "$A + nosuchconst", "--apply"], { allowFailure: true });
+assert.notEqual(rewriteRollback.code, 0);
+assert.match(`${rewriteRollback.stdout}${rewriteRollback.stderr}`, /revalidation/);
+assert.equal(zero(["view", "--fn", "calc", rewriteRoot]).stdout.includes("nosuchconst"), false, "failed rewrite leaves the store untouched");
+
+// metavar capture reuse on both sides, applied in one batch
+const rewriteApply = zero(["patch", rewriteRoot, "--rewrite", "$A + 1", "--to", "$A + 1 + ($A - $A)", "--apply"]);
+assert.equal(rewriteApply.code, 0);
+assert.match(rewriteApply.stdout, /matches: 3/);
+assert.match(rewriteApply.stdout, /applied: 3 ops/, "apply rewrites every site in one batch with one revalidation");
+const rewriteCalcView = zero(["view", "--fn", "calc", rewriteRoot]).stdout;
+assert.match(rewriteCalcView, /let x: usize = a \+ 1 \+ \(a - a\)/, "applied rewrite matches the dry-run rendering");
+assert.match(rewriteCalcView, /let y: usize = a \+ 1 \+ \(a - a\)/);
+assert.match(zero(["view", "--fn", "calc2", rewriteRoot]).stdout, /return b \+ 1 \+ \(b - b\)/);
+
+// rewrite needs both halves and a real function for --fn
+const rewriteMissingTo = zero(["patch", rewriteRoot, "--rewrite", "$A + 1"], { allowFailure: true });
+assert.notEqual(rewriteMissingTo.code, 0);
+assert.match(rewriteMissingTo.stderr, /graph rewrite needs both --rewrite and --to/);
+const rewriteBadFn = zero(["patch", rewriteRoot, "--rewrite", "$A + 1", "--to", "$A", "--fn", "nosuchfn"], { allowFailure: true });
+assert.notEqual(rewriteBadFn.code, 0);
+assert.match(rewriteBadFn.stderr, /rewrite --fn function 'nosuchfn' was not found/);
+const rewriteUnboundVar = zero(["patch", rewriteRoot, "--rewrite", "$A + 1", "--to", "$B + 1"], { allowFailure: true });
+assert.notEqual(rewriteUnboundVar.code, 0);
+assert.match(rewriteUnboundVar.stderr, /template uses \$B which the pattern does not bind/);
+rmSync(rewriteRoot, { force: true, recursive: true });
+
+// GPH004 with a near-miss handle names the nearest existing handle
+const nearMiss = `${letHandle.slice(0, -1)}${letHandle.endsWith("z") ? "y" : "z"}`;
+const nearMissPatch = zero(["patch", queryScopeRoot, "--op", `set node="${nearMiss}" field="value" value="9"`], { allowFailure: true });
+assert.notEqual(nearMissPatch.code, 0);
+assert.match(nearMissPatch.stderr, /patch node was not found; nearest: #/, "GPH004 suggests the nearest handle");
+
 rmSync(queryScopeRoot, { force: true, recursive: true });
 const repoGraphStatus = json(["status", "--json", "."]).body;
 assert.equal(repoGraphStatus.ok, true);
@@ -1677,13 +1879,45 @@ writeFileSync(
 writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
 assert.equal(json(["import", "--json", staleMultiRoot]).body.ok, true);
 assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi one\n");
+const staleMultiOverview = zero(["query", staleMultiRoot]).stdout;
+assert.match(staleMultiOverview, /math path:src\/math\.0 functions:1\n/);
+assert.match(staleMultiOverview, /main path:src\/main\.0 functions:1 \(entry\)/);
+assert.match(staleMultiOverview, /functions \(module main\):/);
+assert.doesNotMatch(staleMultiOverview, /add_one\(value: i32\)/, "the bare overview lists only entry-module signatures");
 writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 2\n}\n");
 const staleMultiCheck = zeroWithStderr(["check"], { cwd: staleMultiRoot });
 assert.equal(staleMultiCheck.code, 0);
 assert.equal(staleMultiCheck.stdout, "ok\n");
-assert.match(staleMultiCheck.stderr, /note: zero check refreshed zero\.graph from the edited package source projection/);
+assert.match(staleMultiCheck.stderr, /note: zero check refreshed zero\.graph from the edited package source projection; tip: zero patch --replace-fn <fn> --body-file - edits the graph directly and skips this reconcile/);
+assert.equal((staleMultiCheck.stderr.match(/\n/g) ?? []).length, 1, "graph refresh note plus tip should stay on one stderr line");
 assert.equal(json(["status", "--json", staleMultiRoot]).body.repositoryGraph.projectionState, "clean");
 assert.equal(zero(["run", staleMultiRoot]).stdout, "stale multi two\n");
+// Context-aware refresh tips: a signature-changing source edit teaches the
+// declaration-level patch ops at the moment of fallback, a const initializer
+// edit teaches setConst, and the refreshed (clean) state stays quiet.
+const refreshTipRoot = join("/tmp", `zero-repo-graph-refresh-tip-${process.pid}`);
+const refreshTipMain = join(refreshTipRoot, "src", "main.0");
+const refreshTipMath = join(refreshTipRoot, "src", "math.0");
+rmSync(refreshTipRoot, { force: true, recursive: true });
+assert.equal(json(["init", "--json", refreshTipRoot]).body.ok, true);
+mkdirSync(join(refreshTipRoot, "src"), { recursive: true });
+writeFileSync(refreshTipMain, 'use math\n\nconst limit: i32 = 42\n\npub fn main(world: World) -> Void raises {\n    if add_one(41) == limit {\n        check world.out.write("tip one\\n")\n    }\n}\n');
+writeFileSync(refreshTipMath, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
+assert.equal(json(["import", "--json", refreshTipRoot]).body.ok, true);
+writeFileSync(refreshTipMath, "pub fn add_one(value: i32, bias: i32) -> i32 {\n    return value + bias\n}\n");
+writeFileSync(refreshTipMain, 'use math\n\nconst limit: i32 = 42\n\npub fn main(world: World) -> Void raises {\n    if add_one(41, 1) == limit {\n        check world.out.write("tip one\\n")\n    }\n}\n');
+const refreshTipSignature = zeroWithStderr(["check", refreshTipRoot]);
+assert.equal(refreshTipSignature.code, 0);
+assert.match(refreshTipSignature.stderr, /note: zero check refreshed zero\.graph from the edited package source projection; tip: zero patch --op 'addParamTo fn=\.\.\. name=\.\.\. type=\.\.\. default=\.\.\.' threads a new parameter through every call site in one step; setReturnType changes return types/);
+assert.equal((refreshTipSignature.stderr.match(/\n/g) ?? []).length, 1, "signature refresh note plus tip should stay on one stderr line");
+const refreshTipQuiet = zeroWithStderr(["check", refreshTipRoot]);
+assert.equal(refreshTipQuiet.code, 0);
+assert.doesNotMatch(refreshTipQuiet.stderr, /refreshed zero\.graph/, "the refresh note prints once per stale state");
+writeFileSync(refreshTipMain, 'use math\n\nconst limit: i32 = 43\n\npub fn main(world: World) -> Void raises {\n    if add_one(41, 1) == limit {\n        check world.out.write("tip one\\n")\n    }\n}\n');
+const refreshTipConst = zeroWithStderr(["check", refreshTipRoot]);
+assert.equal(refreshTipConst.code, 0);
+assert.match(refreshTipConst.stderr, /note: zero check refreshed zero\.graph from the edited package source projection; tip: zero patch --op 'setConst name=\.\.\. value=\.\.\.' replaces a top-level const initializer directly and skips this reconcile/);
+assert.equal(json(["status", "--json", refreshTipRoot]).body.repositoryGraph.projectionState, "clean");
 writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 1\n}\n");
 const staleMultiStoreCheck = zeroWithStderr(["check", staleMultiStore]);
 assert.equal(staleMultiStoreCheck.code, 0);
@@ -1706,6 +1940,11 @@ assert.equal(staleMultiPatch.body.ok, true);
 const staleMultiGraphNewerBuild = zeroWithStderr(["build", staleMultiRoot]);
 assert.equal(staleMultiGraphNewerBuild.code, 0);
 assert.match(staleMultiGraphNewerBuild.stderr, /note: zero build is using zero\.graph, which is newer than the \.0 source projection/);
+// the store-newer note is once-per-state: a second command on the same store
+// stays quiet until the store or source state changes
+const staleMultiGraphNewerRepeat = zeroWithStderr(["check", staleMultiRoot]);
+assert.equal(staleMultiGraphNewerRepeat.code, 0);
+assert.doesNotMatch(staleMultiGraphNewerRepeat.stderr, /is using zero\.graph/, "two consecutive commands print the store-newer note once");
 writeFileSync(staleMultiHelper, "pub fn add_one(value: i32) -> i32 {\n    return value + 2\n}\n");
 const staleMultiDiverged = json(["check", "--json", staleMultiRoot], { allowFailure: true });
 assert.notEqual(staleMultiDiverged.code, 0);
@@ -1876,6 +2115,12 @@ assert.equal(oraclePrePatch.code, 0);
 assert.match(oraclePrePatch.stdout, /program graph patch ok/);
 assert.match(oraclePrePatch.stderr, /pre-existing diagnostic predates this patch and did not block it/);
 assert.match(oraclePrePatch.stderr, /TAR002: target does not provide required Args capability/);
+// the pre-existing note is once-per-state as well: the next patch against the
+// same unchanged diagnostic set stays quiet
+const oraclePrePatchRepeat = zeroWithStderr(["patch", "--target", "win32-x64.exe", oraclePreRoot, "--op", 'addLetLiteral fn="main" name="probe2" type="u32" value="2"']);
+assert.equal(oraclePrePatchRepeat.code, 0);
+assert.match(oraclePrePatchRepeat.stdout, /program graph patch ok/);
+assert.doesNotMatch(oraclePrePatchRepeat.stderr, /pre-existing diagnostic/, "the pre-existing diagnostics note prints once per diagnostic state");
 rmSync(oraclePreRoot, { force: true, recursive: true });
 // a store whose recorded projection already fails the compiler typecheck
 // (checker drift, stores written by older compilers) does not wall the
@@ -2356,11 +2601,14 @@ pub fn main(world: World) -> Void raises {
 json(["import", "--format", "text", "--json", ambiguousRepoGraphSource]);
 const ambiguousRepoGraphStoreBefore = readFileSync(ambiguousRepoGraphStore, "utf8");
 writeFileSync(ambiguousRepoGraphSource, readFileSync(ambiguousRepoGraphSource, "utf8").replace("add(1, 2)", "add(2, 1)"));
-const ambiguousRepoGraphSync = json(["import", "--format", "text", "--json", ambiguousRepoGraphSource], { allowFailure: true });
-assert.notEqual(ambiguousRepoGraphSync.code, 0);
-assert.equal(ambiguousRepoGraphSync.body.diagnostics[0].code, "RGP007");
-assert.equal(ambiguousRepoGraphSync.body.diagnostics[0].message, "repository graph source identity is ambiguous");
-assert.equal(readFileSync(ambiguousRepoGraphStore, "utf8"), ambiguousRepoGraphStoreBefore);
+// The argument swap ties structurally, but it is a single-file edit whose
+// function set still matches by name and signature, so import accepts the
+// rewrite wholesale with regenerated node identities instead of RGP007.
+const ambiguousRepoGraphSync = zeroWithStderr(["import", "--format", "text", "--json", ambiguousRepoGraphSource]);
+assert.equal(ambiguousRepoGraphSync.code, 0);
+assert.match(ambiguousRepoGraphSync.stderr, /note: file-scope rewrite accepted; node identities regenerated for main\.0/);
+assert.equal(JSON.parse(ambiguousRepoGraphSync.stdout).repositoryGraph.projectionState, "clean");
+assert.notEqual(readFileSync(ambiguousRepoGraphStore, "utf8"), ambiguousRepoGraphStoreBefore);
 const rotatedRepoGraphRoot = join("/tmp", `zero-repo-graph-rotated-${process.pid}`);
 const rotatedRepoGraphSource = join(rotatedRepoGraphRoot, "main.0");
 const rotatedRepoGraphStore = join(rotatedRepoGraphRoot, "zero.graph");
@@ -2383,11 +2631,13 @@ pub fn main(world: World) -> Void raises {
 json(["import", "--format", "text", "--json", rotatedRepoGraphSource]);
 const rotatedRepoGraphStoreBefore = readFileSync(rotatedRepoGraphStore, "utf8");
 writeFileSync(rotatedRepoGraphSource, readFileSync(rotatedRepoGraphSource, "utf8").replace("sum3(1, 2, 3)", "sum3(2, 3, 1)"));
-const rotatedRepoGraphSync = json(["import", "--format", "text", "--json", rotatedRepoGraphSource], { allowFailure: true });
-assert.notEqual(rotatedRepoGraphSync.code, 0);
-assert.equal(rotatedRepoGraphSync.body.diagnostics[0].code, "RGP007");
-assert.equal(rotatedRepoGraphSync.body.diagnostics[0].message, "repository graph source identity is ambiguous");
-assert.equal(readFileSync(rotatedRepoGraphStore, "utf8"), rotatedRepoGraphStoreBefore);
+// Rotated identical arguments tie structurally; the single-file rewrite is
+// accepted wholesale with regenerated identities instead of RGP007.
+const rotatedRepoGraphSync = zeroWithStderr(["import", "--format", "text", "--json", rotatedRepoGraphSource]);
+assert.equal(rotatedRepoGraphSync.code, 0);
+assert.match(rotatedRepoGraphSync.stderr, /note: file-scope rewrite accepted; node identities regenerated for main\.0/);
+assert.equal(JSON.parse(rotatedRepoGraphSync.stdout).repositoryGraph.projectionState, "clean");
+assert.notEqual(readFileSync(rotatedRepoGraphStore, "utf8"), rotatedRepoGraphStoreBefore);
 const ambiguousSiblingRepoGraphRoot = join("/tmp", `zero-repo-graph-ambiguous-sibling-${process.pid}`);
 const ambiguousSiblingRepoGraphSource = join(ambiguousSiblingRepoGraphRoot, "main.0");
 const ambiguousSiblingRepoGraphStore = join(ambiguousSiblingRepoGraphRoot, "zero.graph");
@@ -2493,7 +2743,9 @@ const ambiguousRunRepoGraphResolvedLine = ambiguousRunRepoGraphStoreAfter
   .find((line) => line.startsWith(`node ${ambiguousRunRepoGraphWhileId} While`));
 assert(ambiguousRunRepoGraphResolvedLine, "original while handle survives the auto-resolved import");
 assert.match(ambiguousRunRepoGraphResolvedLine, /line:8/, "original while handle follows the statement that kept its body");
-// Identical edited candidates at shifted orders stay genuinely ambiguous and keep RGP007.
+// Identical edited candidates at shifted orders stay genuinely ambiguous; the
+// same edit also widens fill's signature, so the file-scope rewrite escape
+// stays closed (function set changed) and the import keeps RGP007.
 const tieRunRepoGraphRoot = join("/tmp", `zero-repo-graph-tie-run-${process.pid}`);
 const tieRunRepoGraphSource = join(tieRunRepoGraphRoot, "main.0");
 const tieRunRepoGraphStore = join(tieRunRepoGraphRoot, "zero.graph");
@@ -2507,6 +2759,9 @@ writeFileSync(
   insertRunRepoGraphOriginal.replace(
     "    while i < n {\n        p = p + 1_usize\n        i = i + 1_usize\n    }\n",
     "    var shift: usize = 0\n    while i <= n {\n        p = p + 2_usize\n        i = i + 1_usize\n    }\n    while i <= n {\n        p = p + 2_usize\n        i = i + 1_usize\n    }\n",
+  ).replace(
+    "fn fill(out: MutSpan<u8>, n: usize) -> usize {",
+    "fn fill(out: MutSpan<u8>, n: usize, pad: usize) -> usize {",
   ),
 );
 const tieRunRepoGraphSync = json(["import", "--format", "text", "--json", tieRunRepoGraphSource], { allowFailure: true });
@@ -2517,6 +2772,100 @@ assert.match(tieRunRepoGraphSync.body.diagnostics[0].actual, /matches 2 edited c
 assert.match(tieRunRepoGraphSync.body.diagnostics[0].help, /split the text edit: import the change touching main\.0:\d+-\d+ on its own first/);
 assert.equal(readFileSync(tieRunRepoGraphStore, "utf8"), tieRunRepoGraphStoreBefore);
 rmSync(tieRunRepoGraphRoot, { force: true, recursive: true });
+// Whole-file rewrite escape: a single-file rewrite of a multi-function module
+// whose function set still matches by name and signature imports in one pass;
+// the file's node identities are regenerated and other files keep theirs.
+const fileScopeRoot = join(outDir, "repository-graph-file-scope-rewrite");
+const fileScopeStore = join(fileScopeRoot, "zero.graph");
+rmSync(fileScopeRoot, { recursive: true, force: true });
+mkdirSync(join(fileScopeRoot, "src"), { recursive: true });
+writeZeroTomlSync(fileScopeRoot, { package: { name: "file-scope", version: "0.1.0" }, targets: { cli: { kind: "exe", main: "src/main.0" } } });
+const fileScopeUtilOriginal = [
+  "pub fn fill(n: usize) -> usize {",
+  "    var i: usize = 0",
+  "    var p: usize = 0",
+  "    while i < n {",
+  "        p = p + 1_usize",
+  "        i = i + 1_usize",
+  "    }",
+  "    return p",
+  "}",
+  "",
+  "pub fn cap(n: usize) -> usize {",
+  "    return n",
+  "}",
+  "",
+].join("\n");
+const fileScopeUtilRewrite = [
+  "pub fn fill(n: usize) -> usize {",
+  "    var i: usize = 0",
+  "    var p: usize = 0",
+  "    var shift: usize = 0",
+  "    while i <= n {",
+  "        p = p + 2_usize",
+  "        i = i + 1_usize",
+  "    }",
+  "    while i <= n {",
+  "        p = p + 2_usize",
+  "        i = i + 1_usize",
+  "    }",
+  "    return p + shift",
+  "}",
+  "",
+  "pub fn cap(n: usize) -> usize {",
+  "    return n + 0_usize",
+  "}",
+  "",
+].join("\n");
+const fileScopeMainOriginal = [
+  "use util",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  "    if fill(2) >= cap(1) {",
+  '        check world.out.write("file scope ok\\n")',
+  "    }",
+  "}",
+  "",
+].join("\n");
+writeFileSync(join(fileScopeRoot, "src", "util.0"), fileScopeUtilOriginal);
+writeFileSync(join(fileScopeRoot, "src", "main.0"), fileScopeMainOriginal);
+assert.equal(json(["import", "--format", "text", "--json", fileScopeRoot]).code, 0);
+assert.equal(zero(["check", fileScopeRoot]).stdout, "ok\n");
+const fileScopeStoreBefore = readFileSync(fileScopeStore, "utf8");
+const fileScopeMainId = fileScopeStoreBefore.match(/^node (#[^ ]+) Function name:"main"/m)?.[1];
+assert(fileScopeMainId, "expected a main Function node in the file-scope store");
+writeFileSync(join(fileScopeRoot, "src", "util.0"), fileScopeUtilRewrite);
+const fileScopeSync = zeroWithStderr(["import", "--format", "text", "--json", fileScopeRoot]);
+assert.equal(fileScopeSync.code, 0);
+assert.match(fileScopeSync.stderr, /note: file-scope rewrite accepted; node identities regenerated for src\/util\.0/);
+assert.equal(JSON.parse(fileScopeSync.stdout).repositoryGraph.projectionState, "clean");
+const fileScopeStoreAfter = readFileSync(fileScopeStore, "utf8");
+assert(fileScopeStoreAfter.includes(`node ${fileScopeMainId} Function name:"main"`), "untouched files keep their node identities");
+assert.equal(zero(["check", fileScopeRoot]).stdout, "ok\n");
+// Handles and queries resolve against the regenerated identities in one pass.
+const fileScopeHandlesView = zero(["view", "--fn", "fill", "--handles", fileScopeRoot]).stdout;
+const fileScopeReturnLine = fileScopeHandlesView.split("\n").find((line) => line.includes("return p + shift"));
+assert(fileScopeReturnLine, "expected the rewritten return row in the handles view");
+const fileScopeHandle = fileScopeReturnLine.match(/\/\/ (#[0-9a-z_.]+)/)?.[1];
+assert(fileScopeHandle, "expected a patch handle on the rewritten return row");
+const fileScopeQueryHandles = json(["query", "--json", "--fn", "fill", "--handles", fileScopeRoot]).body;
+assert.equal(fileScopeQueryHandles.ok, true);
+const fileScopePatch = json(["patch", "--json", fileScopeRoot, "--op", `replaceExpr node="${fileScopeHandle}" with="p + shift + 0_usize"`]).body;
+assert.equal(fileScopePatch.ok, true);
+assert.match(zero(["view", "--fn", "fill", fileScopeRoot]).stdout, /return p \+ shift \+ 0_usize/);
+// Cross-file ambiguity keeps RGP007: the same tie-producing rewrite plus an
+// edit in a second file is not a file-scope rewrite.
+writeFileSync(join(fileScopeRoot, "src", "util.0"), fileScopeUtilOriginal);
+writeFileSync(join(fileScopeRoot, "src", "main.0"), fileScopeMainOriginal);
+assert.equal(json(["import", "--format", "text", "--json", fileScopeRoot]).code, 0);
+const crossFileStoreBefore = readFileSync(fileScopeStore, "utf8");
+writeFileSync(join(fileScopeRoot, "src", "util.0"), fileScopeUtilRewrite);
+writeFileSync(join(fileScopeRoot, "src", "main.0"), fileScopeMainOriginal.replace("file scope ok", "cross file ok"));
+const crossFileSync = json(["import", "--format", "text", "--json", fileScopeRoot], { allowFailure: true });
+assert.notEqual(crossFileSync.code, 0);
+assert.equal(crossFileSync.body.diagnostics[0].code, "RGP007");
+assert.equal(crossFileSync.body.diagnostics[0].message, "repository graph source identity is ambiguous");
+assert.equal(readFileSync(fileScopeStore, "utf8"), crossFileStoreBefore);
 const mergeRepoGraphRoot = join("/tmp", `zero-repo-graph-merge-${process.pid}`);
 const mergeRepoGraphSource = join(mergeRepoGraphRoot, "main.0");
 const mergeRepoGraphStore = join(mergeRepoGraphRoot, "zero.graph");
@@ -3013,7 +3362,9 @@ const graphDeleteThenInsertedPath = join(outDir, "hello.delete-then-insert.progr
 const graphPatchDeleteNodeFactPath = join(outDir, "hello.delete-node-fact.program-graph.patch");
 const graphDeletedNodeFactPath = join(outDir, "hello.delete-node-fact.program-graph");
 const graphRepositoryPatchPackageDir = join(outDir, "repository-graph-patch-package");
+const graphRepositoryNewOpsPackageDir = join(outDir, "repository-graph-new-patch-ops");
 const graphRepositoryBodyPatchPath = join(outDir, "repository-graph.replace-body.patch");
+const graphRepositoryNewOpsPatchPath = join(outDir, "repository-graph.new-ops.patch");
 const graphRepositoryBlockPatchPath = join(outDir, "repository-graph.replace-block.patch");
 const graphRepositoryInvalidBlockRowsPatchPath = join(outDir, "repository-graph.invalid-block-rows.patch");
 const graphRepositoryCheckExprPatchPath = join(outDir, "repository-graph.check-expr.patch");
@@ -3299,6 +3650,78 @@ assert.equal(checkedInGraphQueryJson.patchOperations.some((op) => op.startsWith(
 assert.equal(checkedInGraphQueryJson.patchOperations.some((op) => op.startsWith("replaceBlockBody #block_id\n")), true);
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("addLetLiteral fn=\"main\" name=\"count\" type=\"u32\" value=\"0\""), true);
 assert.equal(checkedInGraphQueryJson.patchOperations.includes("addReturnValue fn=\"identity\" value=\"input\" type=\"i32\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.includes("addReturnExpr fn=\"maybe\" expr=\"null\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.includes("appendStmt fn=\"main\" stmt=\"check std.http.listen(world, 3000_u16)\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.some((op) => op.startsWith("addTestBody name=\"api add\"\n")), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.includes("renameTest name=\"api add\" value=\"api add route\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.includes("deleteTest name=\"api add\""), true);
+assert.equal(checkedInGraphQueryJson.patchOperations.some((op) => op.startsWith("upsertFunction handle\n")), true);
+rmSync(graphRepositoryNewOpsPackageDir, { recursive: true, force: true });
+mkdirSync(graphRepositoryNewOpsPackageDir, { recursive: true });
+writeFileSync(join(graphRepositoryNewOpsPackageDir, "zero.toml"), readFileSync(join(checkedInGraphPackageDir, "zero.toml"), "utf8"));
+writeFileSync(join(graphRepositoryNewOpsPackageDir, "zero.graph"), readFileSync(checkedInRepositoryGraphStorePath));
+writeFileSync(join(graphRepositoryNewOpsPackageDir, "hello.0"), checkedInGraphSource);
+const repositoryNewOpsHash = json(["query", "--json", graphRepositoryNewOpsPackageDir]).body.graphHash;
+writeFileSync(graphRepositoryNewOpsPatchPath, [
+  "zero-program-graph-patch v1",
+  `expect graphHash "${repositoryNewOpsHash}"`,
+  "upsertFunction main",
+  "pub fn main(world: World) -> Void raises {",
+  "}",
+  "end",
+  'appendStmt fn="main" stmt="check world.out.write(\\"new ops ok\\")"',
+  'addFunction name="answer" ret="i32"',
+  'addReturnExpr fn="answer" expr="42"',
+  'addTestBody name="answer works"',
+  "  expect (answer() == 42)",
+  "end",
+  "",
+].join("\n"));
+const repositoryNewOpsDryRunJson = json(["patch", "--json", "--check-only", graphRepositoryNewOpsPackageDir, graphRepositoryNewOpsPatchPath]).body;
+assert.equal(repositoryNewOpsDryRunJson.ok, true);
+assert.equal(repositoryNewOpsDryRunJson.checkOnly, true);
+assert.equal(repositoryNewOpsDryRunJson.saved, null);
+assert.deepEqual(repositoryNewOpsDryRunJson.operations.map((operation) => operation.op), ["upsertFunction", "appendStmt", "addFunction", "addReturnExpr", "addTestBody"]);
+assert.equal(zero(["view", graphRepositoryNewOpsPackageDir]).stdout, checkedInGraphSource);
+const repositoryNewOpsPatchJson = json(["patch", "--json", graphRepositoryNewOpsPackageDir, graphRepositoryNewOpsPatchPath]).body;
+assert.equal(repositoryNewOpsPatchJson.ok, true);
+assert.deepEqual(repositoryNewOpsPatchJson.operations.map((operation) => operation.op), ["upsertFunction", "appendStmt", "addFunction", "addReturnExpr", "addTestBody"]);
+assert.equal(repositoryNewOpsPatchJson.saved.path, join(graphRepositoryNewOpsPackageDir, "zero.graph"));
+assert.match(zero(["view", "--fn", "main", graphRepositoryNewOpsPackageDir]).stdout, /check world\.out\.write\("new ops ok"\)/);
+assert.match(zero(["view", "--fn", "answer", graphRepositoryNewOpsPackageDir]).stdout, /return 42/);
+assert.equal(zero(["check", graphRepositoryNewOpsPackageDir]).stdout, "ok\n");
+assert.equal(zero(["run", graphRepositoryNewOpsPackageDir]).stdout, "new ops ok");
+assert.equal(zero(["test", graphRepositoryNewOpsPackageDir]).stdout, "1 test(s) ok\n");
+const repositoryRenameTestJson = json(["patch", "--json", graphRepositoryNewOpsPackageDir, "--op", 'renameTest name="answer works" value="answer route works"']).body;
+assert.equal(repositoryRenameTestJson.ok, true);
+assert.equal(repositoryRenameTestJson.operations[0].op, "renameTest");
+assert.equal(repositoryRenameTestJson.operations[0].actual, "answer works");
+assert.equal(zero(["test", graphRepositoryNewOpsPackageDir]).stdout, "1 test(s) ok\n");
+const repositoryUnsupportedTestPatch = zeroWithInput(["patch", graphRepositoryNewOpsPackageDir, "--patch-text", "-"], [
+  "zero-program-graph-patch v1",
+  'addTestBody name="unsupported buffer test"',
+  "  var response: [16]u8 = [0_u8; 16]",
+  "  expect true",
+  "end",
+  "",
+].join("\n"));
+assertPatchOkOutput(repositoryUnsupportedTestPatch.stdout, join(graphRepositoryNewOpsPackageDir, "zero.graph"));
+const repositoryUnsupportedTestRun = zero(["test", graphRepositoryNewOpsPackageDir], { allowFailure: true });
+assert.notEqual(repositoryUnsupportedTestRun.code, 0);
+assert.match(repositoryUnsupportedTestRun.stderr, /zero graph test runner does not support .* expression yet/);
+assert.match(repositoryUnsupportedTestRun.stderr, /supported graph tests are pure locals/);
+const repositoryDeleteUnsupportedTestJson = json(["patch", "--json", graphRepositoryNewOpsPackageDir, "--op", 'deleteTest name="unsupported buffer test"']).body;
+assert.equal(repositoryDeleteUnsupportedTestJson.ok, true);
+assert.equal(repositoryDeleteUnsupportedTestJson.operations[0].op, "deleteTest");
+assert.equal(zero(["test", graphRepositoryNewOpsPackageDir]).stdout, "1 test(s) ok\n");
+const repositoryDeleteTestJson = json(["patch", "--json", graphRepositoryNewOpsPackageDir, "--op", 'deleteTest name="answer route works"']).body;
+assert.equal(repositoryDeleteTestJson.ok, true);
+assert.equal(repositoryDeleteTestJson.operations[0].op, "deleteTest");
+const repositoryNoTests = zero(["test", graphRepositoryNewOpsPackageDir]).stdout;
+assert.match(repositoryNoTests, /0 test\(s\) ok/);
+assert.match(repositoryNoTests, /note: no test blocks found/);
+assert.match(zero(["export", graphRepositoryNewOpsPackageDir]).stdout, /repository graph export ok/);
+assert.equal(zero(["verify-projection", graphRepositoryNewOpsPackageDir]).stdout, "repository graph verify-projection ok\n");
 rmSync(graphRepositoryPatchPackageDir, { recursive: true, force: true });
 mkdirSync(graphRepositoryPatchPackageDir, { recursive: true });
 writeFileSync(join(graphRepositoryPatchPackageDir, "zero.toml"), readFileSync(join(checkedInGraphPackageDir, "zero.toml"), "utf8"));
@@ -3510,6 +3933,99 @@ assert.equal(replaceFnMissingBodyFlag.body.diagnostics[0].actual, "missing --bod
 const replaceFnAmbiguousSource = json(["patch", "--json", graphRepositoryPatchPackageDir, graphRepositoryBodyPatchPath, "--replace-fn", "main", "--body-file", replaceFnBodyPath], { allowFailure: true });
 assert.notEqual(replaceFnAmbiguousSource.code, 0);
 assert.match(replaceFnAmbiguousSource.body.diagnostics[0].message, /graph patch source is ambiguous/);
+const replaceFnStdinHash = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceFnStdinBody = '  check world.out.write("quoted \\"rows\\" with $HOME and C:\\\\path\\n")\n';
+const replaceFnStdinText = zeroWithInput(["patch", graphRepositoryPatchPackageDir, "--expect-graph-hash", replaceFnStdinHash, "--replace-fn", "main", "--body-file", "-"], replaceFnStdinBody);
+assertPatchOkOutput(replaceFnStdinText.stdout, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.match(zero(["view", "--fn", "main", graphRepositoryPatchPackageDir]).stdout, /quoted \\"rows\\" with \$HOME and C:\\\\path/);
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, 'quoted "rows" with $HOME and C:\\path\n');
+const replaceFnStdinJsonHash = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceFnStdinJsonRun = zeroWithInput(["patch", "--json", graphRepositoryPatchPackageDir, "--expect-graph-hash", replaceFnStdinJsonHash, "--replace-fn", "main", "--body-file", "-"], '  check world.out.write("stdin body update\\n")\n');
+const replaceFnStdinJson = JSON.parse(replaceFnStdinJsonRun.stdout);
+assert.equal(replaceFnStdinJson.ok, true);
+assert.equal(replaceFnStdinJson.patch, "<stdin>");
+assert.equal(replaceFnStdinJson.operationCount, 1);
+assert.equal(replaceFnStdinJson.operations[0].op, "replaceFunctionBody");
+assert.equal(replaceFnStdinJson.saved.path, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, "stdin body update\n");
+const replaceFnStdinEmpty = zeroWithInput(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", "-"], "\n", { allowFailure: true });
+assert.notEqual(replaceFnStdinEmpty.code, 0);
+const replaceFnStdinEmptyBody = JSON.parse(replaceFnStdinEmpty.stdout);
+assert.equal(replaceFnStdinEmptyBody.diagnostic.code, "GPH001");
+assert.equal(replaceFnStdinEmptyBody.diagnostic.message, "function body file is empty");
+assert.equal(replaceFnStdinEmptyBody.diagnostic.actual, "<stdin>");
+// Surgical in-function replacement: --replace-in-fn finds --old as a literal
+// substring of the canonical body projection (the text zero view --fn prints),
+// requires it unique within the function, and revalidates exactly like
+// --replace-fn, all in one call.
+const replaceInFnHash = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceInFnSingle = zero(["patch", graphRepositoryPatchPackageDir, "--expect-graph-hash", replaceInFnHash, "--replace-in-fn", "main", "--old", "stdin body update\\n", "--new", "surgical update\\n"]);
+assertPatchOkOutput(replaceInFnSingle.stdout, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.equal(zero(["run", graphRepositoryPatchPackageDir]).stdout, "surgical update\n");
+const replaceInFnBodyRows = [
+  '  let name: Maybe<String> = std.args.get(1)',
+  '  if name.has {',
+  '    check world.out.write("hey ")',
+  '    check world.out.write(name.value)',
+  '    check world.out.write("\\n")',
+  '  } else {',
+  '    check world.out.write("hey anonymous\\n")',
+  '  }',
+  '',
+].join("\n");
+zeroWithInput(["patch", graphRepositoryPatchPackageDir, "--replace-fn", "main", "--body-file", "-"], replaceInFnBodyRows);
+const replaceInFnView = zero(["view", "--fn", "main", graphRepositoryPatchPackageDir]).stdout;
+const replaceInFnViewLines = replaceInFnView.split("\n");
+const replaceInFnHeyIndex = replaceInFnViewLines.findIndex((line) => line.includes('"hey "'));
+assert(replaceInFnHeyIndex > 0, "expected the replaced body in zero view --fn main");
+// multi-line --old/--new through inline \n escapes, exactly as view prints the rows
+const replaceInFnMultiOld = `${replaceInFnViewLines[replaceInFnHeyIndex]}\\n${replaceInFnViewLines[replaceInFnHeyIndex + 1]}`;
+const replaceInFnMultiNew = replaceInFnMultiOld.replace('"hey "', '"hi "');
+const replaceInFnMulti = zero(["patch", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", replaceInFnMultiOld, "--new", replaceInFnMultiNew]);
+assertPatchOkOutput(replaceInFnMulti.stdout, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "hi Ada\n");
+// non-unique --old fails with the occurrence count and a view-oriented hint
+const replaceInFnAmbiguous = zero(["patch", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", "check world.out.write(", "--new", "check world.err.write("], { allowFailure: true });
+assert.notEqual(replaceInFnAmbiguous.code, 0);
+assert.match(replaceInFnAmbiguous.stderr, /replace-in-fn --old text matches 4 places in function 'main'/);
+assert.match(replaceInFnAmbiguous.stderr, /zero view --fn main/);
+// missing --old fails without touching the store
+const replaceInFnMissBefore = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceInFnMiss = zero(["patch", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", "zzz-not-here", "--new", "anything"], { allowFailure: true });
+assert.notEqual(replaceInFnMiss.code, 0);
+assert.match(replaceInFnMiss.stderr, /replace-in-fn --old text was not found in function 'main'/);
+assert.match(replaceInFnMiss.stderr, /zero view --fn main/);
+assert.equal(json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash, replaceInFnMissBefore);
+// stdin variants: --old-file - and --new-file - read the text verbatim
+const replaceInFnStdinOld = zeroWithInput(["patch", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old-file", "-", "--new", replaceInFnViewLines[replaceInFnHeyIndex].replace('"hey "', '"hello "')], replaceInFnViewLines[replaceInFnHeyIndex].replace('"hey "', '"hi "'));
+assertPatchOkOutput(replaceInFnStdinOld.stdout, join(graphRepositoryPatchPackageDir, "zero.graph"));
+assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "hello Ada\n");
+const replaceInFnStdinNew = zeroWithInput(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", '"hello "', "--new-file", "-"], '"howdy "');
+const replaceInFnStdinNewBody = JSON.parse(replaceInFnStdinNew.stdout);
+assert.equal(replaceInFnStdinNewBody.ok, true);
+assert.equal(replaceInFnStdinNewBody.patch, "<replace-in-fn>");
+assert.equal(replaceInFnStdinNewBody.operationCount, 1);
+assert.equal(replaceInFnStdinNewBody.operations[0].op, "replaceFunctionBody");
+assert.equal(zero(["run", graphRepositoryPatchPackageDir, "--", "Ada"]).stdout, "howdy Ada\n");
+// a replacement that introduces a diagnostic fails revalidation with
+// baseline-diff behavior and leaves the store untouched
+const replaceInFnInvalidBefore = json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash;
+const replaceInFnInvalid = zero(["patch", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", 'check world.out.write("howdy ")', "--new", 'world.out.write("howdy ")'], { allowFailure: true });
+assert.notEqual(replaceInFnInvalid.code, 0);
+assert.match(replaceInFnInvalid.stderr, /ERR003: fallible function call must be checked/);
+assert.match(replaceInFnInvalid.stderr, /program graph patch failed revalidation: 1 diagnostic introduced by this patch/);
+assert.equal(json(["query", "--json", graphRepositoryPatchPackageDir]).body.graphHash, replaceInFnInvalidBefore);
+// incomplete or doubled flag sets fail with actionable diagnostics
+const replaceInFnMissingNew = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", "x"], { allowFailure: true });
+assert.notEqual(replaceInFnMissingNew.code, 0);
+assert.match(replaceInFnMissingNew.body.diagnostics[0].message, /needs --replace-in-fn, --old, and --new/);
+assert.equal(replaceInFnMissingNew.body.diagnostics[0].actual, "missing --new");
+const replaceInFnDoubleStdin = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old-file", "-", "--new-file", "-"], { allowFailure: true });
+assert.notEqual(replaceInFnDoubleStdin.code, 0);
+assert.match(replaceInFnDoubleStdin.body.diagnostics[0].message, /cannot read both texts from stdin/);
+const replaceInFnMixedSource = json(["patch", "--json", graphRepositoryPatchPackageDir, "--replace-in-fn", "main", "--old", "x", "--new", "y", "--replace-fn", "main", "--body-file", "-"], { allowFailure: true });
+assert.notEqual(replaceInFnMixedSource.code, 0);
+assert.match(replaceInFnMixedSource.body.diagnostics[0].message, /graph patch source is ambiguous/);
 const genericPatchRoot = join(outDir, "repository-graph-generic-patch");
 rmSync(genericPatchRoot, { recursive: true, force: true });
 mkdirSync(join(genericPatchRoot, "src"), { recursive: true });
@@ -3608,7 +4124,7 @@ assert.notEqual(genericUnknownOp.code, 0);
 assert.equal(genericUnknownOp.body.diagnostic.code, "GPH001");
 assert.match(genericUnknownOp.body.diagnostic.message, /unknown program graph patch operation/);
 assert.match(genericUnknownOp.body.diagnostic.message, /zero patch --op help/);
-assert.match(genericUnknownOp.body.diagnostic.expected, /set, insert, insertEdge, replace, delete, rename/);
+assert.match(genericUnknownOp.body.diagnostic.expected, /set, insert, insertEdge, replace, replaceExpr, delete, rename/);
 assert.match(genericUnknownOp.body.diagnostic.expected, /replaceFunctionBody/);
 assert.equal(genericUnknownOp.body.diagnostic.line, 2);
 const genericUnknownOpText = zero(["patch", "--check-only", genericPatchRoot, genericUnknownOpPatchPath], { allowFailure: true });
@@ -3638,7 +4154,7 @@ writeFileSync(genericMissingEndPatchPath, [
 ].join("\n"));
 const genericMissingEnd = zero(["patch", "--check-only", genericPatchRoot, genericMissingEndPatchPath], { allowFailure: true });
 assert.notEqual(genericMissingEnd.code, 0);
-assert.match(genericMissingEnd.stderr, /body replacement is missing end marker/);
+assert.match(genericMissingEnd.stderr, /body patch is missing end marker/);
 assert.match(genericMissingEnd.stderr, new RegExp(`${genericMissingEndPatchPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}:2: replaceFunctionBody main`));
 assert.match(genericMissingEnd.stderr, /help: a minimal complete patch file looks exactly like this:/);
 const genericIndentedHeaderPatchPath = join(outDir, "repository-graph-generic-indented-header.patch");
@@ -3649,7 +4165,166 @@ writeFileSync(genericIndentedHeaderPatchPath, [
   "  end",
   "",
 ].join("\n"));
-assert.match(zero(["patch", "--check-only", genericPatchRoot, genericIndentedHeaderPatchPath]).stdout, /^program graph patch ok \(check-only\)\n/);
+const genericIndentedHeaderCheckOnly = zero(["patch", "--check-only", genericPatchRoot, genericIndentedHeaderPatchPath]).stdout;
+assert.match(genericIndentedHeaderCheckOnly, /^program graph patch ok \(check-only\)\n/);
+assert.match(genericIndentedHeaderCheckOnly, /validated: check-equivalent\n$/);
+
+const headerlessOpsRoot = join(outDir, "repository-graph-headerless-ops");
+rmSync(headerlessOpsRoot, { recursive: true, force: true });
+mkdirSync(join(headerlessOpsRoot, "src"), { recursive: true });
+writeZeroTomlSync(headerlessOpsRoot, { package: { name: "headerless-ops", version: "0.1.0" }, targets: { cli: { kind: "exe", main: "src/main.0" } } });
+writeFileSync(join(headerlessOpsRoot, "src", "main.0"), [
+  "const LIMIT: usize = 4",
+  "",
+  "fn bump(value: usize) -> usize {",
+  "    return value + LIMIT",
+  "}",
+  "",
+  "fn answer() -> usize {",
+  "    return LIMIT",
+  "}",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  "    if bump(1) == answer() + 1 {",
+  "        check world.out.write(\"headerless ops ok\\n\")",
+  "    }",
+  "}",
+  "",
+  "test \"answer works\" {",
+  "    expect (answer() == 4)",
+  "}",
+  "",
+].join("\n"));
+assert.equal(json(["import", "--format", "text", "--json", headerlessOpsRoot]).code, 0);
+const headerlessAnswerHandles = zero(["view", "--fn", "answer", "--handles", headerlessOpsRoot]).stdout;
+const headerlessReturnHandle = headerlessAnswerHandles.match(/return LIMIT\s+\/\/ (#\S+)/);
+assert(headerlessReturnHandle, "expected answer return handle for headerless replaceExpr detection");
+function assertHeaderlessPatchFileDetected(name: string, rows: string[]) {
+  const patchPath = join(headerlessOpsRoot, `${name}.patch`);
+  writeFileSync(patchPath, [...rows, ""].join("\n"));
+  const result = zeroWithStderr(["patch", "--check-only", `${name}.patch`], { cwd: headerlessOpsRoot });
+  assert.notEqual(result.code, 0);
+  assert.match(result.stderr, /unknown program graph patch schema/);
+  assert.match(result.stderr, new RegExp(`${name}\\.patch:1: ${rows[0].replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`));
+  assert.match(result.stderr, /expected: zero-program-graph-patch v1/);
+}
+assertHeaderlessPatchFileDetected("set-const", ['setConst name="LIMIT" value="5"']);
+assertHeaderlessPatchFileDetected("set-return-type", [
+  'setReturnType fn="answer" type="i64"',
+  "replaceFunctionBody answer",
+  "  return 4 as i64",
+  "end",
+]);
+assertHeaderlessPatchFileDetected("replace-expr", [`replaceExpr node="${headerlessReturnHandle[1]}" with="LIMIT + 0"`]);
+assertHeaderlessPatchFileDetected("delete-test", ['deleteTest name="answer works"']);
+assertHeaderlessPatchFileDetected("rename-test", ['renameTest name="answer works" value="answer still works"']);
+assertHeaderlessPatchFileDetected("add-param-to", ['addParamTo fn="bump" name="bias" type="usize" default="0"']);
+
+// Declaration-level patch ops: setConst, addParamTo, setReturnType.
+const declOpsRoot = join(outDir, "repository-graph-decl-ops");
+rmSync(declOpsRoot, { recursive: true, force: true });
+mkdirSync(join(declOpsRoot, "src"), { recursive: true });
+writeZeroTomlSync(declOpsRoot, { package: { name: "decl-ops", version: "0.1.0" }, targets: { cli: { kind: "exe", main: "src/main.0" } } });
+writeFileSync(join(declOpsRoot, "src", "main.0"), [
+  "const LIMIT: usize = 4",
+  "",
+  "fn bump(value: usize) -> usize {",
+  "    return value + LIMIT",
+  "}",
+  "",
+  "fn twice(value: usize) -> usize {",
+  "    return bump(bump(value))",
+  "}",
+  "",
+  "fn answer() -> usize {",
+  "    return LIMIT",
+  "}",
+  "",
+  "fn wide(a: Span<u8>, b: Span<u8>, c: Span<u8>, d: usize) -> usize {",
+  "    return std.mem.len(a) + std.mem.len(b) + std.mem.len(c) + d",
+  "}",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  "    let start: usize = bump(1)",
+  "    let total: usize = twice(start)",
+  "    let padding: usize = wide(\"a\", \"b\", \"c\", 0)",
+  "    if total + padding > answer() {",
+  "        check world.out.write(\"decl ops ok\\n\")",
+  "    }",
+  "}",
+  "",
+].join("\n"));
+assert.equal(json(["import", "--format", "text", "--json", declOpsRoot]).code, 0);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
+const declOpsViewBefore = zero(["view", declOpsRoot]).stdout;
+assert.match(declOpsViewBefore, /const LIMIT: usize = 4/);
+// setConst round trip: change the initializer, then restore it.
+const declOpsSetConst = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMIT" value="8"']);
+assertPatchOkOutput(declOpsSetConst.stdout, join(declOpsRoot, "zero.graph"));
+assert.match(declOpsSetConst.stdout, /validated: check-equivalent\n$/);
+assert.match(zero(["view", declOpsRoot]).stdout, /const LIMIT: usize = 8/);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
+const declOpsSetConstBack = json(["patch", "--json", declOpsRoot, "--op", 'setConst name="LIMIT" value="4"']).body;
+assert.equal(declOpsSetConstBack.ok, true);
+assert.equal(declOpsSetConstBack.operations[0].op, "setConst");
+assert.equal(zero(["view", declOpsRoot]).stdout, declOpsViewBefore);
+// setConst revalidation failure rolls the store back untouched.
+const declOpsStoreBefore = readFileSync(join(declOpsRoot, "zero.graph"), "utf8");
+const declOpsBadConst = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMIT" value="missingName"'], { allowFailure: true });
+assert.notEqual(declOpsBadConst.code, 0);
+assert.match(declOpsBadConst.stderr, /program graph patch failed revalidation: 1 diagnostic introduced by this patch/);
+assert.equal(readFileSync(join(declOpsRoot, "zero.graph"), "utf8"), declOpsStoreBefore);
+assert.match(zero(["view", declOpsRoot]).stdout, /const LIMIT: usize = 4/);
+// setConst misses fail with the nearest const name.
+const declOpsConstMiss = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMTI" value="8"'], { allowFailure: true });
+assert.notEqual(declOpsConstMiss.code, 0);
+assert.match(declOpsConstMiss.stderr, /setConst const was not found; nearest: LIMIT/);
+// addParamTo without default fails with the call-site count.
+const declOpsNoDefault = zero(["patch", declOpsRoot, "--op", 'addParamTo fn="bump" name="bias" type="usize"'], { allowFailure: true });
+assert.notEqual(declOpsNoDefault.code, 0);
+assert.match(declOpsNoDefault.stderr, /addParamTo needs a default to update existing call sites/);
+assert.match(declOpsNoDefault.stderr, /3 call sites call bump/);
+// addParamTo with default appends the parameter and updates every call site,
+// including the nested bump(bump(value)) calls inside twice.
+const declOpsAddParam = zero(["patch", declOpsRoot, "--op", 'addParamTo fn="bump" name="bias" type="usize" default="0"']);
+assertPatchOkOutput(declOpsAddParam.stdout, join(declOpsRoot, "zero.graph"));
+assert.match(declOpsAddParam.stdout, /updated 3 call sites\n/);
+const declOpsAddParamView = zero(["view", declOpsRoot]).stdout;
+assert.match(declOpsAddParamView, /fn bump\(value: usize, bias: usize\) -> usize/);
+assert.match(declOpsAddParamView, /return bump\(bump\(value, 0\), 0\)/);
+assert.match(declOpsAddParamView, /let start: usize = bump\(1, 0\)/);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
+const declOpsAddParamJson = json(["patch", "--json", declOpsRoot, "--op", 'addParamTo fn="answer" name="extra" type="usize" default="1"']).body;
+assert.equal(declOpsAddParamJson.ok, true);
+assert.equal(declOpsAddParamJson.operations[0].op, "addParamTo");
+assert.equal(declOpsAddParamJson.operations[0].callSites, 1);
+// The direct backends cap signatures at 8 ABI argument slots (byte views take
+// 2); addParamTo rejects an over-cap signature at patch time.
+const declOpsAbiCap = zero(["patch", declOpsRoot, "--op", 'addParamTo fn="wide" name="e" type="Span<u8>"'], { allowFailure: true });
+assert.notEqual(declOpsAbiCap.code, 0);
+assert.match(declOpsAbiCap.stderr, /direct backend object buildability has too many ABI argument slots/);
+assert.match(declOpsAbiCap.stderr, /wide would have 9 ABI argument slot\(s\)/);
+// Signature ops compose with other ops in one batched patch.
+const declOpsBatchPath = join(outDir, "repository-graph-decl-ops-batch.patch");
+writeFileSync(declOpsBatchPath, [
+  "zero-program-graph-patch v1",
+  'setConst name="LIMIT" value="6"',
+  'setReturnType fn="answer" type="i64"',
+  "replaceFunctionBody answer",
+  "  return 9 as i64",
+  "end",
+  "",
+].join("\n"));
+const declOpsBatch = json(["patch", "--json", declOpsRoot, declOpsBatchPath]).body;
+assert.equal(declOpsBatch.ok, true);
+assert.equal(declOpsBatch.operationCount, 3);
+assert.equal(declOpsBatch.operations[0].op, "setConst");
+assert.equal(declOpsBatch.operations[1].op, "setReturnType");
+assert.equal(declOpsBatch.operations[2].op, "replaceFunctionBody");
+const declOpsBatchView = zero(["view", declOpsRoot]).stdout;
+assert.match(declOpsBatchView, /const LIMIT: usize = 6/);
+assert.match(declOpsBatchView, /fn answer\(extra: usize\) -> i64/);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
 const checkedInGraphCallsJson = json(["query", "--json", "--fn", "main", "--calls", "write", checkedInGraphPackageDir]).body;
 assert.equal(checkedInGraphCallsJson.ok, true);
 assert.equal(checkedInGraphCallsJson.query.function, "main");
@@ -5375,6 +6050,23 @@ for (const skillName of skillsList.data.map((skill) => skill.name)) {
 const agentSkill = json(["skills", "get", "agent", "--json"]).body;
 assert.equal(agentSkill.success, true);
 assert.match(agentSkill.data[0].content, /zero query --fn <name> --handles/);
+assert.match(agentSkill.data[0].content, /--replace-in-fn handleLine/);
+assert.match(agentSkill.data[0].content, /addParamTo fn="scan" name="bias" type="i32" default="0"/);
+assert.match(agentSkill.data[0].content, /setConst name="limit" value="64"/);
+assert.match(agentSkill.data[0].content, /upsertFunction handle/);
+assert.match(agentSkill.data[0].content, /addReturnExpr fn="maybe" expr="null"/);
+assert.match(agentSkill.data[0].content, /appendStmt fn="main" stmt="check std\.http\.listen\(world, 3000_u16\)"/);
+assert.match(agentSkill.data[0].content, /addTestBody name="api add"/);
+assert.match(agentSkill.data[0].content, /deleteTest name="api add"/);
+assert.match(agentSkill.data[0].content, /--patch-text -/);
+assert.match(agentSkill.data[0].content, /--no-help/);
+assert.match(agentSkill.data[0].content, /validated: check-equivalent/);
+assert.match(agentSkill.data[0].content, /zero skills get graph/);
+assert.doesNotMatch(agentSkill.data[0].content, /--rewrite/);
+const agentReplaceInFnIdx = agentSkill.data[0].content.indexOf("--replace-in-fn");
+const agentReplaceFnIdx = agentSkill.data[0].content.indexOf("--replace-fn greet");
+const agentDeclOpsIdx = agentSkill.data[0].content.indexOf("setConst");
+assert(agentReplaceInFnIdx >= 0 && agentReplaceInFnIdx < agentReplaceFnIdx && agentReplaceFnIdx < agentDeclOpsIdx, "agent topic leads with --replace-in-fn, then --replace-fn, then decl ops");
 assert.match(agentSkill.data[0].content, /Use JSON only when another tool must parse stable fields/);
 assert.match(agentSkill.data[0].content, /zero skills get stdlib --topic std\.time/);
 assert.match(agentSkill.data[0].content, /zero view --outline <module-or-file>/);

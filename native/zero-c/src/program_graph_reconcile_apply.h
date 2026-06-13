@@ -22,5 +22,6 @@ typedef struct {
 } ZProgramGraphIdentityReconcile;
 
 bool z_program_graph_preserve_source_node_ids(const ZProgramGraph *base, ZProgramGraph *edited, ZProgramGraphIdentityReconcile *out);
+bool z_program_graph_preserve_source_node_ids_excluding_path(const ZProgramGraph *base, ZProgramGraph *edited, const char *exclude_path, ZProgramGraphIdentityReconcile *out);
 
 #endif

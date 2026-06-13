@@ -277,6 +277,177 @@ void z_program_graph_reconcile_summary(const ZProgramGraph *base, const ZProgram
   reconcile_index_free(&index);
 }
 
+/*
+ * Declaration-edit classification for the stale-source refresh note: each
+ * function gets a fingerprint over its declared signature (name, ordered
+ * parameter names/types/defaults, return type, raises) and each top-level
+ * const over its type and value, keyed by name plus projection path tail
+ * (store paths are root-relative while freshly built source graphs keep the
+ * root prefix) so content-derived node id churn from a retype cannot hide
+ * the change. Body-only edits move neither fingerprint.
+ */
+static const char *reconcile_sig_path_tail(const char *path) {
+  const char *text = path ? path : "";
+  const char *last = strrchr(text, '/');
+  if (!last) return text;
+  const char *prev = NULL;
+  for (const char *cursor = text; cursor < last; cursor++) {
+    if (*cursor == '/') prev = cursor;
+  }
+  return prev ? prev + 1 : text;
+}
+
+static uint64_t reconcile_sig_fold(uint64_t hash, const char *text) {
+  for (const unsigned char *cursor = (const unsigned char *)(text ? text : ""); *cursor; cursor++) {
+    hash ^= *cursor;
+    hash *= 1099511628211ull;
+  }
+  hash ^= 0x1f;
+  hash *= 1099511628211ull;
+  return hash;
+}
+
+static uint64_t reconcile_sig_fold_u64(uint64_t hash, uint64_t value) {
+  for (unsigned i = 0; i < 8; i++) {
+    hash ^= (value >> (i * 8)) & 0xffu;
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+/*
+ * Order-insensitive subtree fingerprint: sibling contributions are summed
+ * (each already folds the edge kind and order) so edge array ordering
+ * differences between a store round trip and a fresh source build cannot
+ * move the hash. Used for const initializer expressions, which live as
+ * child subtrees rather than on the Const node itself.
+ */
+static uint64_t reconcile_sig_subtree_hash(const ZProgramGraph *graph, const ZProgramGraphAdjacencyNodeEntry *id_index, const char *node_id, int depth) {
+  uint64_t hash = 1469598103934665603ull;
+  if (!graph || !node_id || depth > 16) return hash;
+  size_t index = z_program_graph_id_index_find(id_index, graph->node_len, node_id);
+  if (index == SIZE_MAX) return hash;
+  const ZProgramGraphNode *node = &graph->nodes[index];
+  hash = reconcile_sig_fold(hash, z_program_graph_node_kind_name(node->kind));
+  hash = reconcile_sig_fold(hash, node->name);
+  hash = reconcile_sig_fold(hash, node->type);
+  hash = reconcile_sig_fold(hash, node->value);
+  uint64_t children = 0;
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !reconcile_text_eq(edge->from, node_id)) continue;
+    uint64_t child = reconcile_sig_fold(1469598103934665603ull, edge->kind);
+    child = reconcile_sig_fold_u64(child, (uint64_t)edge->order);
+    child = reconcile_sig_fold_u64(child, reconcile_sig_subtree_hash(graph, id_index, edge->to, depth + 1));
+    children += child;
+  }
+  return reconcile_sig_fold_u64(hash, children);
+}
+
+typedef struct {
+  char **keys;
+  const char **key_ptrs;
+  uint64_t *sigs;
+  bool *is_const;
+  size_t len;
+  ZProgramGraphAdjacencyNodeEntry *key_index;
+} ReconcileDeclSigs;
+
+static void reconcile_decl_sigs_build(ReconcileDeclSigs *sigs, const ZProgramGraph *graph) {
+  size_t node_len = graph ? graph->node_len : 0;
+  *sigs = (ReconcileDeclSigs){0};
+  uint64_t *param_acc = z_checked_calloc(node_len ? node_len : 1, sizeof(uint64_t));
+  ZProgramGraphAdjacencyNodeEntry *id_index = reconcile_build_graph_id_index(graph);
+  for (size_t i = 0; graph && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !reconcile_text_eq(edge->kind, "param")) continue;
+    size_t fn_index = z_program_graph_id_index_find(id_index, node_len, edge->from);
+    size_t param_index = z_program_graph_id_index_find(id_index, node_len, edge->to);
+    if (fn_index == SIZE_MAX || param_index == SIZE_MAX) continue;
+    if (graph->nodes[fn_index].kind != Z_PROGRAM_GRAPH_NODE_FUNCTION) continue;
+    const ZProgramGraphNode *param = &graph->nodes[param_index];
+    if (param->kind != Z_PROGRAM_GRAPH_NODE_PARAM) continue;
+    uint64_t param_hash = reconcile_sig_fold_u64(1469598103934665603ull, (uint64_t)edge->order);
+    param_hash = reconcile_sig_fold(param_hash, param->name);
+    param_hash = reconcile_sig_fold(param_hash, param->type);
+    param_hash = reconcile_sig_fold(param_hash, param->value);
+    param_acc[fn_index] += param_hash;
+  }
+  sigs->keys = z_checked_calloc(node_len ? node_len : 1, sizeof(char *));
+  sigs->key_ptrs = z_checked_calloc(node_len ? node_len : 1, sizeof(const char *));
+  sigs->sigs = z_checked_calloc(node_len ? node_len : 1, sizeof(uint64_t));
+  sigs->is_const = z_checked_calloc(node_len ? node_len : 1, sizeof(bool));
+  for (size_t i = 0; graph && i < node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    bool is_const = node->kind == Z_PROGRAM_GRAPH_NODE_CONST;
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION && !is_const) continue;
+    ZBuf key;
+    zbuf_init(&key);
+    zbuf_append(&key, is_const ? "const\x1f" : "fn\x1f");
+    zbuf_append(&key, reconcile_sig_path_tail(node->path));
+    zbuf_append_char(&key, '\x1f');
+    zbuf_append(&key, node->name ? node->name : "");
+    uint64_t decl_hash = reconcile_sig_fold(1469598103934665603ull, node->type);
+    if (is_const) {
+      decl_hash = reconcile_sig_fold_u64(decl_hash, reconcile_sig_subtree_hash(graph, id_index, node->id, 0));
+    } else {
+      decl_hash = reconcile_sig_fold_u64(decl_hash, node->fallible ? 1 : 0);
+      decl_hash += param_acc[i];
+    }
+    sigs->keys[sigs->len] = key.data;
+    sigs->key_ptrs[sigs->len] = key.data;
+    sigs->sigs[sigs->len] = decl_hash;
+    sigs->is_const[sigs->len] = is_const;
+    sigs->len++;
+  }
+  free(param_acc);
+  free(id_index);
+  sigs->key_index = z_program_graph_id_index_build(sigs->key_ptrs, sigs->len);
+}
+
+static void reconcile_decl_sigs_free(ReconcileDeclSigs *sigs) {
+  if (!sigs) return;
+  for (size_t i = 0; i < sigs->len; i++) free(sigs->keys[i]);
+  free(sigs->keys);
+  free(sigs->key_ptrs);
+  free(sigs->sigs);
+  free(sigs->is_const);
+  free(sigs->key_index);
+  *sigs = (ReconcileDeclSigs){0};
+}
+
+static bool reconcile_decl_sigs_match(const ReconcileDeclSigs *sigs, const char *key, uint64_t sig, bool *found) {
+  size_t run_start = 0;
+  size_t run_len = 0;
+  z_program_graph_id_index_run(sigs->key_index, sigs->len, key, &run_start, &run_len);
+  if (found) *found = run_len > 0;
+  for (size_t i = 0; i < run_len; i++) {
+    if (sigs->sigs[sigs->key_index[run_start + i].node_index] == sig) return true;
+  }
+  return false;
+}
+
+ZProgramGraphReconcileEditKind z_program_graph_reconcile_edit_kind(const ZProgramGraph *base, const ZProgramGraph *edited) {
+  ReconcileDeclSigs before;
+  ReconcileDeclSigs after;
+  reconcile_decl_sigs_build(&before, base);
+  reconcile_decl_sigs_build(&after, edited);
+  bool signature = false;
+  bool const_edit = false;
+  for (size_t i = 0; i < before.len && !signature; i++) {
+    bool found = false;
+    bool matched = reconcile_decl_sigs_match(&after, before.keys[i], before.sigs[i], &found);
+    if (matched || !found) continue;
+    if (before.is_const[i]) const_edit = true;
+    else signature = true;
+  }
+  reconcile_decl_sigs_free(&before);
+  reconcile_decl_sigs_free(&after);
+  if (signature) return Z_PROGRAM_GRAPH_RECONCILE_EDIT_SIGNATURE;
+  if (const_edit) return Z_PROGRAM_GRAPH_RECONCILE_EDIT_CONST;
+  return Z_PROGRAM_GRAPH_RECONCILE_EDIT_OTHER;
+}
+
 static void reconcile_append_decision_json(ZBuf *buf,
                                            const char *status,
                                            const ZProgramGraphNode *before,

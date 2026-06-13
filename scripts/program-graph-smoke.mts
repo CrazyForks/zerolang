@@ -29,6 +29,7 @@ try {
     "native/zero-c/src/program_graph_node_id.c",
     "native/zero-c/src/program_graph_order.c",
     "native/zero-c/src/program_graph_format.c",
+    "native/zero-c/src/program_graph_handle.c",
     "native/zero-c/src/program_graph_compare.c",
     "native/zero-c/src/program_graph_reconcile.c",
     "native/zero-c/src/program_graph_reconcile_apply.c",

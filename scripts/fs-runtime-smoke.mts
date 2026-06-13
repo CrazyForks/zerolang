@@ -63,16 +63,16 @@ static int expect_partial_read(const char *path) {
   ZeroMaybeUsize result = zero_fs_read_bytes(bytes(path), mut_bytes(buffer, sizeof(buffer)));
   return expect_true(
     result.has == 1 &&
-      result.value == sizeof(buffer) &&
+      result.value == 14 &&
       memcmp(buffer, "hello", sizeof(buffer)) == 0,
-    "read partial buffer"
+    "read partial buffer reports total size"
   );
 }
 
 static int expect_zero_len_read(const char *path) {
   unsigned char buffer[1] = {0xaa};
   ZeroMaybeUsize result = zero_fs_read_bytes(bytes(path), mut_bytes(buffer, 0));
-  return expect_true(result.has == 1 && result.value == 0 && buffer[0] == 0xaa, "read zero-length buffer");
+  return expect_true(result.has == 1 && result.value == 14 && buffer[0] == 0xaa, "read zero-length buffer reports total size");
 }
 
 static int expect_large_read(const char *path) {

@@ -5,54 +5,82 @@ description: Graph-first agent workflow for making focused Zero changes with CLI
 
 # Zero Agent Workflow
 
-Use this when editing Zero code, examples, tests, docs, or a package. `zero.graph` is the package compiler input; `.0` files are the human-readable source projection. Command text output is written for agents. Use JSON only when another tool must parse stable fields.
+Use this when editing Zero code. `zero.graph` is compiler input; `.0` is the human projection. Use JSON only when another tool must parse stable fields.
 
-## Read, Edit, Verify
+## Edit Through Patch
 
-The core loop for changing an existing package:
+Anchored edits win. Do not retype a function for one line or rewrite `.0` for one declaration.
+
+1. `--replace-in-fn`: edit one function's canonical body text.
 
 ```sh
-zero query <name>        # locate: bare name searches the graph, prints matches with spans
-zero view --fn <name>    # read: one function's canonical source
-# edit: zero patch for structured edits, or edit the .0 source text directly
-zero check               # validate; refreshes a stale zero.graph from edited source
-zero run . -- <args>     # execute the changed code
+zero patch . --replace-in-fn handleLine --old 'limit + 1' --new 'limit + 2'
 ```
 
-Never read a whole `.0` file to find one function. Scoped reads:
+`--old` must match `zero view --fn <name>` output exactly once.
 
-- `zero view --fn <name>`: one function's source; a missing name fails with close matches.
-- `zero view --fn <name> --around <text>`: only the enclosing block containing the text.
-- `zero view --outline <module-or-file>`: signatures plus one-line docs, no bodies.
-- `zero query --fn <name> --handles`: stmt and param patch handles, only when about to patch.
+2. `--replace-fn` for one whole body:
 
-For a new agent-authored package: `zero init`, then `zero patch --op 'addMain'`.
+```sh
+zero patch . --replace-fn greet --body-file - <<'EOF'
+check world.out.write("hello agent\n")
+EOF
+```
+
+3. Declaration work stays in ops; call sites update:
+
+```sh
+zero patch . --op 'setConst name="limit" value="64"'
+zero patch . --op 'addParamTo fn="scan" name="bias" type="i32" default="0"'  # updates every call site
+zero patch . --op 'setReturnType fn="scan" type="i64"'
+```
+
+4. New helpers stay graph-native:
+
+```text
+zero-program-graph-patch v1
+upsertFunction handle
+fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
+    return null
+}
+end
+```
+
+Pass a patch file, or stream full `zero-program-graph-patch v1` text with `zero patch . --patch-text -`.
+
+Use `addReturnExpr fn="maybe" expr="null"` for non-id returns and `appendStmt fn="main" stmt="check std.http.listen(world, 3000_u16)"` for one stmt. For pure helper tests, use `addTest name="addition works" call="add" arg0="2" arg1="3" expect="5" type="i32"`; reserve `addTestBody name="api add" ... end` for custom bodies and remove bad ones with `deleteTest name="api add"`. Labels are display names, not `__zero_test_*`.
+
+Runnable CLIs keep `World` on `pub fn main`; helpers are value-based. HTTP uses `handle(request, response)`.
+
+After `validated: check-equivalent`, the graph is saved and checked. Do not run `zero check`, `zero view`, or `zero export` just to confirm. `zero run . -- <args>` / `zero test` prove behavior or debug. Export only for requested `.0` review. Repeat `--op` to batch edits. For rewrites/handles: `zero skills get graph`.
+
+Read only for current code or handles:
+
+- `zero view --fn <name>`: one function source.
+- `zero view --fn <name> --around <text>`: enclosing block only.
+- `zero view --outline <module-or-file>`: signatures plus one-line docs.
+
+For a new package: `zero init`, then `zero patch --op 'addMain'`.
 
 ## zero query
 
 ```text
 zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name>]
-           [--node <id>] [--depth <n>] [--full] [--handles] [graph-input|name]
+           [--node <id>] [--depth <n>] [--full] [--handles] [--no-help] [graph-input|name]
 ```
 
 - bare name that is not an existing path: runs `--find` against the current package
+- `zero query --fn <name> --handles`: patch handles for one function
+- add `--no-help` when you need handles without the patch-operation footer
 - `--find <text>`: search names, ids, types, values, and node kinds; prints matches with spans
 - `--calls <name>` / `--refs <name>`: resolved calls and semantic references
-- `--node <id>`: one node's span, parents, and children; `--depth <n>` for a deeper subtree
-- no arguments: package overview with modules and function signatures
+- `--node <id>`: one node's span, parents, and children; short handles resolve here too
 
-## Edit
-
-Both edit surfaces write the same `zero.graph` store:
-
-- `zero patch --op '...'` for structured edits; `zero patch --op help` lists operation shapes. A successful patch has already validated and saved the graph; do not run `zero check` just to confirm it.
-- Direct `.0` text edits: `zero check`, `zero run`, `zero test`, and `zero build` refresh a stale `zero.graph` automatically; `zero import` refreshes it explicitly. Never delete `zero.graph` to force a reimport.
-
-Load the `graph` topic for patch operations, import/export, identity (RGP007) recovery, and merge.
+Import/export, identity recovery, structural edits, and merge live in `graph`. Direct `.0` edits are a last resort; never delete `zero.graph`.
 
 ## Verify Before Done
 
-After a fix works on the path you changed, exercise the paths you did not. Zero inserts runtime checks (array and span indexing is bounds-checked, for example), so code that passes `zero check` and one probe run can still trap on another input; a trap exits with a signal status and no output.
+After a fix works, exercise typical and boundary inputs.
 
 ```sh
 zero run . -- <typical input>
@@ -60,11 +88,11 @@ zero run . -- <empty or boundary input>
 zero test
 ```
 
-If behavior changed, add or update a `test` block. When a diagnostic appears, run `zero explain <code>` before broad refactors.
+If behavior changed, add or update a `test` block. On a diagnostic, run `zero explain <code>`.
 
 ## Rules
 
 - Treat effects as capabilities, not ambient globals: `World`, `std.fs`, `std.args`, `std.env`.
 - Use `Maybe<T>`, explicit `raises` / `raises [...]`, and `check` / `rescue` instead of hidden failure.
 - Do not invent syntax or CLI fields; load `language` when unsure.
-- Do not hand-write parsing or validation logic before checking the `stdlib` topic: it ships ready-made validators such as `std.time` (RFC 3339 incl. the exact leap-second rule), `std.inet` (IPv4/IPv6/hostname), `std.regex` (ECMA subset), and `std.unicode` (strict UTF-8). Fetch one module's signatures with `zero skills get stdlib --topic std.time`.
+- Check `stdlib` before hand-writing parsing or validation; it ships validators such as `std.time`, `std.inet`, `std.regex`, and `std.unicode`. Fetch one module with `zero skills get stdlib --topic std.time`.

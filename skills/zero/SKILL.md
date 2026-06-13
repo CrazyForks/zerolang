@@ -5,8 +5,7 @@ description: Install Zero and load version-matched workflows with zero skills.
 
 # Zero
 
-Zero is an agent-first programming language where the graph is the program
-database and `.0` files are human-readable projections.
+Zero is an agent-first programming language. zero.graph is the program; `.0` files are projections of it. Edit through `zero patch`.
 
 Install this skill once in an agent's skill manager. Keep it thin; Zero's own CLI serves the version-matched workflow for each installed compiler.
 
@@ -47,14 +46,16 @@ approximate served sizes:
 - `zero` (~2 KB): this discovery stub
 - `agent` (~4 KB): read-edit-verify loop, zero query usage, edit surfaces, verification
 - `language` (~6 KB): syntax, types, effects, control flow, generics
-- `graph` (~8 KB): zero.graph store, query/view, patch operations, import/export/merge
+- `graph` (~9 KB): zero.graph store, query/view, patch operations, import/export/merge
 - `diagnostics` (~4 KB): reading diagnostics, zero explain, typed fix plans
 - `packages` (~5 KB): manifests, package layout, creation and repair
 - `builds` (~5 KB): build/run, targets, profiles, emitted artifacts
 - `testing` (~3 KB): test blocks, filters, runtime checks
 - `stdlib` (~39 KB): full signature reference, including ready-made validators: `std.time` (RFC 3339 incl. the exact leap-second rule), `std.inet` (IPv4/IPv6/hostname), `std.regex` (ECMA subset), `std.unicode` (strict UTF-8). Check here before hand-writing any parsing or validation logic. Fetch one module's section (~1 KB) with `zero skills get stdlib --topic <prefix>`, e.g. `--topic std.time`.
 
-Agents author through graph patches or direct `.0` source edits; package commands refresh `zero.graph` from edited source automatically. Read one function with `zero view --fn <name>` instead of whole files. Prefer concise text output during interactive agent work; use `--json` only for automation, exact spans, contracts, or machine-readable diagnostics.
+Before hand-writing any parsing or validation, check the stdlib catalog: `zero skills get stdlib --topic <module>` serves one section (`std.time` covers RFC 3339 incl. leap seconds).
+
+Edit through the graph: `zero patch` covers everything from surgical in-function text edits (`--replace-in-fn <fn> --old <text> --new <text>`, Edit semantics) to complete helper creation (`upsertFunction ... end`) and whole function bodies (`--replace-fn <fn> --body-file -` with a heredoc). Direct `.0` text edits are a last resort for changes no patch op expresses; package commands refresh `zero.graph` from edited source, but patch keeps the loop faster and preserves node identity. Read one function with `zero view --fn <name>` instead of whole files. Prefer concise text output during interactive agent work; use `--json` only for automation, exact spans, contracts, or machine-readable diagnostics.
 
 ## Common Entry Points
 

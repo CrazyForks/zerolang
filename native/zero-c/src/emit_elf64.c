@@ -9,6 +9,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Minimum constant-fill run length that justifies a fill loop over unrolled
+// per-element stores.
+#define ELF_FILL_RUN_MIN 8u
+
 static bool elf_diag(ZDiag *diag, const char *message, int line, int column, const char *actual) {
   diag->code = 4004;
   diag->line = line > 0 ? line : 1;
@@ -954,9 +958,42 @@ static bool elf_emit_fs_file_handle_value(ZBuf *code, const IrFunction *fun, con
   }
 }
 
+/* Shared tail for path reads that report the total file size (snprintf
+   convention). Expects the open fd on the stack top and the read result in rax;
+   leaves max(lseek SEEK_END size, read count) in rax or -1 when any step
+   failed. open_fail is patched to the shared failure label. */
+static void elf_emit_fs_read_total_size_tail(ZBuf *code, size_t open_fail) {
+  z_x64_emit_push_rax(code);
+  z_x64_emit_load_rsp_offset_reg(code, 7, 8, true);
+  z_x64_emit_xor_reg_reg(code, 6, true);
+  z_x64_emit_mov_reg_u32(code, 2, 2);
+  z_x64_emit_mov_eax_u32(code, 8);
+  z_x64_emit_syscall(code);
+  z_x64_emit_push_rax(code);
+  z_x64_emit_load_rsp_offset_reg(code, 0, 16, true);
+  elf_emit_close_rax_fd(code);
+  z_x64_emit_pop_rax(code);
+  z_x64_emit_pop_reg64(code, 1);
+  z_x64_emit_add_rsp(code, 8);
+  z_x64_emit_test_reg_reg(code, 1, true);
+  size_t read_fail = elf_emit_js_placeholder(code);
+  z_x64_emit_test_rax_rax(code, true);
+  size_t size_fail = elf_emit_js_placeholder(code);
+  z_x64_emit_cmp_rax_rcx(code, true);
+  size_t keep_total = z_x64_emit_jcc32_placeholder(code, 0x8d);
+  z_x64_emit_mov_reg_from_reg(code, 0, 1, true);
+  z_x64_patch_rel32(code, keep_total, code->len);
+  size_t end = z_x64_emit_jmp32_placeholder(code, 0xe9);
+  z_x64_patch_rel32(code, open_fail, code->len);
+  z_x64_patch_rel32(code, read_fail, code->len);
+  z_x64_patch_rel32(code, size_fail, code->len);
+  z_x64_emit_mov_reg_i32(code, 0, -1);
+  z_x64_patch_rel32(code, end, code->len);
+}
+
 static bool elf_emit_fs_path_io_value(ZBuf *code, const IrFunction *fun, const IrValue *value, ElfEmitContext *ctx, ZDiag *diag) {
   switch (value->kind) {
-    case IR_VALUE_FS_READ_PATH: case IR_VALUE_FS_READ_BYTES_PATH: {
+    case IR_VALUE_FS_READ_PATH: {
       if (!elf_emit_openat_path(code, fun, value->left, 0, 0, ctx, diag)) return false;
       z_x64_emit_test_rax_rax(code, true);
       size_t open_fail = elf_emit_js_placeholder(code);
@@ -973,6 +1010,35 @@ static bool elf_emit_fs_path_io_value(ZBuf *code, const IrFunction *fun, const I
       z_x64_patch_rel32(code, open_fail, code->len);
       z_x64_emit_mov_reg_i32(code, 0, -1);
       z_x64_patch_rel32(code, end, code->len);
+      return true;
+    }
+    case IR_VALUE_FS_READ_BYTES_PATH: {
+      if (!elf_emit_openat_path(code, fun, value->left, 0, 0, ctx, diag)) return false;
+      z_x64_emit_test_rax_rax(code, true);
+      size_t open_fail = elf_emit_js_placeholder(code);
+      z_x64_emit_push_rax(code);
+      if (!elf_emit_byte_view_pair(code, fun, value->right, 6, 2, ctx, diag)) return false;
+      z_x64_emit_pop_reg64(code, 7);
+      z_x64_emit_push_reg64(code, 7);
+      z_x64_emit_xor_eax_eax(code);
+      z_x64_emit_syscall(code);
+      elf_emit_fs_read_total_size_tail(code, open_fail);
+      return true;
+    }
+    case IR_VALUE_FS_READ_BYTES_AT_PATH: {
+      if (!elf_emit_openat_path(code, fun, value->left, 0, 0, ctx, diag)) return false;
+      z_x64_emit_test_rax_rax(code, true);
+      size_t open_fail = elf_emit_js_placeholder(code);
+      z_x64_emit_push_rax(code);
+      if (!elf_emit_value(code, fun, value->index, ctx, diag)) return false;
+      z_x64_emit_push_rax(code);
+      if (!elf_emit_byte_view_pair(code, fun, value->right, 6, 2, ctx, diag)) return false;
+      z_x64_emit_pop_reg64(code, 10);
+      z_x64_emit_pop_reg64(code, 7);
+      z_x64_emit_push_reg64(code, 7);
+      z_x64_emit_mov_eax_u32(code, 17);
+      z_x64_emit_syscall(code);
+      elf_emit_fs_read_total_size_tail(code, open_fail);
       return true;
     }
     case IR_VALUE_FS_WRITE_PATH: case IR_VALUE_FS_WRITE_BYTES_PATH: {
@@ -2354,7 +2420,7 @@ static bool elf_emit_value(ZBuf *code, const IrFunction *fun, const IrValue *val
       return elf_emit_fs_atomic_write_value(code, fun, value, ctx, diag);
     case IR_VALUE_FS_FILE_LEN: case IR_VALUE_FS_READ_FILE: case IR_VALUE_FS_WRITE_ALL_FILE:
       return elf_emit_fs_file_handle_value(code, fun, value, ctx, diag);
-    case IR_VALUE_FS_READ_PATH: case IR_VALUE_FS_READ_BYTES_PATH: case IR_VALUE_FS_WRITE_PATH: case IR_VALUE_FS_WRITE_BYTES_PATH:
+    case IR_VALUE_FS_READ_PATH: case IR_VALUE_FS_READ_BYTES_PATH: case IR_VALUE_FS_READ_BYTES_AT_PATH: case IR_VALUE_FS_WRITE_PATH: case IR_VALUE_FS_WRITE_BYTES_PATH:
       return elf_emit_fs_path_io_value(code, fun, value, ctx, diag);
     case IR_VALUE_MAYBE_HAS: case IR_VALUE_MAYBE_VALUE: case IR_VALUE_VEC_LEN: case IR_VALUE_VEC_CAPACITY:
     case IR_VALUE_VEC_PUSH: case IR_VALUE_CHECK: case IR_VALUE_RESCUE:
@@ -3057,8 +3123,31 @@ static bool elf_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *ins
   }
 }
 
+// Register-only fill loop replacing an unrolled run of constant-index,
+// constant-value array stores. rax holds the running element pointer, rcx the
+// fill value, rdx the remaining count.
+static void elf_emit_fill_run(ZBuf *text, const IrFunction *fun, const ZDirectFillRun *run) {
+  unsigned elem_size = elf_type_byte_size(run->element_type);
+  const IrLocal *local = &fun->locals[run->array_index];
+  elf_emit_lea_array_base_rax(text, local, 0);
+  z_x64_emit_mov_reg_u64(text, 1, run->fill_value);
+  z_x64_emit_mov_reg_u64(text, 2, run->count);
+  size_t loop = text->len;
+  elf_emit_store_ptr_element(text, 0, 1, run->element_type);
+  z_x64_emit_add_reg_i8(text, 0, (int8_t)elem_size, true);
+  z_x64_emit_add_reg_i8(text, 2, -1, true);
+  size_t back = z_x64_emit_jcc32_placeholder(text, 0x85); // jnz -> loop
+  z_x64_patch_rel32(text, back, loop);
+}
+
 static bool elf_emit_instrs(ZBuf *text, const IrFunction *fun, const IrInstr *instrs, size_t len, ElfEmitContext *ctx, ZDiag *diag) {
   for (size_t i = 0; i < len; i++) {
+    ZDirectFillRun run;
+    if (z_direct_detect_fill_run(fun, instrs, len, i, ELF_FILL_RUN_MIN, &run)) {
+      elf_emit_fill_run(text, fun, &run);
+      i += run.count - 1;
+      continue;
+    }
     if (!elf_emit_instr(text, fun, &instrs[i], ctx, diag)) return false;
   }
   return true;

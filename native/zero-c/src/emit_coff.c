@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Minimum constant-fill run length that justifies a fill loop.
+#define COFF_FILL_RUN_MIN 8u
+
 static bool coff_diag(ZDiag *diag, const char *message) {
   if (diag) {
     diag->code = 4004;
@@ -1226,6 +1229,21 @@ static bool coff_emit_json_runtime_value(ZBuf *text, const IrFunction *fun, cons
   return true;
 }
 
+/* Unpack a runtime packed span result (bit 63 = has, bits 32..62 = len, low 32 = offset)
+   into the Maybe<Span<u8>> register convention: rax = has, rdx = base + offset, rcx = len.
+   Expects the view base pointer in rdx and the packed result in rax. */
+static void coff_emit_http_packed_span_result(ZBuf *text) {
+  z_x64_emit_mov_reg_from_reg(text, 8, 0, true);
+  z_x64_emit_mov_reg_from_reg(text, 0, 8, true);
+  z_x64_emit_shr_reg_imm8(text, 0, 32, true);
+  z_x64_emit_and_reg_u32(text, 0, 0x7fffffffu, false);
+  z_x64_emit_mov_rcx_from_rax(text, false);
+  z_x64_emit_mov_reg_from_reg(text, 0, 8, false);
+  z_x64_emit_add_reg_reg(text, 2, 0, true);
+  z_x64_emit_mov_reg_from_reg(text, 0, 8, true);
+  z_x64_emit_shr_reg_imm8(text, 0, 63, true);
+}
+
 static bool coff_emit_http_request_span_value(ZBuf *text, const IrFunction *fun, const IrValue *value, CoffEmitContext *ctx, ZDiag *diag) {
   if (!value || !value->left) return coff_diag_at(diag, "direct COFF HTTP request helper requires a request span", value ? value->line : 1, value ? value->column : 1, "invalid HTTP request input");
   unsigned temp_base = 0;
@@ -1236,15 +1254,23 @@ static bool coff_emit_http_request_span_value(ZBuf *text, const IrFunction *fun,
   CoffRuntimeHelper helper = value->kind == IR_VALUE_HTTP_REQUEST_METHOD_NAME ? COFF_RUNTIME_HTTP_REQUEST_METHOD_NAME : COFF_RUNTIME_HTTP_REQUEST_PATH;
   if (!coff_emit_runtime_call(text, ctx, helper, 2, temp_base, value, diag)) return false;
   coff_emit_runtime_temp_slot_load(text, temp_base, 0, 2);
-  z_x64_emit_mov_reg_from_reg(text, 8, 0, true);
-  z_x64_emit_mov_reg_from_reg(text, 0, 8, true);
-  z_x64_emit_shr_reg_imm8(text, 0, 32, true);
-  z_x64_emit_and_reg_u32(text, 0, 0x7fffffffu, false);
-  z_x64_emit_mov_rcx_from_rax(text, false);
-  z_x64_emit_mov_reg_from_reg(text, 0, 8, false);
-  z_x64_emit_add_reg_reg(text, 2, 0, true);
-  z_x64_emit_mov_reg_from_reg(text, 0, 8, true);
-  z_x64_emit_shr_reg_imm8(text, 0, 63, true);
+  coff_emit_http_packed_span_result(text);
+  z_x64_emit_add_rsp(text, total_stack);
+  return true;
+}
+
+static bool coff_emit_http_request_body_within_value(ZBuf *text, const IrFunction *fun, const IrValue *value, CoffEmitContext *ctx, ZDiag *diag) {
+  if (!value || !value->left) return coff_diag_at(diag, "direct COFF HTTP request helper requires a request span", value ? value->line : 1, value ? value->column : 1, "invalid HTTP request input");
+  unsigned temp_base = 0;
+  unsigned total_stack = 0;
+  unsigned slot = 0;
+  coff_emit_runtime_call_begin(text, 4, &temp_base, &total_stack);
+  if (!coff_emit_runtime_arg_byte_view(text, fun, value->left, temp_base, &slot, ctx, diag)) return false;
+  if (!coff_emit_runtime_arg_value(text, fun, value->index, temp_base, &slot, ctx, diag)) return false;
+  coff_emit_runtime_arg_u32(text, value->int_value ? 1u : 0u, temp_base, &slot);
+  if (!coff_emit_runtime_call(text, ctx, COFF_RUNTIME_HTTP_REQUEST_BODY_WITHIN, 4, temp_base, value, diag)) return false;
+  coff_emit_runtime_temp_slot_load(text, temp_base, 0, 2);
+  coff_emit_http_packed_span_result(text);
   z_x64_emit_add_rsp(text, total_stack);
   return true;
 }
@@ -1347,6 +1373,8 @@ static bool coff_emit_value(ZBuf *text, const IrFunction *fun, const IrValue *va
     case IR_VALUE_HTTP_REQUEST_METHOD_NAME:
     case IR_VALUE_HTTP_REQUEST_PATH:
       return coff_emit_http_request_span_value(text, fun, value, ctx, diag);
+    case IR_VALUE_HTTP_REQUEST_BODY_WITHIN:
+      return coff_emit_http_request_body_within_value(text, fun, value, ctx, diag);
     case IR_VALUE_BYTE_VIEW_INDEX_LOAD: return coff_emit_byte_view_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_INDEX_LOAD: return coff_emit_index_load_value(text, fun, value, ctx, diag);
     case IR_VALUE_FIELD_LOAD: return coff_emit_field_load_value(text, fun, value, diag);
@@ -1422,7 +1450,8 @@ static bool coff_emit_local_set_maybe_byte_view(ZBuf *text, const IrFunction *fu
                        instr->value->kind == IR_VALUE_FMT_U32 ||
                        instr->value->kind == IR_VALUE_FMT_USIZE ||
                        instr->value->kind == IR_VALUE_HTTP_REQUEST_METHOD_NAME ||
-                       instr->value->kind == IR_VALUE_HTTP_REQUEST_PATH) && instr->value->type == IR_TYPE_MAYBE_BYTE_VIEW) {
+                       instr->value->kind == IR_VALUE_HTTP_REQUEST_PATH ||
+                       instr->value->kind == IR_VALUE_HTTP_REQUEST_BODY_WITHIN) && instr->value->type == IR_TYPE_MAYBE_BYTE_VIEW) {
     if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
     coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 0, 0, false);
     coff_emit_store_local_slot_from_reg(text, fun, instr->local_index, 2, 8, true);
@@ -1642,7 +1671,8 @@ static bool coff_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *in
              instr->value->kind == IR_VALUE_FMT_U32 ||
              instr->value->kind == IR_VALUE_FMT_USIZE ||
              instr->value->kind == IR_VALUE_HTTP_REQUEST_METHOD_NAME ||
-             instr->value->kind == IR_VALUE_HTTP_REQUEST_PATH) && instr->value->type == IR_TYPE_MAYBE_BYTE_VIEW) {
+             instr->value->kind == IR_VALUE_HTTP_REQUEST_PATH ||
+             instr->value->kind == IR_VALUE_HTTP_REQUEST_BODY_WITHIN) && instr->value->type == IR_TYPE_MAYBE_BYTE_VIEW) {
           if (!coff_emit_value(text, fun, instr->value, ctx, diag)) return false;
         } else if (instr->value->kind == IR_VALUE_MAYBE_BYTE_VIEW_LITERAL) {
           if (!instr->value->data_len) {
@@ -1701,8 +1731,30 @@ static bool coff_emit_instr(ZBuf *text, const IrFunction *fun, const IrInstr *in
   }
 }
 
+// Register-only fill loop replacing an unrolled run of constant-index,
+// constant-value array stores. rdx holds the running element pointer, rcx the
+// fill value, rax the remaining count.
+static void coff_emit_fill_run(ZBuf *text, const IrFunction *fun, const ZDirectFillRun *run) {
+  unsigned elem_size = coff_type_byte_size(run->element_type);
+  coff_emit_array_base_rdx(text, fun, run->array_index);
+  z_x64_emit_mov_reg_u64(text, 1, run->fill_value);
+  z_x64_emit_mov_reg_u64(text, 0, run->count);
+  size_t loop = text->len;
+  coff_emit_store_ptr_element(text, 2, 1, run->element_type);
+  z_x64_emit_add_reg_i8(text, 2, (int8_t)elem_size, true);
+  z_x64_emit_add_reg_i8(text, 0, -1, true);
+  size_t back = z_x64_emit_jcc32_placeholder(text, 0x85); // jnz -> loop
+  z_x64_patch_rel32(text, back, loop);
+}
+
 static bool coff_emit_instrs(ZBuf *text, const IrFunction *fun, const IrInstr *instrs, size_t len, CoffEmitContext *ctx, ZDiag *diag) {
   for (size_t i = 0; i < len; i++) {
+    ZDirectFillRun run;
+    if (z_direct_detect_fill_run(fun, instrs, len, i, COFF_FILL_RUN_MIN, &run)) {
+      coff_emit_fill_run(text, fun, &run);
+      i += run.count - 1;
+      continue;
+    }
     if (!coff_emit_instr(text, fun, &instrs[i], ctx, diag)) return false;
   }
   return true;
