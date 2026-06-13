@@ -14286,10 +14286,12 @@ static int run_graph_patch_command(const Command *command, const ZTargetInfo *ta
   } else if (ok && command->graph_patch_check_only) {
     printf("program graph patch ok (check-only)\n");
     print_graph_patch_summary_text(&graph, &result, graph_patch_nodes_touched(baseline, baseline_len, &graph));
+    if (input_kind == GRAPH_INPUT_REPOSITORY_STORE) printf("validated: check-equivalent\n");
   } else if (ok && saved_path) {
     printf("program graph patch ok\n");
     printf("saved: %s\n", saved_path);
     print_graph_patch_summary_text(&graph, &result, graph_patch_nodes_touched(baseline, baseline_len, &graph));
+    if (input_kind == GRAPH_INPUT_REPOSITORY_STORE) printf("validated: check-equivalent\n");
   } else if (ok) {
     ZProgramGraphValidation validation = {0};
     z_program_graph_validate(&graph, &validation);

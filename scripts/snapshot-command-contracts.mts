@@ -4041,7 +4041,9 @@ writeFileSync(genericIndentedHeaderPatchPath, [
   "  end",
   "",
 ].join("\n"));
-assert.match(zero(["patch", "--check-only", genericPatchRoot, genericIndentedHeaderPatchPath]).stdout, /^program graph patch ok \(check-only\)\n/);
+const genericIndentedHeaderCheckOnly = zero(["patch", "--check-only", genericPatchRoot, genericIndentedHeaderPatchPath]).stdout;
+assert.match(genericIndentedHeaderCheckOnly, /^program graph patch ok \(check-only\)\n/);
+assert.match(genericIndentedHeaderCheckOnly, /validated: check-equivalent\n$/);
 
 // Declaration-level patch ops: setConst, addParamTo, setReturnType.
 const declOpsRoot = join(outDir, "repository-graph-decl-ops");
@@ -4084,6 +4086,7 @@ assert.match(declOpsViewBefore, /const LIMIT: usize = 4/);
 // setConst round trip: change the initializer, then restore it.
 const declOpsSetConst = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMIT" value="8"']);
 assertPatchOkOutput(declOpsSetConst.stdout, join(declOpsRoot, "zero.graph"));
+assert.match(declOpsSetConst.stdout, /validated: check-equivalent\n$/);
 assert.match(zero(["view", declOpsRoot]).stdout, /const LIMIT: usize = 8/);
 assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
 const declOpsSetConstBack = json(["patch", "--json", declOpsRoot, "--op", 'setConst name="LIMIT" value="4"']).body;
@@ -5872,6 +5875,16 @@ for (const skillName of skillsList.data.map((skill) => skill.name)) {
 const agentSkill = json(["skills", "get", "agent", "--json"]).body;
 assert.equal(agentSkill.success, true);
 assert.match(agentSkill.data[0].content, /zero query --fn <name> --handles/);
+assert.match(agentSkill.data[0].content, /--replace-in-fn handleLine/);
+assert.match(agentSkill.data[0].content, /addParamTo fn="scan" name="bias" type="i32" default="0"/);
+assert.match(agentSkill.data[0].content, /setConst name="limit" value="64"/);
+assert.match(agentSkill.data[0].content, /validated: check-equivalent/);
+assert.match(agentSkill.data[0].content, /zero skills get graph/);
+assert.doesNotMatch(agentSkill.data[0].content, /--rewrite/);
+const agentReplaceInFnIdx = agentSkill.data[0].content.indexOf("--replace-in-fn");
+const agentReplaceFnIdx = agentSkill.data[0].content.indexOf("--replace-fn greet");
+const agentDeclOpsIdx = agentSkill.data[0].content.indexOf("setConst");
+assert(agentReplaceInFnIdx >= 0 && agentReplaceInFnIdx < agentReplaceFnIdx && agentReplaceFnIdx < agentDeclOpsIdx, "agent topic leads with --replace-in-fn, then --replace-fn, then decl ops");
 assert.match(agentSkill.data[0].content, /Use JSON only when another tool must parse stable fields/);
 assert.match(agentSkill.data[0].content, /zero skills get stdlib --topic std\.time/);
 assert.match(agentSkill.data[0].content, /zero view --outline <module-or-file>/);

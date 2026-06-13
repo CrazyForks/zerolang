@@ -7,30 +7,35 @@ description: Graph-first agent workflow for making focused Zero changes with CLI
 
 Use this when editing Zero code, examples, tests, docs, or a package. `zero.graph` is the package compiler input; `.0` files are the human-readable projection. Command text output is written for agents. Use JSON only when another tool must parse stable fields.
 
-## Think In Graph
+## Edit Through Patch
 
-Edit by graph address instead of retyping lines:
+Anchored small edits win. Never retype a function to change one line, and never rewrite a whole `.0` file for one declaration.
 
-```sh
-zero view --fn <name> --handles   # 1. addresses: each statement ends in // #handle
-zero patch . --op '<micro-op>'    # 2. one batched edit by handle
-zero check                        # 3. validate after direct .0 edits
-```
-
-1. Addresses. `zero view --fn <name> --handles` prints one function with a `// #handle` margin comment per statement; compound headers show `#stmt #block`, and else/arm lines show the clause block (a `replaceBlockBody` target). For cross-function work `zero query --refs <name> --handles` adds `stmt:#...` to every reference row; `zero query --fn <name> --handles` lists stmt and param handles.
-2. One batched edit. Micro-ops change one thing precisely; repeat `--op` to batch edits into one patch with a single revalidation. Change a value:
+1. `--replace-in-fn`: Edit semantics on one function's canonical body text.
 
 ```sh
-zero patch . --op 'set node="#a647" field="value" expect="1" value="8"'
+zero patch . --replace-in-fn handleLine --old 'limit + 1' --new 'limit + 2'
 ```
 
-`set` edits one field (`value`, `type`, `name`/operator). `replaceExpr node="#h" with="<expr>"` swaps any expression subtree; aimed at a statement handle it replaces that statement's expression (initializer, condition, return value). Express a cross-cutting change once as a structural rewrite (`$A`, `$B` bind subtrees; dry run by default):
+`--old` must match the text `zero view --fn <name>` prints exactly once; misses fail with the occurrence count.
+
+2. `--replace-fn` with a heredoc for one whole body:
 
 ```sh
-zero patch . --rewrite 'bnCmp($A, $B) == 0' --to 'bnEq($A, $B)' --apply
+zero patch . --replace-fn greet --body-file - <<'EOF'
+check world.out.write("hello agent\n")
+EOF
 ```
 
-3. Validate. A successful patch has already validated and saved the graph; do not run `zero check` to confirm it. Then `zero run . -- <args>` / `zero test`.
+3. Declaration work stays in ops, call sites updated for you:
+
+```sh
+zero patch . --op 'setConst name="limit" value="64"'
+zero patch . --op 'addParamTo fn="scan" name="bias" type="i32" default="0"'  # updates every call site
+zero patch . --op 'setReturnType fn="scan" type="i64"'
+```
+
+A successful patch prints `validated: check-equivalent`: it already validated and saved the graph, so do not run `zero check` to confirm it; go straight to `zero run . -- <args>` / `zero test`. Repeat `--op` to batch edits into one patch with a single revalidation. For expression-level cross-cutting swaps and node-addressed micro-edits (handles from `zero view --fn <name> --handles` or `zero query --fn <name> --handles`), see `zero skills get graph`.
 
 Scoped reads; never read a whole `.0` file for one function:
 
@@ -52,7 +57,7 @@ zero query [--json] [--fn <name>] [--find <text>] [--refs <name>] [--calls <name
 - `--calls <name>` / `--refs <name>`: resolved calls and semantic references
 - `--node <id>`: one node's span, parents, and children; short handles resolve here too
 
-Whole bodies and in-function text edits (`--replace-fn`, `--replace-in-fn`) plus import/export, identity recovery, and merge live in the `graph` topic. Direct `.0` edits are a last resort; never delete `zero.graph`.
+Import/export, identity recovery, structural rewrites, and merge live in the `graph` topic. Direct `.0` edits are a last resort; never delete `zero.graph`.
 
 ## Verify Before Done
 
