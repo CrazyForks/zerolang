@@ -17,8 +17,8 @@ Runnable today:
 | `std.http.parseMethod(text)` | `HttpMethod` | Parses a small HTTP method token. |
 | `std.http.client(net)` | `HttpClient` | Creates hosted client metadata from a network capability. |
 | `std.http.server(net, address)` | `HttpServer` | Creates hosted server metadata from a network capability and address. |
-| `std.http.listen(world)` | `Void` | Starts a loopback HTTP listener from `zero run`, auto-selecting a development port from 3000 upward. |
-| `std.http.listen(world, port)` | `Void` | Starts a loopback HTTP listener on exactly `port`, failing if the port is occupied. |
+| `std.http.listen(world)` | `Void raises [Io]` | Starts a loopback HTTP listener from `zero run`, auto-selecting a development port from 3000 upward. |
+| `std.http.listen(world, port)` | `Void raises [Io]` | Starts a loopback HTTP listener on exactly `port`, failing if the port is occupied. |
 | `std.http.fetch(client, request, response, timeout)` | `HttpResult` | Performs a hosted HTTP(S) request with a `Duration` timeout and writes response metadata, headers, and body into caller-owned storage. |
 | `std.http.resultOk(result)` | `Bool` | True when transport succeeded and the status is 2xx. |
 | `std.http.resultStatus(result)` | `u16` | Reads the HTTP status, or `0` when no status was available. |

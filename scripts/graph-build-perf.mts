@@ -32,7 +32,8 @@ type PerformanceBudget = {
   pass: "cold" | "warm";
   command: "build" | "check";
   metric: string;
-  maxMs: number;
+  max: number;
+  unit: "ms" | "bytes";
 };
 
 const fixtures: Fixture[] = [
@@ -57,7 +58,8 @@ const performanceBudgets: PerformanceBudget[] = [
     pass: "cold",
     command: "build",
     metric: "compilerElapsedMs",
-    maxMs: envNumber("ZERO_GRAPH_BUILD_PERF_SIMPLE_COLD_MAX_MS", 5000),
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_SIMPLE_COLD_MAX_MS", 5000),
+    unit: "ms",
   },
   {
     name: "simple graph warm build",
@@ -65,7 +67,26 @@ const performanceBudgets: PerformanceBudget[] = [
     pass: "warm",
     command: "build",
     metric: "compilerElapsedMs",
-    maxMs: envNumber("ZERO_GRAPH_BUILD_PERF_SIMPLE_WARM_MAX_MS", 3000),
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_SIMPLE_WARM_MAX_MS", 3000),
+    unit: "ms",
+  },
+  {
+    name: "simple graph artifact size",
+    fixture: "hello-artifact",
+    pass: "warm",
+    command: "build",
+    metric: "artifactBytes",
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_SIMPLE_ARTIFACT_MAX_BYTES", 8192),
+    unit: "bytes",
+  },
+  {
+    name: "simple graph lowered IR size",
+    fixture: "hello-artifact",
+    pass: "warm",
+    command: "build",
+    metric: "loweredIrBytes",
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_SIMPLE_LOWERED_IR_MAX_BYTES", 16384),
+    unit: "bytes",
   },
   {
     name: "stdlib-heavy cold build",
@@ -73,7 +94,8 @@ const performanceBudgets: PerformanceBudget[] = [
     pass: "cold",
     command: "build",
     metric: "compilerElapsedMs",
-    maxMs: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_COLD_MAX_MS", 120000),
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_COLD_MAX_MS", 120000),
+    unit: "ms",
   },
   {
     name: "stdlib-heavy warm build",
@@ -81,7 +103,8 @@ const performanceBudgets: PerformanceBudget[] = [
     pass: "warm",
     command: "build",
     metric: "compilerElapsedMs",
-    maxMs: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_WARM_MAX_MS", 120000),
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_WARM_MAX_MS", 120000),
+    unit: "ms",
   },
   {
     name: "stdlib-heavy warm graph load",
@@ -89,7 +112,8 @@ const performanceBudgets: PerformanceBudget[] = [
     pass: "warm",
     command: "build",
     metric: "timings.graphLoadMs",
-    maxMs: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_GRAPH_LOAD_MAX_MS", 30000),
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_GRAPH_LOAD_MAX_MS", 30000),
+    unit: "ms",
   },
   {
     name: "stdlib-heavy warm stdlib merge",
@@ -97,7 +121,26 @@ const performanceBudgets: PerformanceBudget[] = [
     pass: "warm",
     command: "build",
     metric: "timings.stdlibMergeMs",
-    maxMs: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_STDLIB_MERGE_MAX_MS", 70000),
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_STDLIB_MERGE_MAX_MS", 70000),
+    unit: "ms",
+  },
+  {
+    name: "stdlib-heavy artifact size",
+    fixture: "stdlib-heavy-artifact",
+    pass: "warm",
+    command: "build",
+    metric: "artifactBytes",
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_ARTIFACT_MAX_BYTES", 262144),
+    unit: "bytes",
+  },
+  {
+    name: "stdlib-heavy lowered IR size",
+    fixture: "stdlib-heavy-artifact",
+    pass: "warm",
+    command: "build",
+    metric: "loweredIrBytes",
+    max: envNumber("ZERO_GRAPH_BUILD_PERF_STDLIB_HEAVY_LOWERED_IR_MAX_BYTES", 4194304),
+    unit: "bytes",
   },
 ];
 
@@ -194,19 +237,24 @@ function evaluateBudgets(results: any[]) {
   const items = performanceBudgets.map((budget) => {
     const fixture = results.find((item) => item.name === budget.fixture);
     const run = fixture?.[budget.pass]?.[budget.command];
-    const actualMs = valueAtPath(run, budget.metric);
+    const actual = valueAtPath(run, budget.metric);
     if (!fixture) {
-      return { ...budget, status: "skipped", actualMs: null, reason: "fixture not selected" };
+      return { ...budget, status: "skipped", actual: null, reason: "fixture not selected" };
     }
-    if (typeof actualMs !== "number") {
-      return { ...budget, status: "skipped", actualMs: null, reason: "metric missing" };
+    if (typeof actual !== "number") {
+      return { ...budget, status: "skipped", actual: null, reason: "metric missing" };
     }
+    const overBy = Number(Math.max(0, actual - budget.max).toFixed(3));
+    const unitSuffix = budget.unit === "ms" ? "Ms" : "Bytes";
     return {
       ...budget,
-      status: actualMs <= budget.maxMs ? "ok" : "over",
-      actualMs,
-      overByMs: Number(Math.max(0, actualMs - budget.maxMs).toFixed(3)),
-      ratio: Number((actualMs / budget.maxMs).toFixed(3)),
+      status: actual <= budget.max ? "ok" : "over",
+      actual,
+      max: budget.max,
+      [`actual${unitSuffix}`]: actual,
+      [`max${unitSuffix}`]: budget.max,
+      [`overBy${unitSuffix}`]: overBy,
+      ratio: Number((actual / budget.max).toFixed(3)),
     };
   });
   const overCount = items.filter((item) => item.status === "over").length;
@@ -227,7 +275,7 @@ function writeBudgetMessages(budget: any) {
   for (const item of budget.items || []) {
     if (item.status === "over") {
       process.stderr.write(
-        `graph perf budget ${budget.status}: ${item.name} ${item.actualMs}ms > ${item.maxMs}ms (${item.metric})\n`,
+        `graph perf budget ${budget.status}: ${item.name} ${item.actual} ${item.unit} > ${item.max} ${item.unit} (${item.metric})\n`,
       );
     }
   }

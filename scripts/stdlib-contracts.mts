@@ -32,12 +32,56 @@ type StdSourceCall = {
 type StdSkillSignature = {
   returnType: string;
   argTypes: string[];
+  errorNames: string[];
 };
 
+type AllocationCategory =
+  | "borrowed-view"
+  | "caller-storage"
+  | "explicit-allocator"
+  | "host-resource"
+  | "no-allocation"
+  | "owned-resource";
+
 const targetSupportValues = new Set(["target-neutral", "host", "host-runtime"]);
+const errorNamePattern = /^[A-Z][A-Za-z0-9]*$/;
 const helperKindPattern = /^Z_STD_HELPER_KIND_[A-Z_]+$/;
 const helperNamePattern = /^std\.[a-z][A-Za-z0-9]*\.[A-Za-z][A-Za-z0-9]*$/;
 const moduleNamePattern = /^std\.[a-z][A-Za-z0-9]*$/;
+const vagueAllocationBehaviors = new Set(["directory traversal"]);
+const knownResourceTypes = new Set([
+  "BufferedReader",
+  "BufferedWriter",
+  "ByteBuf",
+  "File",
+  "FixedBufAlloc",
+  "RandSource",
+  "Vec",
+]);
+const countedResourceTypes = new Set([
+  "Address",
+  "Alloc",
+  "BufferedReader",
+  "BufferedWriter",
+  "ByteBuf",
+  "File",
+  "FixedBufAlloc",
+  "Fs",
+  "GeneralAlloc",
+  "HttpClient",
+  "HttpError",
+  "HttpHeaderValue",
+  "HttpMethod",
+  "HttpResult",
+  "HttpServer",
+  "JsonDoc",
+  "Net",
+  "NullAlloc",
+  "PageAlloc",
+  "ProcStatus",
+  "RandSource",
+  "Vec",
+]);
 const publicModuleDocsDir = "docs/articles/modules";
 const skillPath = "skill-data/stdlib.md";
 const stdSigPath = "native/zero-c/src/std_sig.c";
@@ -137,8 +181,13 @@ function parseSkillSignatures(text: string): Map<string, StdSkillSignature> {
             const colon = arg.indexOf(":");
             return (colon >= 0 ? arg.slice(colon + 1) : arg).trim();
           });
-      const returnType = signatureMatch[3].replace(/\s+raises\s+\[[^\]]*\]\s*$/, "").trim();
-      signatures.set(`${module}.${signatureMatch[1]}`, { returnType, argTypes });
+      const returnAndErrors = signatureMatch[3].trim();
+      const errorMatch = returnAndErrors.match(/\s+raises\s+\[([^\]]*)\]\s*$/);
+      const errorNames = errorMatch
+        ? errorMatch[1].split(/\s*,\s*/).map((name) => name.trim()).filter((name) => name.length > 0)
+        : [];
+      const returnType = returnAndErrors.replace(/\s+raises\s+\[[^\]]*\]\s*$/, "").trim();
+      signatures.set(`${module}.${signatureMatch[1]}`, { returnType, argTypes, errorNames });
     }
   }
   return signatures;
@@ -177,6 +226,85 @@ async function sourceFilesUnder(root: string): Promise<string[]> {
 
 function pushIf(condition: boolean, failures: string[], message: string) {
   if (condition) failures.push(message);
+}
+
+function incrementCount(map: Map<string, number>, key: string) {
+  map.set(key, (map.get(key) ?? 0) + 1);
+}
+
+function sortedObjectFromCounts(counts: Map<string, number>): Record<string, number> {
+  return Object.fromEntries([...counts.entries()].sort((a, b) => a[0].localeCompare(b[0])));
+}
+
+function allocationCategory(helper: StdHelper): AllocationCategory | null {
+  const behavior = helper.allocationBehavior.toLowerCase();
+  if (
+    behavior.includes("no allocation") ||
+    behavior.includes("never allocates") ||
+    behavior.includes("bounds-checked") ||
+    behavior.includes("checks ") ||
+    behavior.includes("counts ") ||
+    behavior.includes("decodes a bounded") ||
+    behavior.includes("deterministic test source") ||
+    behavior.includes("inspects ") ||
+    behavior.includes("little-endian byte read") ||
+    behavior.includes("little-endian byte write primitive") ||
+    behavior.includes("matches ") ||
+    behavior.includes("reads body start offset") ||
+    behavior.includes("reads header-value") ||
+    behavior.includes("reads http status metadata") ||
+    behavior.includes("reads response") ||
+    behavior.includes("reads transport error metadata") ||
+    behavior.includes("returns structured validation status") ||
+    behavior.includes("structured validation status code") ||
+    behavior.includes("streaming token count") ||
+    behavior.includes("typed decode boundary metadata")
+  ) return "no-allocation";
+  if (
+    behavior.includes("caller") ||
+    behavior.includes("buffer") ||
+    behavior.includes("storage") ||
+    behavior.includes("writes ") ||
+    behavior.includes("fills ") ||
+    behavior.includes("sorts ")
+  ) return "caller-storage";
+  if (
+    behavior.includes("borrows") ||
+    behavior.includes("borrowed") ||
+    behavior.includes("raw query parameter") ||
+    behavior.includes("raw top-level") ||
+    behavior.includes("field value slice")
+  ) return "borrowed-view";
+  if (behavior.includes("owned") || behavior.includes("handle") || behavior.includes("closes ")) return "owned-resource";
+  if (behavior.includes("alloc") || behavior.includes("allocator") || behavior.includes("arena")) return "explicit-allocator";
+  if (
+    behavior.includes("directory") ||
+    behavior.includes("entropy") ||
+    behavior.includes("file") ||
+    behavior.includes("http listener") ||
+    behavior.includes("network") ||
+    behavior.includes("process") ||
+    behavior.includes("tls boundary")
+  ) return "host-resource";
+  return null;
+}
+
+function resourceWrapperUses(type: string): Array<{ wrapper: string; typeName: string }> {
+  return [...type.matchAll(/\b(owned|mutref|ref)<([A-Za-z][A-Za-z0-9]*)>/g)]
+    .map((match) => ({ wrapper: match[1], typeName: match[2] }));
+}
+
+function resourceTypeUses(type: string): string[] {
+  const wrappers = resourceWrapperUses(type).map((use) => use.typeName);
+  const exact = type.match(/^[A-Za-z][A-Za-z0-9]*$/) && countedResourceTypes.has(type) ? [type] : [];
+  return [...wrappers, ...exact];
+}
+
+function helperTypes(helper: StdHelper): string[] {
+  return [
+    helper.returnType,
+    ...helper.argTypes.filter((type): type is string => type !== null),
+  ];
 }
 
 const [stdSig, stdSource, embeddedStdlibGraph, skill] = await Promise.all([
@@ -228,6 +356,9 @@ await Promise.all(modules.map(async (module) => {
 }));
 
 const failures: string[] = [];
+const allocationCategoryCounts = new Map<string, number>();
+const namedErrorCounts = new Map<string, number>();
+const resourceTypeCounts = new Map<string, number>();
 
 pushIf(stdSource.includes("embedded_stdlib.inc"), failures, "std_source.c must not include embedded stdlib source chunks");
 pushIf(/zero_embedded_stdlib_[A-Za-z0-9_]+_chunks/.test(stdSource), failures, "std_source.c must not reference embedded stdlib source chunks");
@@ -247,9 +378,31 @@ for (const helper of helpers) {
     pushIf(helper.argTypes[index] === null || helper.argTypes[index] === undefined, failures, `${helper.name}: arg ${index + 1} is missing from std_sig.c`);
   }
   pushIf(helper.errorNames.length > 4, failures, `${helper.name}: error list exceeds contract bounds`);
+  for (const duplicate of duplicateValues(helper.errorNames)) {
+    failures.push(`${helper.name}: duplicate named error '${duplicate}'`);
+  }
+  for (const errorName of helper.errorNames) {
+    pushIf(!errorNamePattern.test(errorName), failures, `${helper.name}: invalid named error '${errorName}'`);
+    incrementCount(namedErrorCounts, errorName);
+  }
+  pushIf(helper.name.endsWith("OrRaise") && helper.errorNames.length === 0, failures, `${helper.name}: OrRaise helper must declare named errors`);
+  pushIf(helper.errorNames.length > 0 && helper.returnType.startsWith("Maybe<"), failures, `${helper.name}: named-error helpers must not also use Maybe return failure`);
   pushIf(!targetSupportValues.has(helper.targetSupport), failures, `${helper.name}: unknown target support '${helper.targetSupport}'`);
   pushIf(helper.capability.length === 0, failures, `${helper.name}: capability is empty`);
   pushIf(helper.allocationBehavior.length === 0, failures, `${helper.name}: allocation behavior is empty`);
+  pushIf(vagueAllocationBehaviors.has(helper.allocationBehavior), failures, `${helper.name}: allocation behavior '${helper.allocationBehavior}' is too vague`);
+  const category = allocationCategory(helper);
+  pushIf(category === null, failures, `${helper.name}: allocation behavior '${helper.allocationBehavior}' does not fit a known ownership category`);
+  if (category !== null) incrementCount(allocationCategoryCounts, category);
+  for (const type of helperTypes(helper)) {
+    for (const use of resourceWrapperUses(type)) {
+      pushIf(!knownResourceTypes.has(use.typeName), failures, `${helper.name}: ${use.wrapper}<${use.typeName}> uses an unknown resource type`);
+    }
+    for (const typeName of resourceTypeUses(type)) incrementCount(resourceTypeCounts, typeName);
+  }
+  if (helper.returnType.includes("owned<")) {
+    pushIf(category !== "owned-resource" && category !== "explicit-allocator", failures, `${helper.name}: owned return must declare owned-resource or explicit-allocator allocation behavior`);
+  }
   pushIf(!helperKindPattern.test(helper.kind), failures, `${helper.name}: helper kind '${helper.kind}' is not a std helper kind`);
 }
 
@@ -265,6 +418,7 @@ for (const helper of helpers) {
   if (signature) {
     pushIf(signature.returnType !== helper.returnType, failures, `${helper.name}: skill return type ${signature.returnType} does not match std_sig.c ${helper.returnType}`);
     pushIf(signature.argTypes.length !== helper.argCount, failures, `${helper.name}: skill arg count ${signature.argTypes.length} does not match std_sig.c ${helper.argCount}`);
+    pushIf(signature.errorNames.join(",") !== helper.errorNames.join(","), failures, `${helper.name}: skill named errors [${signature.errorNames.join(", ")}] do not match std_sig.c [${helper.errorNames.join(", ")}]`);
     for (let index = 0; index < helper.argCount && index < signature.argTypes.length; index++) {
       const expected = helper.argTypes[index];
       if (expected !== null && expected !== undefined) {
@@ -346,6 +500,9 @@ const summary = {
   graphImplementedHelperModuleCount: graphImplementedHelperModules.size,
   graphBackedHelperCount: sourceCalls.length,
   nativeOrTableHelperCount: helpers.length - sourceCalls.length,
+  allocationCategoryCounts: sortedObjectFromCounts(allocationCategoryCounts),
+  namedErrorCounts: sortedObjectFromCounts(namedErrorCounts),
+  resourceTypeCounts: sortedObjectFromCounts(resourceTypeCounts),
   fixtureFileCount: fixtureFiles.length,
   ok: failures.length === 0,
   failures,

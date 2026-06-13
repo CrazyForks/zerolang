@@ -419,7 +419,7 @@ loop `offset += len(buffer)` until `offset` reaches the returned total, taking
 parseMethod(arg0: String) -> HttpMethod
 client(arg0: Net) -> HttpClient
 server(arg0: Net, arg1: Address) -> HttpServer
-listen(arg0: World, arg1: u16) -> Void
+listen(arg0: World, arg1: u16) -> Void raises [Io]
 fetch(arg0: HttpClient, arg1: Span<u8>, arg2: MutSpan<u8>, arg3: Duration) -> HttpResult
 resultOk(arg0: HttpResult) -> Bool
 resultStatus(arg0: HttpResult) -> u16

@@ -56,6 +56,7 @@
     "native:test:sandbox": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/native-test-sandbox.mts",
     "bench": "bash scripts/bench.sh",
     "bench:local": "ZERO_BENCH_MODE=local bash scripts/bench.sh",
+    "bench:budgets": "ZERO_BENCH_BUDGET=fail bash scripts/bench.sh",
     "agent:demo": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/agent-repair-demo.mts",
     "evals": "node scripts/run-evals.mjs",
     "evals:build": "turbo run build --filter=./evals",
