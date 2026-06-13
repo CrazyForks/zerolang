@@ -5,11 +5,11 @@ description: Graph-first agent workflow for making focused Zero changes with CLI
 
 # Zero Agent Workflow
 
-Use this when editing Zero code, examples, tests, docs, or a package. `zero.graph` is the package compiler input; `.0` files are the human-readable projection. Use JSON only when another tool must parse stable fields.
+Use this when editing Zero code. `zero.graph` is compiler input; `.0` is the human projection. Use JSON only when another tool must parse stable fields.
 
 ## Edit Through Patch
 
-Anchored edits win. Do not retype a function to change one line or rewrite a `.0` file for one declaration.
+Anchored edits win. Do not retype a function for one line or rewrite `.0` for one declaration.
 
 1. `--replace-in-fn`: edit one function's canonical body text.
 
@@ -27,7 +27,7 @@ check world.out.write("hello agent\n")
 EOF
 ```
 
-3. Declaration work stays in ops; call sites update for you:
+3. Declaration work stays in ops; call sites update:
 
 ```sh
 zero patch . --op 'setConst name="limit" value="64"'
@@ -48,9 +48,11 @@ end
 
 Pass a patch file, or stream full `zero-program-graph-patch v1` text with `zero patch . --patch-text -`.
 
-Use `addReturnExpr fn="maybe" expr="null"` for non-identifier returns, `appendStmt fn="main" stmt="check std.http.listen(world, 3000_u16)"` for one statement, and `addTestBody name="api add" ... end` for a test block. If a test shape is unsupported, remove or rename it by name: `deleteTest name="api add"` or `renameTest name="api add" value="api add route"`.
+Use `addReturnExpr fn="maybe" expr="null"` for non-identifier returns, `appendStmt fn="main" stmt="check std.http.listen(world, 3000_u16)"` for one statement, and `addTestBody name="api add" ... end` for tests. If a test shape is unsupported, use `deleteTest name="api add"` or `renameTest name="api add" value="api add route"`.
 
-A successful patch prints `validated: check-equivalent`: it validated and saved the graph. Run `zero run . -- <args>` / `zero test`. Repeat `--op` to batch edits. For expression rewrites and node-handle micro-edits, see `zero skills get graph`.
+For runnable CLIs, keep `World` on `pub fn main`; helpers should be value-based. HTTP servers use `handle(request, response)` helpers instead of `World`.
+
+A successful patch prints `validated: check-equivalent`: it validated and saved the graph. Run `zero run . -- <args>` / `zero test`. Repeat `--op` to batch edits. For rewrites and handle edits, see `zero skills get graph`.
 
 Scoped reads; never read a whole `.0` file for one function:
 
@@ -78,7 +80,7 @@ Import/export, identity recovery, structural edits, and merge live in `graph`. D
 
 ## Verify Before Done
 
-After a fix works, exercise typical and boundary inputs. Checked programs can still trap on untested inputs.
+After a fix works, exercise typical and boundary inputs.
 
 ```sh
 zero run . -- <typical input>
@@ -93,4 +95,4 @@ If behavior changed, add or update a `test` block. On a diagnostic, run `zero ex
 - Treat effects as capabilities, not ambient globals: `World`, `std.fs`, `std.args`, `std.env`.
 - Use `Maybe<T>`, explicit `raises` / `raises [...]`, and `check` / `rescue` instead of hidden failure.
 - Do not invent syntax or CLI fields; load `language` when unsure.
-- Do not hand-write parsing or validation before checking the `stdlib` topic: it ships validators such as `std.time` (RFC 3339), `std.inet`, `std.regex`, and `std.unicode`. Fetch one module's signatures with `zero skills get stdlib --topic std.time`.
+- Check `stdlib` before hand-writing parsing or validation; it ships validators such as `std.time`, `std.inet`, `std.regex`, and `std.unicode`. Fetch one module with `zero skills get stdlib --topic std.time`.

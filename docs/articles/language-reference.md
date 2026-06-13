@@ -36,8 +36,11 @@ before editing a function body or signature.
 Fallible functions use `raises`:
 
 ```zero
-fn write(world: World, text: String) -> Void raises {
-    check world.out.write(text)
+fn requirePositive(value: i32) -> i32 raises [Invalid] {
+    if value > 0 {
+        return value
+    }
+    raise Invalid
 }
 ```
 

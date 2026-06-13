@@ -69,6 +69,8 @@ fn handle(request: Span<u8>, response: MutSpan<u8>) -> Maybe<Span<u8>> {
 end
 ```
 
+For runnable CLI programs, keep `World` on `pub fn main`; value-based helpers build and run more reliably. HTTP server helpers use `handle(request, response)`.
+
 `upsertFunction` parses exactly one complete function declaration, inserts it if missing, and replaces the prior declaration and body if it already exists. For smaller append-only work, `appendStmt fn="main" stmt="check std.http.listen(world, 3000_u16)"` appends one canonical statement, and `addReturnExpr fn="maybe" expr="null"` appends a return statement for any expression. `addReturnValue` is only for identifier returns.
 
 For sub-line edits, think in graph: take a handle from `zero view --fn <name> --handles` and change exactly one thing. `set` edits one field (a literal `value`, a declared `type`, a `name`/operator); `replaceExpr` swaps any expression subtree, and aimed at a statement handle it replaces that statement's expression (initializer, condition, return value). Repeat `--op` to batch several micro-ops into one patch with a single revalidation:
