@@ -160,6 +160,9 @@ void z_program_graph_print_command_help(void) {
   printf("  addCheckWrite fn=\"main\" text=\"hello\\n\"\n");
   printf("  addFunction name=\"add\" ret=\"i32\"\n");
   printf("  addParam fn=\"add\" name=\"left\" type=\"i32\"\n");
+  printf("  addParamTo fn=\"add\" name=\"bias\" type=\"i32\" default=\"0\"\n");
+  printf("  setConst name=\"limit\" value=\"64\"\n");
+  printf("  setReturnType fn=\"add\" type=\"i64\"\n");
   printf("  addReturnBinary fn=\"add\" name=\"+\" left=\"left\" right=\"right\" type=\"i32\"\n");
   printf("  addLetLiteral fn=\"main\" name=\"count\" type=\"u32\" value=\"0\"\n");
   printf("  addLetBinary fn=\"add\" name=\"sum\" type=\"i32\" operator=\"+\" left=\"left\" right=\"right\"\n");

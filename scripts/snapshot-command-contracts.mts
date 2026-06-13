@@ -3938,6 +3938,111 @@ writeFileSync(genericIndentedHeaderPatchPath, [
   "",
 ].join("\n"));
 assert.match(zero(["patch", "--check-only", genericPatchRoot, genericIndentedHeaderPatchPath]).stdout, /^program graph patch ok \(check-only\)\n/);
+
+// Declaration-level patch ops: setConst, addParamTo, setReturnType.
+const declOpsRoot = join(outDir, "repository-graph-decl-ops");
+rmSync(declOpsRoot, { recursive: true, force: true });
+mkdirSync(join(declOpsRoot, "src"), { recursive: true });
+writeZeroTomlSync(declOpsRoot, { package: { name: "decl-ops", version: "0.1.0" }, targets: { cli: { kind: "exe", main: "src/main.0" } } });
+writeFileSync(join(declOpsRoot, "src", "main.0"), [
+  "const LIMIT: usize = 4",
+  "",
+  "fn bump(value: usize) -> usize {",
+  "    return value + LIMIT",
+  "}",
+  "",
+  "fn twice(value: usize) -> usize {",
+  "    return bump(bump(value))",
+  "}",
+  "",
+  "fn answer() -> usize {",
+  "    return LIMIT",
+  "}",
+  "",
+  "fn wide(a: Span<u8>, b: Span<u8>, c: Span<u8>, d: usize) -> usize {",
+  "    return std.mem.len(a) + std.mem.len(b) + std.mem.len(c) + d",
+  "}",
+  "",
+  "pub fn main(world: World) -> Void raises {",
+  "    let start: usize = bump(1)",
+  "    let total: usize = twice(start)",
+  "    let padding: usize = wide(\"a\", \"b\", \"c\", 0)",
+  "    if total + padding > answer() {",
+  "        check world.out.write(\"decl ops ok\\n\")",
+  "    }",
+  "}",
+  "",
+].join("\n"));
+assert.equal(json(["import", "--format", "text", "--json", declOpsRoot]).code, 0);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
+const declOpsViewBefore = zero(["view", declOpsRoot]).stdout;
+assert.match(declOpsViewBefore, /const LIMIT: usize = 4/);
+// setConst round trip: change the initializer, then restore it.
+const declOpsSetConst = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMIT" value="8"']);
+assertPatchOkOutput(declOpsSetConst.stdout, join(declOpsRoot, "zero.graph"));
+assert.match(zero(["view", declOpsRoot]).stdout, /const LIMIT: usize = 8/);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
+const declOpsSetConstBack = json(["patch", "--json", declOpsRoot, "--op", 'setConst name="LIMIT" value="4"']).body;
+assert.equal(declOpsSetConstBack.ok, true);
+assert.equal(declOpsSetConstBack.operations[0].op, "setConst");
+assert.equal(zero(["view", declOpsRoot]).stdout, declOpsViewBefore);
+// setConst revalidation failure rolls the store back untouched.
+const declOpsStoreBefore = readFileSync(join(declOpsRoot, "zero.graph"), "utf8");
+const declOpsBadConst = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMIT" value="missingName"'], { allowFailure: true });
+assert.notEqual(declOpsBadConst.code, 0);
+assert.match(declOpsBadConst.stderr, /program graph patch failed revalidation: 1 diagnostic introduced by this patch/);
+assert.equal(readFileSync(join(declOpsRoot, "zero.graph"), "utf8"), declOpsStoreBefore);
+assert.match(zero(["view", declOpsRoot]).stdout, /const LIMIT: usize = 4/);
+// setConst misses fail with the nearest const name.
+const declOpsConstMiss = zero(["patch", declOpsRoot, "--op", 'setConst name="LIMTI" value="8"'], { allowFailure: true });
+assert.notEqual(declOpsConstMiss.code, 0);
+assert.match(declOpsConstMiss.stderr, /setConst const was not found; nearest: LIMIT/);
+// addParamTo without default fails with the call-site count.
+const declOpsNoDefault = zero(["patch", declOpsRoot, "--op", 'addParamTo fn="bump" name="bias" type="usize"'], { allowFailure: true });
+assert.notEqual(declOpsNoDefault.code, 0);
+assert.match(declOpsNoDefault.stderr, /addParamTo needs a default to update existing call sites/);
+assert.match(declOpsNoDefault.stderr, /3 call sites call bump/);
+// addParamTo with default appends the parameter and updates every call site,
+// including the nested bump(bump(value)) calls inside twice.
+const declOpsAddParam = zero(["patch", declOpsRoot, "--op", 'addParamTo fn="bump" name="bias" type="usize" default="0"']);
+assertPatchOkOutput(declOpsAddParam.stdout, join(declOpsRoot, "zero.graph"));
+assert.match(declOpsAddParam.stdout, /updated 3 call sites\n/);
+const declOpsAddParamView = zero(["view", declOpsRoot]).stdout;
+assert.match(declOpsAddParamView, /fn bump\(value: usize, bias: usize\) -> usize/);
+assert.match(declOpsAddParamView, /return bump\(bump\(value, 0\), 0\)/);
+assert.match(declOpsAddParamView, /let start: usize = bump\(1, 0\)/);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
+const declOpsAddParamJson = json(["patch", "--json", declOpsRoot, "--op", 'addParamTo fn="answer" name="extra" type="usize" default="1"']).body;
+assert.equal(declOpsAddParamJson.ok, true);
+assert.equal(declOpsAddParamJson.operations[0].op, "addParamTo");
+assert.equal(declOpsAddParamJson.operations[0].callSites, 1);
+// The direct backends cap signatures at 8 ABI argument slots (byte views take
+// 2); addParamTo rejects an over-cap signature at patch time.
+const declOpsAbiCap = zero(["patch", declOpsRoot, "--op", 'addParamTo fn="wide" name="e" type="Span<u8>"'], { allowFailure: true });
+assert.notEqual(declOpsAbiCap.code, 0);
+assert.match(declOpsAbiCap.stderr, /direct backend object buildability has too many ABI argument slots/);
+assert.match(declOpsAbiCap.stderr, /wide would have 9 ABI argument slot\(s\)/);
+// Signature ops compose with other ops in one batched patch.
+const declOpsBatchPath = join(outDir, "repository-graph-decl-ops-batch.patch");
+writeFileSync(declOpsBatchPath, [
+  "zero-program-graph-patch v1",
+  'setConst name="LIMIT" value="6"',
+  'setReturnType fn="answer" type="i64"',
+  "replaceFunctionBody answer",
+  "  return 9 as i64",
+  "end",
+  "",
+].join("\n"));
+const declOpsBatch = json(["patch", "--json", declOpsRoot, declOpsBatchPath]).body;
+assert.equal(declOpsBatch.ok, true);
+assert.equal(declOpsBatch.operationCount, 3);
+assert.equal(declOpsBatch.operations[0].op, "setConst");
+assert.equal(declOpsBatch.operations[1].op, "setReturnType");
+assert.equal(declOpsBatch.operations[2].op, "replaceFunctionBody");
+const declOpsBatchView = zero(["view", declOpsRoot]).stdout;
+assert.match(declOpsBatchView, /const LIMIT: usize = 6/);
+assert.match(declOpsBatchView, /fn answer\(extra: usize\) -> i64/);
+assert.equal(zero(["check", declOpsRoot]).stdout, "ok\n");
 const checkedInGraphCallsJson = json(["query", "--json", "--fn", "main", "--calls", "write", checkedInGraphPackageDir]).body;
 assert.equal(checkedInGraphCallsJson.ok, true);
 assert.equal(checkedInGraphCallsJson.query.function, "main");

@@ -45,6 +45,8 @@ typedef struct {
   bool fallible_value;
   bool export_c_value;
   bool ok;
+  bool has_call_sites;
+  size_t call_sites_updated;
   char code[16];
   char message[160];
 } ZProgramGraphPatchOpResult;

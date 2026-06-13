@@ -56,6 +56,8 @@ zero patch \
   --op 'addTest name="addition works" call="add" arg0="40" arg1="2" expect="42" type="i32"'
 ```
 
+For declaration-level edits, stay in patch ops instead of rewriting files. `setConst name="limit" value="64"` replaces a top-level const's initializer by package-scoped name. `addParamTo fn="scan" name="bias" type="i32" default="0"` appends a parameter to an existing function and updates every call site in the package (nested calls included) to pass the default explicitly, reporting `updated N call sites`; without `default` it fails with the call-site count. `setReturnType fn="scan" type="i64"` changes a declared return type. All three revalidate and batch like any other op.
+
 For sub-line edits, think in graph: take a handle from `zero view --fn <name> --handles` and change exactly one thing. `set` edits one field (a literal `value`, a declared `type`, a `name`/operator); `replaceExpr` swaps any expression subtree, and aimed at a statement handle it replaces that statement's expression (initializer, condition, return value). Repeat `--op` to batch several micro-ops into one patch with a single revalidation:
 
 ```sh
@@ -141,6 +143,9 @@ addMain
 addCheckWrite fn="main" text="hello\n"
 addFunction name="add" ret="i32"
 addParam fn="add" name="left" type="i32"
+addParamTo fn="add" name="bias" type="i32" default="0"
+setConst name="limit" value="64"
+setReturnType fn="add" type="i64"
 addReturnBinary fn="add" name="+" left="left" right="right" type="i32"
 addLetLiteral fn="main" name="count" type="u32" value="0"
 addLetBinary fn="add" name="sum" type="i32" operator="+" left="left" right="right"

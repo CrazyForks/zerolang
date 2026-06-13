@@ -40,6 +40,10 @@ void z_cli_print_graph_patch_help_text(void) {
   printf("zero view --fn <name> prints between the signature braces. No header, no end marker.\n");
   printf("Alternative: write the rows to a file and pass its path:\n");
   printf("  $ zero patch . --replace-fn greet --body-file /tmp/greet.body\n");
+  printf("\nDeclaration-level ops: setConst replaces a top-level const's initializer expression by name;\n");
+  printf("addParamTo appends a parameter to an existing function and, given default=\"<expr>\", updates\n");
+  printf("every call site in the package to pass it explicitly (without default it fails with the\n");
+  printf("call-site count); setReturnType changes a function's declared return type.\n");
   printf("\nOperation grammar accepted by zero patch --op, --patch-text, and zero-program-graph-patch v1 files:\n");
   const char *const *ops = z_program_graph_patch_authoring_operation_examples();
   for (size_t i = 0; ops[i]; i++) printf("  %s\n", ops[i]);

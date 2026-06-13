@@ -2,6 +2,7 @@
 #include "canonical_text.h"
 #include "program_graph_handle.h"
 #include "program_graph_import.h"
+#include "type_core.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -1154,6 +1155,293 @@ bool z_program_graph_patch_apply_replace_expr(ZProgramGraph *graph, ZProgramGrap
   free(new_root_id);
   free(old_root_id);
   free(target_path);
+  if (!ok) return false;
+  op->ok = true;
+  return true;
+}
+
+// ---- declaration-level ops: setConst, addParamTo ----
+
+static ZProgramGraphNode *body_find_const(ZProgramGraph *graph, const char *name, size_t *out_count) {
+  ZProgramGraphNode *found = NULL;
+  size_t count = 0;
+  for (size_t i = 0; graph && name && i < graph->node_len; i++) {
+    if (graph->nodes[i].kind == Z_PROGRAM_GRAPH_NODE_CONST && body_text_eq(graph->nodes[i].name, name)) {
+      found = &graph->nodes[i];
+      count++;
+    }
+  }
+  if (out_count) *out_count = count;
+  return count == 1 ? found : NULL;
+}
+
+/* setConst name="<const>" value="<expr>": replaces a top-level const's
+ * initializer expression by package-scoped name, then revalidates through the
+ * same expression-splice pipeline replaceExpr uses. */
+bool z_program_graph_patch_apply_set_const(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *name = op && op->name ? op->name : "";
+  size_t count = 0;
+  ZProgramGraphNode *found = body_find_const(graph, name, &count);
+  if (count > 1) {
+    body_fail(result, op, "GPH003", "setConst const name is ambiguous", "a unique top-level const name", name);
+    return false;
+  }
+  if (!found) {
+    const ZProgramGraphNode *nearest = NULL;
+    size_t nearest_distance = 0;
+    size_t threshold = (name ? strlen(name) : 0) / 3 + 2;
+    for (size_t i = 0; graph && i < graph->node_len; i++) {
+      const ZProgramGraphNode *node = &graph->nodes[i];
+      if (node->kind != Z_PROGRAM_GRAPH_NODE_CONST || !node->name || !node->name[0]) continue;
+      size_t distance = z_program_graph_handle_distance(name, node->name);
+      if (distance > threshold) continue;
+      if (!nearest || distance < nearest_distance) {
+        nearest = node;
+        nearest_distance = distance;
+      }
+    }
+    char message[160];
+    if (nearest) snprintf(message, sizeof(message), "setConst const was not found; nearest: %s", nearest->name);
+    else snprintf(message, sizeof(message), "setConst const was not found");
+    body_fail(result, op, "GPH004", message, "an existing top-level const name", name);
+    return false;
+  }
+  ZProgramGraphNode *value_node = body_child(graph, found->id, "value");
+  if (!value_node) {
+    body_fail(result, op, "GPH004", "setConst const has no value expression", "Const node with a value edge", name);
+    return false;
+  }
+  body_replace(&op->node, value_node->id);
+  return z_program_graph_patch_apply_replace_expr(graph, result, op);
+}
+
+static bool body_type_text_valid(const char *text) {
+  if (!text || !text[0]) return false;
+  ZTypeArena arena;
+  z_type_arena_init(&arena);
+  ZTypeId type = Z_TYPE_ID_INVALID;
+  ZTypeParseError error = {0};
+  bool ok = z_type_parse(&arena, text, &type, &error);
+  z_type_arena_free(&arena);
+  return ok;
+}
+
+/* Byte-view parameters occupy two direct-backend ABI argument slots; every
+ * other parameter occupies one. Mirrors the buildability function-shape rule. */
+static size_t body_type_abi_slots(const char *type) {
+  static const char *const byte_views[] = {"String", "Span<const u8>", "Address", "ByteBuf", "owned<ByteBuf>", "BufferedReader", "BufferedWriter", NULL};
+  if (!type || !type[0]) return 1;
+  for (size_t i = 0; byte_views[i]; i++) {
+    if (body_text_eq(type, byte_views[i])) return 2;
+  }
+  if (strncmp(type, "Span<", 5) == 0 || strncmp(type, "MutSpan<", 8) == 0) return 2;
+  return 1;
+}
+
+static size_t body_next_edge_order(const ZProgramGraph *graph, const char *from, const char *kind) {
+  size_t next = 0;
+  for (size_t i = 0; graph && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target == Z_PROGRAM_GRAPH_EDGE_TARGET_NODE && body_text_eq(edge->from, from) && body_text_eq(edge->kind, kind) && edge->order >= next) next = edge->order + 1;
+  }
+  return next;
+}
+
+static ZProgramGraphNode *body_append_decl_node(ZProgramGraph *graph, const char *id, ZProgramGraphNodeKind kind, const char *path, const char *name, const char *type, int line, int column) {
+  body_reserve_nodes(graph, graph->node_len + 1);
+  ZProgramGraphNode *node = &graph->nodes[graph->node_len++];
+  *node = (ZProgramGraphNode){0};
+  node->id = z_strdup(id);
+  node->kind = kind;
+  node->path = z_strdup(path && path[0] ? path : "src/main.0");
+  if (name) node->name = z_strdup(name);
+  if (type) node->type = z_strdup(type);
+  node->line = line > 0 ? line : 1;
+  node->column = column > 0 ? column : 1;
+  return node;
+}
+
+static void body_append_decl_edge(ZProgramGraph *graph, const char *from, const char *kind, const char *to, size_t order) {
+  body_reserve_edges(graph, graph->edge_len + 1);
+  ZProgramGraphEdge *edge = &graph->edges[graph->edge_len++];
+  *edge = (ZProgramGraphEdge){0};
+  edge->from = z_strdup(from);
+  edge->to = z_strdup(to);
+  edge->kind = z_strdup(kind);
+  edge->target = Z_PROGRAM_GRAPH_EDGE_TARGET_NODE;
+  edge->order = order;
+}
+
+static bool body_function_has_param(const ZProgramGraph *graph, const ZProgramGraphNode *function, const char *name) {
+  for (size_t i = 0; graph && function && name && i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !body_text_eq(edge->from, function->id) || !body_text_eq(edge->kind, "param")) continue;
+    const ZProgramGraphNode *param = body_find_node((ZProgramGraph *)graph, edge->to);
+    if (param && param->kind == Z_PROGRAM_GRAPH_NODE_PARAM && body_text_eq(param->name, name)) return true;
+  }
+  return false;
+}
+
+/* Matches plain and module-qualified call names: `add` and `math.add`. */
+static bool body_call_targets_function(const char *call_name, const char *fn) {
+  if (!call_name || !fn || !fn[0]) return false;
+  if (body_text_eq(call_name, fn)) return true;
+  size_t call_len = strlen(call_name);
+  size_t fn_len = strlen(fn);
+  return call_len > fn_len + 1 && call_name[call_len - fn_len - 1] == '.' && body_text_eq(call_name + call_len - fn_len, fn);
+}
+
+static ZProgramGraphNode *body_require_named_function(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, const char *fn_name) {
+  size_t fn_count = 0;
+  ZProgramGraphNode *function = body_find_function(graph, fn_name, &fn_count);
+  if (function) return function;
+  if (fn_count > 1) {
+    body_fail(result, op, "GPH003", "patch function name is ambiguous", fn_name, "");
+    return NULL;
+  }
+  char message[160];
+  const ZProgramGraphNode *nearest = NULL;
+  size_t nearest_distance = 0;
+  size_t threshold = strlen(fn_name) / 3 + 2;
+  for (size_t i = 0; graph && i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_FUNCTION || !node->name || !node->name[0]) continue;
+    size_t distance = z_program_graph_handle_distance(fn_name, node->name);
+    if (distance > threshold) continue;
+    if (!nearest || distance < nearest_distance) {
+      nearest = node;
+      nearest_distance = distance;
+    }
+  }
+  if (nearest) snprintf(message, sizeof(message), "patch function was not found; nearest: %s %s", nearest->name, nearest->id ? nearest->id : "");
+  else snprintf(message, sizeof(message), "patch function was not found");
+  body_fail(result, op, "GPH004", message, fn_name, "");
+  return NULL;
+}
+
+/* Splices one copy of the parsed default expression into every recorded call
+ * site as a trailing explicit argument. */
+static bool body_thread_default_through_call_sites(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op, char *const *site_ids, size_t site_len) {
+  ZProgramGraph expr_graph = {0};
+  char *expr_root_id = NULL;
+  bool ok = body_parse_expression_graph(op->value, &expr_graph, &expr_root_id, result, op);
+  for (size_t i = 0; ok && i < site_len; i++) {
+    ZProgramGraphNode *call = body_find_node(graph, site_ids[i]);
+    if (!call) continue;
+    char *call_path = z_strdup(call->path && call->path[0] ? call->path : "src/main.0");
+    int call_line = call->line;
+    int call_column = call->column;
+    size_t arg_order = body_next_edge_order(graph, site_ids[i], "arg");
+    char *new_root = body_splice_expression(graph, &expr_graph, expr_root_id, call_path, call_line, call_column);
+    if (!new_root) {
+      body_fail(result, op, "GPH006", "addParamTo could not splice the default expression", "lowerable Zero expression", op->value);
+      ok = false;
+    } else {
+      /* A bare literal default adopts the declared parameter type, the same
+       * typing addLetLiteral applies to its literal payload. */
+      ZProgramGraphNode *root_node = body_find_node(graph, new_root);
+      if (root_node && root_node->kind == Z_PROGRAM_GRAPH_NODE_LITERAL) body_replace(&root_node->type, op->type);
+      body_append_decl_edge(graph, site_ids[i], "arg", new_root, arg_order);
+    }
+    free(new_root);
+    free(call_path);
+  }
+  z_program_graph_free(&expr_graph);
+  free(expr_root_id);
+  return ok;
+}
+
+/* addParamTo fn="<name>" name="<p>" type="<t>" [default="<expr>"]: appends a
+ * parameter to an EXISTING function. With default, every call site in the
+ * package (nested calls included) gains the default as an explicit trailing
+ * argument; without default the op fails when call sites exist, reporting the
+ * count. The direct backends cap function signatures at 8 ABI argument slots
+ * (byte views take 2), so an over-cap signature fails here at patch time
+ * instead of surfacing later from zero build. */
+bool z_program_graph_patch_apply_add_param_to(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  const char *fn_name = op && op->function ? op->function : "";
+  ZProgramGraphNode *function = body_require_named_function(graph, result, op, fn_name);
+  if (!function) return false;
+  if (!body_identifier(op->name)) {
+    body_fail(result, op, "GPH003", "parameter name must be a Zero identifier", "identifier", op->name);
+    return false;
+  }
+  if (body_function_has_param(graph, function, op->name)) {
+    body_fail(result, op, "GPH005", "parameter already exists", "unused parameter name", op->name);
+    return false;
+  }
+  if (!body_type_text_valid(op->type)) {
+    body_fail(result, op, "GPH003", "parameter type must be valid Zero type syntax", "Zero type syntax", op->type);
+    return false;
+  }
+  size_t abi_slots = body_type_abi_slots(op->type);
+  for (size_t i = 0; i < graph->edge_len; i++) {
+    const ZProgramGraphEdge *edge = &graph->edges[i];
+    if (edge->target != Z_PROGRAM_GRAPH_EDGE_TARGET_NODE || !body_text_eq(edge->from, function->id) || !body_text_eq(edge->kind, "param")) continue;
+    const ZProgramGraphNode *param = body_find_node(graph, edge->to);
+    if (param && param->kind == Z_PROGRAM_GRAPH_NODE_PARAM) abi_slots += body_type_abi_slots(param->type);
+  }
+  if (abi_slots > 8) {
+    char actual[120];
+    snprintf(actual, sizeof(actual), "%s would have %zu ABI argument slot(s)", fn_name, abi_slots);
+    body_fail(result, op, "BLD004", "direct backend object buildability has too many ABI argument slots", "at most 8 direct-backend ABI argument slots per function; byte-view parameters use 2", actual);
+    return false;
+  }
+  /* Collect call-site ids before mutating the graph so spliced default
+   * subtrees (which may themselves contain calls) are never revisited. */
+  char **site_ids = NULL;
+  size_t site_len = 0, site_cap = 0;
+  for (size_t i = 0; i < graph->node_len; i++) {
+    const ZProgramGraphNode *node = &graph->nodes[i];
+    if (node->kind != Z_PROGRAM_GRAPH_NODE_CALL || !body_call_targets_function(node->name, fn_name)) continue;
+    if (site_len == site_cap) {
+      size_t next = site_cap ? site_cap * 2 : 8;
+      site_ids = z_checked_reallocarray(site_ids, next, sizeof(char *));
+      site_cap = next;
+    }
+    site_ids[site_len++] = z_strdup(node->id ? node->id : "");
+  }
+  bool has_default = op->value && op->value[0];
+  if (!has_default && site_len > 0) {
+    char actual[120];
+    snprintf(actual, sizeof(actual), "%zu call site%s call %s", site_len, site_len == 1 ? "" : "s", fn_name);
+    body_fail(result, op, "GPH003", "addParamTo needs a default to update existing call sites", "default=\"<expr>\" so every existing call passes the new argument explicitly", actual);
+    for (size_t i = 0; i < site_len; i++) free(site_ids[i]);
+    free(site_ids);
+    return false;
+  }
+  char *fn_id = z_strdup(function->id ? function->id : "");
+  char *path = z_strdup(function->path && function->path[0] ? function->path : "src/main.0");
+  int fn_line = function->line;
+  int fn_column = function->column;
+  ZBuf param_base;
+  zbuf_init(&param_base);
+  zbuf_appendf(&param_base, "#param_%s_%s", fn_name, op->name);
+  char *param_id = body_unique_id(graph, param_base.data);
+  zbuf_free(&param_base);
+  ZBuf type_base;
+  zbuf_init(&type_base);
+  zbuf_appendf(&type_base, "#type_%s_type", op->name);
+  char *type_id = body_unique_id(graph, type_base.data);
+  zbuf_free(&type_base);
+  body_append_decl_node(graph, param_id, Z_PROGRAM_GRAPH_NODE_PARAM, path, op->name, op->type, fn_line, fn_column);
+  body_append_decl_node(graph, type_id, Z_PROGRAM_GRAPH_NODE_TYPE_REF, path, NULL, op->type, fn_line, fn_column);
+  body_append_decl_edge(graph, fn_id, "param", param_id, body_next_edge_order(graph, fn_id, "param"));
+  body_append_decl_edge(graph, param_id, "type", type_id, 0);
+  free(type_id);
+  free(param_id);
+  free(fn_id);
+  free(path);
+  bool ok = true;
+  if (has_default) {
+    ok = body_thread_default_through_call_sites(graph, result, op, site_ids, site_len);
+    if (ok) {
+      op->has_call_sites = true;
+      op->call_sites_updated = site_len;
+    }
+  }
+  for (size_t i = 0; i < site_len; i++) free(site_ids[i]);
+  free(site_ids);
   if (!ok) return false;
   op->ok = true;
   return true;

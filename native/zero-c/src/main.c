@@ -13190,6 +13190,9 @@ static void append_graph_patch_operation_json(ZBuf *buf, const ZProgramGraphPatc
   zbuf_append(buf, ", \"exportC\": ");
   if (op && op->has_export_c_value) zbuf_append(buf, op->export_c_value ? "true" : "false");
   else zbuf_append(buf, "null");
+  zbuf_append(buf, ", \"callSites\": ");
+  if (op && op->has_call_sites) zbuf_appendf(buf, "%zu", op->call_sites_updated);
+  else zbuf_append(buf, "null");
   if (op && !op->ok && op->code[0]) {
     zbuf_append(buf, ", \"code\": ");
     append_json_string(buf, op->code);
@@ -13288,6 +13291,11 @@ static void print_graph_patch_summary_text(const ZProgramGraph *graph, const ZPr
   printf("graphHash: %s\n", graph && graph->graph_hash ? graph->graph_hash : "");
   size_t ops = result ? result->operation_len : 0;
   printf("applied: %zu %s, %zu %s touched\n", ops, ops == 1 ? "op" : "ops", nodes_touched, nodes_touched == 1 ? "node" : "nodes");
+  for (size_t i = 0; result && i < result->operation_len; i++) {
+    const ZProgramGraphPatchOpResult *op = &result->operations[i];
+    if (!op->has_call_sites) continue;
+    printf("updated %zu call site%s\n", op->call_sites_updated, op->call_sites_updated == 1 ? "" : "s");
+  }
 }
 
 static const char *graph_patch_source_label(const Command *command) {

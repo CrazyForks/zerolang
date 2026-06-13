@@ -682,6 +682,35 @@ static bool patch_append_literal(ZProgramGraph *graph, const char *id, const cha
   return true;
 }
 
+/* setReturnType fn="<name>" type="<t>": updates the function's declared
+ * return type and its returnType TypeRef child; the batch-level revalidation
+ * pipeline checks the body against the new type. */
+static bool patch_apply_set_return_type(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
+  ZProgramGraphNode *function = patch_require_function(graph, result, op, op->function);
+  if (!function) return false;
+  if (!op->type || !op->type[0] || !patch_type_value_valid(op->type)) {
+    patch_op_fail(result, op, "GPH003", "function return type must be valid Zero type syntax", "Zero type syntax", op->type);
+    return false;
+  }
+  patch_replace_text(&op->actual, function->type);
+  patch_replace_text(&function->type, op->type);
+  ZProgramGraphNode *return_type = patch_find_child_node(graph, function->id, "returnType");
+  if (return_type) {
+    patch_replace_text(&return_type->type, op->type);
+  } else {
+    char *fn_id = z_strdup(function->id ? function->id : "");
+    char *fn_name = z_strdup(function->name ? function->name : "");
+    char *path = z_strdup(patch_node_path(function));
+    bool ok = patch_add_type_ref(graph, result, op, fn_id, fn_name, "returnType", op->type, path);
+    free(fn_id);
+    free(fn_name);
+    free(path);
+    if (!ok) return false;
+  }
+  op->ok = true;
+  return true;
+}
+
 static bool patch_apply_add_return_binary(ZProgramGraph *graph, ZProgramGraphPatchResult *result, ZProgramGraphPatchOpResult *op) {
   ZProgramGraphNode *function = patch_require_function(graph, result, op, op->function);
   if (!function) return false;
@@ -1225,7 +1254,10 @@ bool z_program_graph_patch_apply_operation(ZProgramGraph *graph, ZProgramGraphPa
   if (patch_text_eq(op->op, "rename")) return patch_apply_rename(graph, result, op);
   if (patch_text_eq(op->op, "addFunction")) return patch_apply_add_function(graph, result, op);
   if (patch_text_eq(op->op, "addMain")) return patch_apply_add_main(graph, result, op);
+  if (patch_text_eq(op->op, "addParamTo")) return z_program_graph_patch_apply_add_param_to(graph, result, op);
   if (patch_text_eq(op->op, "addParam")) return patch_apply_add_param(graph, result, op);
+  if (patch_text_eq(op->op, "setConst")) return z_program_graph_patch_apply_set_const(graph, result, op);
+  if (patch_text_eq(op->op, "setReturnType")) return patch_apply_set_return_type(graph, result, op);
   if (patch_text_eq(op->op, "addReturnBinary")) return patch_apply_add_return_binary(graph, result, op);
   if (patch_text_eq(op->op, "addLetLiteral")) return z_program_graph_patch_apply_add_let_literal(graph, result, op);
   if (patch_text_eq(op->op, "addLetBinary")) return z_program_graph_patch_apply_add_let_binary(graph, result, op);

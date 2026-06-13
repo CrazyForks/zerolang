@@ -371,6 +371,7 @@ static bool patch_parse_structural_attrs(const char *line, const char *verb, ZPr
     else if (strcmp(key, "path") == 0) ok = patch_assign_attr(&op->path, value);
     else if (strcmp(key, "fn") == 0) ok = patch_assign_attr(&op->function, value);
     else if (strcmp(key, "function") == 0) ok = patch_assign_attr(&op->function, value);
+    else if (strcmp(key, "default") == 0) ok = patch_assign_attr(&op->value, value);
     else if (strcmp(key, "left") == 0) ok = patch_assign_attr(&op->left, value);
     else if (strcmp(key, "receiver") == 0) ok = patch_assign_attr(&op->left, value);
     else if (strcmp(key, "world") == 0) ok = patch_assign_attr(&op->left, value);
@@ -571,6 +572,57 @@ static bool patch_parse_add_param(const char *line, int line_number, ZProgramGra
   return true;
 }
 
+static bool patch_parse_add_param_to(const char *line, int line_number, ZProgramGraphPatchResult *result) {
+  ZProgramGraphPatchOpResult *op = z_graph_patch_push_operation(result);
+  op->line = line_number;
+  op->op = z_strdup("addParamTo");
+  if (!patch_parse_structural_attrs(line, "addParamTo", result, op)) return false;
+  if (!patch_reject_attrs(op, result, line, false, false, false, false, false, false, false, false, true, true)) return false;
+  if (!op->function || !op->name || !op->type) {
+    patch_op_fail(result, op, "GPH001", "addParamTo operation is missing required attributes", "fn, name, type, and optional default", line);
+    return false;
+  }
+  return true;
+}
+
+static bool patch_parse_set_const(const char *line, int line_number, ZProgramGraphPatchResult *result) {
+  ZProgramGraphPatchOpResult *op = z_graph_patch_push_operation(result);
+  op->line = line_number;
+  op->op = z_strdup("setConst");
+  if (!patch_parse_structural_attrs(line, "setConst", result, op)) return false;
+  if (!patch_reject_attrs(op, result, line, false, false, false, false, false, false, false, false, true, false)) return false;
+  if (op->type || op->path || op->has_line_value || op->has_column_value ||
+      op->has_public_value || op->has_mutable_value || op->has_static_value || op->has_fallible_value ||
+      op->has_export_c_value) {
+    patch_op_fail(result, op, "GPH001", "setConst operation has unsupported attributes", "name and value", line);
+    return false;
+  }
+  if (!op->name || !op->value) {
+    patch_op_fail(result, op, "GPH001", "setConst operation is missing required attributes", "name and value", line);
+    return false;
+  }
+  return true;
+}
+
+static bool patch_parse_set_return_type(const char *line, int line_number, ZProgramGraphPatchResult *result) {
+  ZProgramGraphPatchOpResult *op = z_graph_patch_push_operation(result);
+  op->line = line_number;
+  op->op = z_strdup("setReturnType");
+  if (!patch_parse_structural_attrs(line, "setReturnType", result, op)) return false;
+  if (!patch_reject_attrs(op, result, line, false, false, false, false, false, false, false, false, true, true)) return false;
+  if (op->name || op->value || op->path || op->left || op->right || op->arg0 || op->arg1 || op->call ||
+      op->has_line_value || op->has_column_value || op->has_public_value || op->has_mutable_value ||
+      op->has_static_value || op->has_fallible_value || op->has_export_c_value) {
+    patch_op_fail(result, op, "GPH001", "setReturnType operation has unsupported attributes", "fn and type", line);
+    return false;
+  }
+  if (!op->function || !op->type) {
+    patch_op_fail(result, op, "GPH001", "setReturnType operation is missing required attributes", "fn and type", line);
+    return false;
+  }
+  return true;
+}
+
 static bool patch_parse_add_return_binary(const char *line, int line_number, ZProgramGraphPatchResult *result) {
   ZProgramGraphPatchOpResult *op = z_graph_patch_push_operation(result);
   op->line = line_number;
@@ -749,6 +801,10 @@ static bool patch_parse_text(char *text, ZProgramGraphPatchResult *result) {
         z_graph_patch_result_fail(result, "GPH001", "invalid graph hash precondition", "expect graphHash \"graph:<hash>\"", trimmed);
         return false;
       }
+    } else if (strncmp(trimmed, "setConst", strlen("setConst")) == 0 && isspace((unsigned char)trimmed[strlen("setConst")])) {
+      if (!patch_parse_set_const(trimmed, line_number, result)) return false;
+    } else if (strncmp(trimmed, "setReturnType", strlen("setReturnType")) == 0 && isspace((unsigned char)trimmed[strlen("setReturnType")])) {
+      if (!patch_parse_set_return_type(trimmed, line_number, result)) return false;
     } else if (strncmp(trimmed, "set", strlen("set")) == 0 && isspace((unsigned char)trimmed[strlen("set")])) {
       if (!patch_parse_set(trimmed, line_number, result)) return false;
     } else if (strncmp(trimmed, "insertEdge", strlen("insertEdge")) == 0 && isspace((unsigned char)trimmed[strlen("insertEdge")])) {
@@ -769,6 +825,8 @@ static bool patch_parse_text(char *text, ZProgramGraphPatchResult *result) {
       if (!patch_parse_add_main(trimmed, line_number, result)) return false;
     } else if (strcmp(trimmed, "addMain") == 0) {
       if (!patch_parse_add_main(trimmed, line_number, result)) return false;
+    } else if (strncmp(trimmed, "addParamTo", strlen("addParamTo")) == 0 && isspace((unsigned char)trimmed[strlen("addParamTo")])) {
+      if (!patch_parse_add_param_to(trimmed, line_number, result)) return false;
     } else if (strncmp(trimmed, "addParam", strlen("addParam")) == 0 && isspace((unsigned char)trimmed[strlen("addParam")])) {
       if (!patch_parse_add_param(trimmed, line_number, result)) return false;
     } else if (strncmp(trimmed, "addReturnBinary", strlen("addReturnBinary")) == 0 && isspace((unsigned char)trimmed[strlen("addReturnBinary")])) {
@@ -790,7 +848,7 @@ static bool patch_parse_text(char *text, ZProgramGraphPatchResult *result) {
     } else if (strncmp(trimmed, "replaceBlockBody", strlen("replaceBlockBody")) == 0 && isspace((unsigned char)trimmed[strlen("replaceBlockBody")])) {
       if (!patch_parse_replace_body_rows(trimmed, &line_number, &cursor, true, result)) return false;
     } else {
-      patch_format_fail(result, "GPH001", "unknown program graph patch operation; run `zero patch --op help` for working examples of every operation", "expect, set, insert, insertEdge, replace, replaceExpr, delete, rename, addFunction, addMain, addParam, addReturnBinary, addLetLiteral, addLetBinary, addReturnValue, addCheckWriteValue, addCheckWrite, addTest, replaceFunctionBody, or replaceBlockBody", trimmed, line_number);
+      patch_format_fail(result, "GPH001", "unknown program graph patch operation; run `zero patch --op help` for working examples of every operation", "expect, set, insert, insertEdge, replace, replaceExpr, delete, rename, setConst, setReturnType, addFunction, addMain, addParam, addParamTo, addReturnBinary, addLetLiteral, addLetBinary, addReturnValue, addCheckWriteValue, addCheckWrite, addTest, replaceFunctionBody, or replaceBlockBody", trimmed, line_number);
       return false;
     }
   }
