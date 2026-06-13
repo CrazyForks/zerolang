@@ -941,9 +941,9 @@ static bool runtime_object_cache_restore(const char *cache_path, const char *obj
   unsigned char *data = NULL;
   size_t len = 0;
   ZDiag ignored = {0};
-  if (!z_read_binary_file(cache_path, &data, &len, &ignored)) return false;
+  if (!z_read_binary_file(cache_path, &data, &len, &ignored)) { free((char *)ignored.path); return false; }
   bool ok = len > 0 && z_write_binary_file(object_file, data, len, &ignored);
-  free(data);
+  free((char *)ignored.path); free(data);
   return ok && z_process_output_file_ready(object_file);
 }
 
@@ -952,9 +952,9 @@ static void runtime_object_cache_store(const char *cache_path, const char *objec
   unsigned char *data = NULL;
   size_t len = 0;
   ZDiag ignored = {0};
-  if (!z_read_binary_file(object_file, &data, &len, &ignored)) return;
+  if (!z_read_binary_file(object_file, &data, &len, &ignored)) { free((char *)ignored.path); return; }
   if (len > 0) (void)z_write_binary_file(cache_path, data, len, &ignored);
-  free(data);
+  free((char *)ignored.path); free(data);
 }
 
 static bool compile_zero_runtime_object(const char *runtime_object_file, const ZToolchainPlan *plan, const Command *command, const ZTargetInfo *target, bool llvm_backend, ZDiag *diag) {
